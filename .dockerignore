@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/build
+**/data
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+**/*.log
+**/coverage
+backups
+*.sqlite
+*.sqlite-*
+.vscode
+.idea
+scratchpad

@@ -1,0 +1,42 @@
+# Локальный запуск панели через Docker (альтернатива npm run dev).
+# Контекст сборки — корень репозитория: docker compose -f deploy/docker-compose.yml up --build
+# Значения секретов брать из .env (не коммитить).
+
+services:
+  manager:
+    build:
+      context: ..
+      dockerfile: deploy/manager.Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      APP_NAME: NoVPN
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET обязателен}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY обязателен}
+      DATABASE_PATH: /data/database.sqlite
+      ENABLE_MOCK_AGENT: ${ENABLE_MOCK_AGENT:-true}
+    volumes:
+      - novpn_data:/data
+    restart: unless-stopped
+
+  # Агент запускается на VPN-сервере, не рядом с панелью. Пример — для справки:
+  # agent:
+  #   build:
+  #     context: ..
+  #     dockerfile: deploy/agent.Dockerfile
+  #   environment:
+  #     CONTROL_PLANE_URL: https://vpn.dev.appswire.ru
+  #     AGENT_ENROLLMENT_TOKEN: ${AGENT_ENROLLMENT_TOKEN}
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - novpn_agent:/var/lib/novpn-agent
+  #   restart: unless-stopped
+
+volumes:
+  novpn_data:
+  # novpn_agent:
