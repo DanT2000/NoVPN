@@ -1,0 +1,146 @@
+/* NoVPN — дизайн-токены. Значения взяты из дизайн-компонента (тёмная тема). */
+
+:root {
+  /* surfaces & structure */
+  --bg-root: #0a0a0b;
+  --bg-app: #0b0c0e;
+  --surface: #0e0f11;
+  --surface-hover-1: #101114;
+  --surface-hover-2: #16171b;
+  --surface-btn-2: #1c1d22;
+  --surface-toast: #26272c;
+  --surface-dialog: #1a1b1f;
+  --overlay: rgba(0, 0, 0, 0.65);
+  --border: #1e1f24;
+  --border-inner: #17181c;
+  --border-input: #26272c;
+  --border-control: #35363c;
+  --border-danger: rgba(240, 110, 110, 0.3);
+  --border-danger-icon: #3a2427;
+
+  /* text */
+  --text-primary: #e9e9eb;
+  --text-secondary: #d5d6da;
+  --text-body: #9a9ca3;
+  --text-muted: #77797f;
+  --text-muted-2: #55575e;
+  --text-faint: #494b52;
+  --text-fainter: #35363c;
+  --text-on-accent: #fff;
+
+  /* brand / accent */
+  --accent: oklch(0.58 0.16 250);
+  --accent-light: oklch(0.68 0.14 250);
+  --link: #7ea6f0;
+  --link-hover: #a3c0f5;
+
+  /* semantic status */
+  --green-fg: #7ee2a0;
+  --green-bg: rgba(74, 222, 128, 0.12);
+  --green-dot: #4ade80;
+  --green-card-border: rgba(74, 222, 128, 0.25);
+  --green-card-bg: rgba(74, 222, 128, 0.06);
+  --green-sub: #77b98e;
+  --amber-fg: #f0c674;
+  --amber-bg: rgba(240, 198, 116, 0.13);
+  --amber-notice-bg: rgba(240, 198, 116, 0.06);
+  --amber-notice-border: rgba(240, 198, 116, 0.2);
+  --amber-muted: #cfa95e;
+  --red-fg: #f0908c;
+  --red-bg: rgba(240, 110, 110, 0.13);
+  --red-box-bg: rgba(240, 110, 110, 0.1);
+  --red-btn: #c94f4f;
+  --gray-fg: #9a9ca3;
+  --gray-bg: rgba(154, 156, 163, 0.12);
+  --blue-fg: #8ab0f2;
+  --blue-bg: rgba(90, 130, 240, 0.14);
+  --blue-bg-soft: rgba(90, 130, 240, 0.06);
+  --blue-sel: rgba(90, 130, 240, 0.12);
+
+  /* radius */
+  --r-badge: 4px;
+  --r-ctrl: 6px;
+  --r-card: 8px;
+  --r-card-lg: 10px;
+  --r-dialog-btn: 12px;
+  --r-dialog: 20px;
+  --r-pill: 999px;
+
+  /* fonts */
+  --font-ui: 'Manrope', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* shadows */
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg-root);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--link-hover);
+}
+
+::placeholder {
+  color: var(--text-faint);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-toast);
+  border-radius: 4px;
+}
+
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Микро-подпись: моно, uppercase, разрядка. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted-2);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

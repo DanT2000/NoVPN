@@ -80,6 +80,9 @@ export interface Device {
   status?: DeviceStatus;
   /** Мониторинг трафика/активности реально доступен по этому конфигу. */
   monitoringAvailable?: boolean;
+  /** Сохранённый конфиг устройства (для повторного просмотра). */
+  link?: string | null;
+  conf?: string | null;
 }
 
 export interface AppClient {

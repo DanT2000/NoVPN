@@ -1,0 +1,133 @@
+// A2 — Список пользователей: поиск, фильтры, строки со статусами.
+
+import { useState } from 'react';
+import type { KeyboardEvent } from 'react';
+import type { User } from '@novpn/shared';
+import { useApp } from '../store/AppStore';
+import { Chip, Pill, Panel, EmptyState, ScreenHeader, Loading } from '../components/ui';
+import { statusOf, userFilterKey, countActiveDevices } from '../lib/status';
+import { gb, dateShort, plural } from '../lib/format';
+
+type FilterKey = 'all' | 'active' | 'expiring' | 'exhausted' | 'disabled';
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'Все' },
+  { key: 'active', label: 'Активные' },
+  { key: 'expiring', label: 'Истекают' },
+  { key: 'exhausted', label: 'Исчерпаны' },
+  { key: 'disabled', label: 'Отключены' },
+];
+
+function rowProps(onClick: () => void) {
+  return {
+    role: 'button' as const,
+    tabIndex: 0,
+    onClick,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onClick();
+      }
+    },
+  };
+}
+
+export function Users() {
+  const { data, loading, loadError, isMobile, goAdmin } = useApp();
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<FilterKey>('all');
+
+  if (loadError) return <div className="notice notice-red">{loadError}</div>;
+  if (loading || !data) return <Loading text="Загружаем пользователей…" />;
+
+  const { users, devices } = data;
+
+  const q = query.trim().toLowerCase();
+  const filtered = users.filter((u) => {
+    if (q) {
+      const hay = [u.name, u.code, u.category ?? '', u.comment, ...u.tags].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (filter !== 'all' && userFilterKey(u) !== filter) return false;
+    return true;
+  });
+
+  const total = users.length;
+  const title = `${total} ${plural(total, 'пользователь', 'пользователя', 'пользователей')}`;
+
+  const metrics = (u: User): string => {
+    const active = countActiveDevices(u.id, devices);
+    const devLine = `${active}/${u.deviceLimit ?? '∞'} устр`;
+    const trafLine = `${gb(u.trafficUsedGb)}/${gb(u.trafficLimitGb)}`;
+    const expLine = u.expiresAt ? dateShort(u.expiresAt) : 'бессрочно';
+    return `${devLine} · ${trafLine} · ${expLine}`;
+  };
+
+  return (
+    <>
+      <ScreenHeader
+        eyebrow="Пользователи"
+        title={title}
+        right={
+          <button type="button" className="btn btn-primary" onClick={() => goAdmin('user-create')}>
+            + Создать пользователя
+          </button>
+        }
+      />
+
+      <div className="stack" style={{ gap: 14 }}>
+        <input
+          className="input"
+          placeholder="Поиск: имя, код, тег, категория…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+
+        <div className="chip-row">
+          {FILTERS.map((f) => (
+            <Chip
+              key={f.key}
+              label={f.label}
+              size="sm"
+              active={filter === f.key}
+              onClick={() => setFilter(f.key)}
+            />
+          ))}
+        </div>
+
+        {filtered.length === 0 ? (
+          <EmptyState title="Никого не нашлось" text="Измените запрос или сбросьте фильтры." />
+        ) : (
+          <Panel bodyStyle={{ gap: 0 }}>
+            {filtered.map((u) => {
+              const catTags = [u.category, u.tags.join(', ')].filter(Boolean).join(' · ');
+              return (
+                <div
+                  key={u.id}
+                  className="divide-row"
+                  style={{ cursor: 'pointer' }}
+                  {...rowProps(() => goAdmin('user-card', { userId: u.id }))}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div className="row" style={{ gap: 8 }}>
+                      <span style={{ fontWeight: 600 }}>{u.name}</span>
+                      <span className="mono small muted">{u.code}</span>
+                    </div>
+                    {catTags ? <div className="small muted" style={{ marginTop: 2 }}>{catTags}</div> : null}
+                    {isMobile ? (
+                      <div className="small mono muted" style={{ marginTop: 4 }}>{metrics(u)}</div>
+                    ) : null}
+                  </div>
+                  <div className="row" style={{ gap: 16, flex: 'none' }}>
+                    {isMobile ? null : <span className="small mono muted">{metrics(u)}</span>}
+                    <Pill s={statusOf(u)} size="sm" />
+                  </div>
+                </div>
+              );
+            })}
+          </Panel>
+        )}
+      </div>
+    </>
+  );
+}

@@ -1,0 +1,379 @@
+/* NoVPN — переиспользуемые классы компонентов. */
+
+/* ─── Buttons ─────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--r-ctrl);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 16px;
+  height: 44px;
+  color: var(--text-primary);
+  background: transparent;
+  transition: filter 0.15s, background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+.btn-primary:not(:disabled):hover {
+  filter: brightness(1.12);
+}
+.btn-secondary {
+  background: var(--surface-btn-2);
+  color: var(--text-secondary);
+}
+.btn-secondary:not(:disabled):hover {
+  filter: brightness(1.2);
+}
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border-input);
+  color: var(--text-secondary);
+}
+.btn-outline:not(:disabled):hover {
+  background: var(--surface-hover-2);
+}
+.btn-danger {
+  background: var(--red-btn);
+  color: #fff;
+}
+.btn-danger:not(:disabled):hover {
+  filter: brightness(1.12);
+}
+.btn-danger-outline {
+  background: transparent;
+  border: 1px solid var(--border-danger);
+  color: var(--red-fg);
+}
+.btn-danger-outline:not(:disabled):hover {
+  background: var(--red-box-bg);
+}
+.btn-lg {
+  height: 52px;
+  font-size: 15px;
+}
+.btn-sm {
+  height: 36px;
+  font-size: 13px;
+  padding: 0 12px;
+}
+.btn-block {
+  width: 100%;
+}
+
+/* ─── Cards & panels ──────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  padding: 16px;
+}
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+}
+.panel-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-inner);
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.panel-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.divide-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-inner);
+}
+.divide-row:last-child {
+  border-bottom: 0;
+}
+
+/* ─── Inputs ──────────────────────────────────────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.field-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted-2);
+}
+.input,
+.textarea,
+.select {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border-input);
+  border-radius: var(--r-ctrl);
+  color: var(--text-primary);
+  font-size: 15px;
+  padding: 12px 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.input:focus,
+.textarea:focus,
+.select:focus {
+  border-color: var(--accent);
+}
+.input.mono,
+.textarea.mono {
+  font-family: var(--font-mono);
+}
+.textarea {
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.5;
+}
+.select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-faint) 50%),
+    linear-gradient(135deg, var(--text-faint) 50%, transparent 50%);
+  background-position: calc(100% - 18px) center, calc(100% - 13px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+
+/* ─── Chips / segmented ───────────────────────────────────── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: var(--r-ctrl);
+  border: 1px solid var(--border-input);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.chip:hover {
+  color: var(--text-secondary);
+}
+.chip.active {
+  border-color: var(--accent);
+  background: var(--blue-sel);
+  color: var(--text-primary);
+}
+.chip-sm {
+  padding: 7px 12px;
+  font-size: 13px;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ─── Status pill & mono badge ────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: var(--r-badge);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--blue-fg);
+  background: var(--blue-bg);
+}
+
+/* ─── Toggle switch ───────────────────────────────────────── */
+.toggle {
+  position: relative;
+  width: 40px;
+  height: 23px;
+  border-radius: 12px;
+  background: var(--border-control);
+  border: 0;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s;
+  padding: 0;
+}
+.toggle.on {
+  background: var(--accent);
+}
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s;
+}
+.toggle.on::after {
+  left: 20px;
+}
+
+/* ─── Progress bar ────────────────────────────────────────── */
+.progress {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+/* ─── Notice boxes ────────────────────────────────────────── */
+.notice {
+  border-radius: var(--r-ctrl);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.notice-amber {
+  background: var(--amber-notice-bg);
+  border: 1px solid var(--amber-notice-border);
+  color: var(--amber-muted);
+}
+.notice-red {
+  background: var(--red-box-bg);
+  color: var(--red-fg);
+  font-weight: 600;
+}
+.notice-green {
+  background: var(--green-card-bg);
+  border: 1px solid var(--green-card-border);
+  color: var(--green-fg);
+}
+
+/* ─── Layout helpers ──────────────────────────────────────── */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.spacer {
+  flex: 1;
+}
+.muted {
+  color: var(--text-muted);
+}
+.body {
+  color: var(--text-body);
+}
+.small {
+  font-size: 13px;
+}
+.center {
+  text-align: center;
+}
+
+/* ─── Empty / loading states ──────────────────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+}
+.empty-state .empty-title {
+  color: var(--text-secondary);
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-input);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-hover-1) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+  border-radius: var(--r-ctrl);
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (max-width: 860px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
