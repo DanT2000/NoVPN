@@ -47,15 +47,45 @@ healthcheck на `/healthz`, порт `3000`.
 Смонтировать том на каталог с БД (`DATABASE_PATH`) и, при необходимости,
 на `CONTENT_DIR` (markdown-инструкции/сниппеты). Тома **не** общие между dev и prod.
 
-## Порядок для dev-установки (localhost)
+## Предусловие (действие владельца)
 
-1. Проект/environment для NoVPN на сервере `localhost`.
-2. Приложение из репозитория `0VPN`, ветка `develop`, build = Dockerfile
-   (`deploy/manager.Dockerfile`).
-3. FQDN `https://vpn.dev.appswire.ru`, порт 3000, healthcheck `/healthz`.
-4. Отдельная БД (volume), отдельные секреты.
-5. Deploy → дождаться выпуска сертификата.
-6. Подключить первый тестовый VPN-сервер (см. [MIGRATION.md](MIGRATION.md)).
+Репозиторий `0VPN` приватный. Чтобы Coolify мог его собрать, GitHub App Coolify
+должен иметь доступ к `DanT2000/0VPN`:
+GitHub → Settings → Applications → (Coolify) → Repository access → добавить `0VPN`.
+Тот же GitHub App уже используется для `ZeroVPN`.
+
+## Порядок для dev-установки (Coolify, сервер `localhost`)
+
+1. Новый проект `NoVPN_dev` (или environment) на сервере `localhost`.
+2. **New Resource → Application → Private Repository (GitHub App)** → `DanT2000/0VPN`.
+3. Настройки приложения:
+   - Branch: `develop`
+   - Build Pack: **Dockerfile**
+   - Dockerfile Location: `deploy/manager.Dockerfile`
+   - Base Directory: `/`
+   - Ports Exposes: `3000`
+   - Healthcheck: включить, path `/healthz`, port `3000`
+4. Domains (FQDN): `https://vpn.dev.appswire.ru` → Coolify сам выпустит
+   Let's Encrypt (как у других `*.dev.appswire.ru`).
+5. Persistent Storage: том на `/data` (SQLite: `DATABASE_PATH=/data/database.sqlite`).
+6. Environment variables (свои для dev, НЕ из prod):
+   ```
+   NODE_ENV=production
+   PORT=3000
+   APP_NAME=NoVPN
+   PUBLIC_URL=https://vpn.dev.appswire.ru
+   ADMIN_LOGIN=<логин>
+   ADMIN_PASSWORD=<пароль>
+   SESSION_SECRET=<openssl rand -base64 32>
+   ENCRYPTION_KEY=<openssl rand -base64 32>   # 32 байта
+   DATABASE_PATH=/data/database.sqlite
+   ENABLE_MOCK_AGENT=true                      # пока не подключён реальный агент
+   ```
+7. Deploy из зафиксированного commit → дождаться сертификата → проверить `/healthz`.
+8. Подключить тестовый VPN-сервер `185.9.26.133` и импортировать конфиги
+   (см. [MIGRATION.md](MIGRATION.md)). На этом сервере: только AmneziaWG
+   (контейнер `amnezia-awg2`, порт 40435, подсеть 10.8.1.x), Xray отсутствует.
+   После enrollment агента переключить `ENABLE_MOCK_AGENT=false`.
 
 ## Порядок для основной установки (apps)
 
