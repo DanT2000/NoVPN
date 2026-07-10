@@ -1,0 +1,31 @@
+{
+  "name": "novpn",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NoVPN — панель управления VPN-доступами (control plane, web, agent)",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:manager dev:web",
+    "dev:web": "npm run dev --workspace apps/web",
+    "dev:manager": "npm run dev --workspace apps/manager",
+    "dev:agent": "npm run dev --workspace apps/agent",
+    "build": "npm run build --workspace packages/shared && npm run build --workspace apps/web && npm run build --workspace apps/manager && npm run build --workspace apps/agent",
+    "build:web": "npm run build --workspace apps/web",
+    "build:manager": "npm run build --workspace apps/manager",
+    "build:agent": "npm run build --workspace apps/agent",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.6.3"
+  }
+}
