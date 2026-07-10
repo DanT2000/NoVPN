@@ -11,7 +11,7 @@ import type {
 import { config } from './config.js';
 import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
-import { encryptSecret, maskTail } from './lib/crypto.js';
+import { encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 import * as repo from './repo.js';
 
 export const router = Router();
@@ -250,13 +250,16 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
   const b = req.body ?? {};
   const components: string[] = Array.isArray(b.components) ? b.components : [];
   const protocols = components.filter((p) => p === 'xray' || p === 'amneziawg');
+  // Одноразовый enrollment-token: агент обменяет его на постоянную идентичность.
+  const enrollToken = randomToken();
   const s = repo.insertServer({
     name: String(b.name ?? 'Сервер'), country: b.country ?? null, host: String(b.vpnHost || b.host || ''),
     protocols, agent: 'never', endpointOk: false, sshHost: b.host, sshPort: b.sshPort, sshUser: b.sshUser,
-    enrollSecretEnc: null,
+    enrollSecretEnc: encryptSecret(enrollToken),
   });
   repo.addLog(`Добавлен сервер «${s.name}»`);
-  res.json(s);
+  // enrollToken возвращается ОДИН раз (для установочной команды агента); наружу больше не отдаётся.
+  res.json({ ...s, enrollToken });
 });
 
 router.post('/api/admin/servers/:id/default', requireAdmin, (req, res) => {

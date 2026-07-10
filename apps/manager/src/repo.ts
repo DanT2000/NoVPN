@@ -170,6 +170,51 @@ export function updateServerFields(id: string, fields: Record<string, unknown>):
   return getServer(id);
 }
 
+// ── agent enrollment / heartbeat ──
+export function setServerEnrollSecret(id: string, enc: string): void {
+  db.prepare('UPDATE servers SET enroll_secret_enc = ? WHERE id = ?').run(enc, id);
+}
+/** Найти сервер по одноразовому enrollment-токену и закрепить за ним агента. */
+export function enrollAgent(
+  matches: (enc: string) => boolean,
+  publicKeyPem: string,
+  version: string,
+): { serverId: string } | null {
+  const rows = db
+    .prepare("SELECT id, enroll_secret_enc FROM servers WHERE enroll_secret_enc IS NOT NULL AND agent_public_key IS NULL")
+    .all() as Array<{ id: string; enroll_secret_enc: string }>;
+  for (const r of rows) {
+    if (matches(r.enroll_secret_enc)) {
+      db.prepare(
+        "UPDATE servers SET agent_public_key = ?, agent = 'online', agent_version = ?, last_sync_at = ?, enroll_secret_enc = NULL WHERE id = ?",
+      ).run(publicKeyPem, version, nowIso(), r.id);
+      return { serverId: r.id };
+    }
+  }
+  return null;
+}
+export function getServerAgentKey(serverId: string): string | null {
+  const r = db.prepare('SELECT agent_public_key FROM servers WHERE id = ?').get(serverId) as any;
+  return r?.agent_public_key ?? null;
+}
+export function agentHeartbeat(serverId: string, healthy: boolean, version: string): void {
+  db.prepare("UPDATE servers SET agent = 'online', last_sync_at = ?, agent_version = ?, service_health = ? WHERE id = ?").run(
+    nowIso(),
+    version,
+    healthy ? 'healthy' : 'degraded',
+    serverId,
+  );
+}
+/** Обновить трафик/handshake устройства по uuid или public_key. */
+export function applyTrafficSample(serverId: string, key: string, received: number | null, sent: number | null, lastAt: string | null): void {
+  const total = (received ?? 0) + (sent ?? 0);
+  db.prepare(
+    `UPDATE devices SET received_bytes = COALESCE(?, received_bytes), sent_bytes = COALESCE(?, sent_bytes),
+       traffic_gb = ?, last_seen_at = COALESCE(?, last_seen_at)
+     WHERE server_id = ? AND (uuid = ? OR public_key = ?)`,
+  ).run(received, sent, total / 1e9, lastAt, serverId, key, key);
+}
+
 // ── apps ──
 export function listApps(): AppClient[] {
   return (db.prepare('SELECT * FROM apps ORDER BY sort ASC').all() as any[]).map(rowToApp);

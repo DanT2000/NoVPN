@@ -4,11 +4,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { router } from './routes.js';
+import { agentRouter } from './routes/agent.js';
 
 export function createApp() {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '1mb' }));
+  // Сохраняем «сырое» тело для проверки подписи агента.
+  app.use(
+    express.json({
+      limit: '1mb',
+      verify: (req, _res, buf) => {
+        (req as express.Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+      },
+    }),
+  );
 
   app.use(
     session({
@@ -26,6 +35,7 @@ export function createApp() {
   );
 
   // API + health.
+  app.use(agentRouter);
   app.use(router);
 
   // Статика собранного фронтенда (в проде) + SPA-fallback.
