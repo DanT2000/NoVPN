@@ -29,13 +29,31 @@ async function writeConf(content: string): Promise<void> {
 const param = (content: string, key: string, def: string) =>
   content.match(new RegExp(`^${key}\\s*=\\s*(.+)$`, 'm'))?.[1]?.trim() ?? def;
 
+/** Подсеть определяется по уже существующим peer'ам (иначе — из конфига). */
+function detectBaseNet(content: string): string {
+  const first = content.match(/AllowedIPs\s*=\s*(\d+\.\d+\.\d+)\.\d+\/32/);
+  return first?.[1] ?? config.awgBaseNet;
+}
+
 function nextFreeIp(content: string): string {
+  const base = detectBaseNet(content);
   const used = [...content.matchAll(/AllowedIPs\s*=\s*([0-9.]+)\/32/g)].map((m) => m[1]);
   for (let i = 2; i < 255; i++) {
-    const ip = `${config.awgBaseNet}.${i}`;
+    const ip = `${base}.${i}`;
     if (!used.includes(ip)) return ip;
   }
   throw new Error('Нет свободных IP в подсети AmneziaWG');
+}
+
+/** Публичный порт сервера = listening port интерфейса (env имеет приоритет, если задан). */
+async function serverListenPort(): Promise<string> {
+  if (config.awgEndpointPort && config.awgEndpointPort !== '51820') return config.awgEndpointPort;
+  try {
+    const raw = await dockerExec(C(), 'awg', 'show', IFACE());
+    return raw.match(/listening port:\s*(\d+)/)?.[1] ?? config.awgEndpointPort;
+  } catch {
+    return config.awgEndpointPort;
+  }
 }
 
 function parseHandshake(text: string): string | null {
@@ -97,6 +115,7 @@ export const amneziawgDriver: ProtocolDriver = {
     await dockerExecStdin(C(), psk, 'awg', 'set', IFACE(), 'peer', clientPub, 'preshared-key', '/dev/stdin', 'allowed-ips', `${clientIp}/32`);
 
     const host = config.awgEndpointHost || '127.0.0.1';
+    const port = await serverListenPort();
     const conf = `[Interface]
 PrivateKey = ${clientPriv}
 Address = ${clientIp}/32
@@ -116,7 +135,7 @@ H4 = ${j.H4}
 [Peer]
 PublicKey = ${serverPub}
 PresharedKey = ${psk}
-Endpoint = ${host}:${config.awgEndpointPort}
+Endpoint = ${host}:${port}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25`;
 
