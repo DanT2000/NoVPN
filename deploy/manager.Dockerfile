@@ -5,6 +5,11 @@
 FROM node:20-bookworm-slim AS build
 WORKDIR /app
 
+# инструменты сборки нативных модулей (better-sqlite3) — на случай, если
+# prebuilt-бинарь недоступен и нужна компиляция из исходников.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
 # сначала манифесты — для кэша слоёв
 COPY package.json package-lock.json* tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
