@@ -142,6 +142,20 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TEXT NOT NULL
 );
 
+-- Серверные ключи по ДОМЕНУ — для восстановления при замене сервера.
+-- Если новый сервер поднимается на том же домене, эти ключи подставляются →
+-- старые клиентские конфиги продолжают работать.
+CREATE TABLE IF NOT EXISTS server_keys (
+  domain TEXT PRIMARY KEY,
+  awg_server_privkey_enc TEXT,
+  awg_server_pubkey TEXT,
+  xray_reality_privkey_enc TEXT,
+  xray_reality_pubkey TEXT,
+  xray_short_id TEXT,
+  xray_sni TEXT,
+  updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 CREATE INDEX IF NOT EXISTS idx_devices_server ON devices(server_id);
 CREATE INDEX IF NOT EXISTS idx_history_user ON user_history(user_id);

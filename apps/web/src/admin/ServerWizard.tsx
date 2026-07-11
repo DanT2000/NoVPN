@@ -80,7 +80,6 @@ export function ServerWizard() {
   const [sshUser, setSshUser] = useState('root');
   const [authMethod, setAuthMethod] = useState<AuthMethod>('key');
   const [secret, setSecret] = useState('');
-  const [vpnHost, setVpnHost] = useState('');
 
   // Шаг 2 — проверка
   const [testing, setTesting] = useState(false);
@@ -112,7 +111,7 @@ export function ServerWizard() {
     sshPort: Number(sshPort) || 22,
     sshUser: sshUser.trim() || 'root',
     authMethod,
-    vpnHost: vpnHost.trim() || undefined,
+    vpnHost: host.trim(), // домен/IP один раз — он же и публичный VPN-endpoint
     components: components(),
     country: null,
   });
@@ -232,14 +231,10 @@ export function ServerWizard() {
               onChange={(e) => setSecret(e.target.value)}
             />
           </Field>
-          <Field label="Публичный VPN hostname">
-            <input
-              className="input mono"
-              placeholder="fi1.novpn.example"
-              value={vpnHost}
-              onChange={(e) => setVpnHost(e.target.value)}
-            />
-          </Field>
+          <p className="small muted" style={{ margin: 0 }}>
+            Этот адрес используется и для подключения по SSH, и как публичный VPN-endpoint —
+            указывается один раз.
+          </p>
           <button
             className="btn btn-primary"
             disabled={!isValidHost(host)}
