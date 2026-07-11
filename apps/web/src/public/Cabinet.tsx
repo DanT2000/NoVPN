@@ -109,7 +109,7 @@ export function Cabinet() {
           title="Telegram"
           sub={user.telegramLinked ? 'Привязан' : 'Не привязан'}
           onClick={() =>
-            showToast(user.telegramLinked ? 'Telegram уже привязан' : 'Привязка Telegram появится вместе с ботом (этап backend)')
+            showToast(user.telegramLinked ? 'Telegram привязан' : 'Привязка Telegram — через бота, когда администратор его включит')
           }
         />
       </div>

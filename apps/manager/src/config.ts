@@ -42,6 +42,10 @@ export const config = {
   legacyAgentToken: env('VPN_AGENT_TOKEN', ''),
 
   sessionTtlHours: int('SESSION_TTL_HOURS', 24),
+  // TLS обычно терминируется на edge/прокси, а контейнер видит http →
+  // secure-cookie тогда молча не ставится. По умолчанию false; включать
+  // только при прямом HTTPS до приложения.
+  cookieSecure: bool('COOKIE_SECURE', false),
 };
 
 export type AppConfig = typeof config;

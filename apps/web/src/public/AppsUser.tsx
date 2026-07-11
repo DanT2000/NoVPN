@@ -75,7 +75,7 @@ export function AppsUser() {
                 </button>
               ) : null}
               {a.localFile ? (
-                <button className="btn btn-secondary btn-sm" onClick={() => showToast(`Скачивание ${a.localFile} (демо)`)}>
+                <button className="btn btn-secondary btn-sm" onClick={() => showToast(`Файл ${a.localFile} пока недоступен`)}>
                   Скачать {a.localFile}
                 </button>
               ) : null}

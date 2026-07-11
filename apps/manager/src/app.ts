@@ -8,7 +8,10 @@ import { agentRouter } from './routes/agent.js';
 
 export function createApp() {
   const app = express();
-  app.set('trust proxy', 1);
+  // За edge-прокси (openresty), который терминирует TLS. trust proxy + cookie
+  // secure:'auto' — чтобы session-cookie всегда ставился и получал флаг Secure,
+  // когда прокси сообщает https (иначе secure:true не ставит cookie за прокси).
+  app.set('trust proxy', true);
   // Сохраняем «сырое» тело для проверки подписи агента.
   app.use(
     express.json({
@@ -28,7 +31,7 @@ export function createApp() {
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
-        secure: config.isProd,
+        secure: config.cookieSecure,
         maxAge: config.sessionTtlHours * 3600 * 1000,
       },
     }),

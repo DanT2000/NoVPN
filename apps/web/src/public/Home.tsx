@@ -3,19 +3,11 @@ import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { CodeInput } from '../components/CodeInput';
 
-const DEMO = [
-  { code: '482915', label: 'активен' },
-  { code: '664209', label: 'истёк' },
-  { code: '918273', label: 'отключён' },
-  { code: '555001', label: 'лимит' },
-];
-
 export function Home() {
   const { setPublicUser, goPublic } = useApp();
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
-  const demoOn = true;
 
   const submit = async () => {
     if (code.length !== 6 || checking) return;
@@ -37,8 +29,9 @@ export function Home() {
   };
 
   return (
-    <div style={{ minHeight: 'calc(100vh - 160px)', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ paddingTop: '12vh' }}>
+    <div style={{ minHeight: 'calc(100vh - 96px)', display: 'flex', flexDirection: 'column' }}>
+      {/* центрируем блок ввода по вертикали (как на входе в админку) */}
+      <div style={{ margin: 'auto 0', width: '100%' }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 10px' }}>Доступ по коду</h1>
         <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--text-muted)', margin: '0 0 28px' }}>
           Введите шестизначный код из сообщения администратора — конфигурация выдаётся автоматически.
@@ -62,26 +55,11 @@ export function Home() {
         >
           {checking ? 'Проверяем…' : 'Продолжить'}
         </button>
-
-        {demoOn ? (
-          <div style={{ marginTop: 28 }}>
-            <div className="eyebrow" style={{ color: 'var(--text-fainter)', marginBottom: 10 }}>
-              demo-коды прототипа
-            </div>
-            <div className="chip-row">
-              {DEMO.map((d) => (
-                <button key={d.code} type="button" className="chip chip-sm" onClick={() => setCode(d.code)}>
-                  <span className="mono">{d.code}</span> · {d.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
       </div>
 
-      <div style={{ marginTop: 'auto', paddingTop: 40 }}>
+      <div style={{ textAlign: 'center', paddingTop: 24 }}>
         <span className="mono" style={{ fontSize: 11, color: 'var(--text-fainter)' }}>
-          v2.0 · управление доступами
+          NoVPN · управление доступами
         </span>
       </div>
     </div>
