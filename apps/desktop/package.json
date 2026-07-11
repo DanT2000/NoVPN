@@ -1,0 +1,53 @@
+{
+  "name": "@novpn/desktop",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build:icons": "node scripts/generate-icons.mjs",
+    "build": "npm run build:icons && tsc -p tsconfig.json && node scripts/copy-runtime.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package:win": "electron-builder --win dir --x64",
+    "installer:win": "iscc installer/NoVPN.iss",
+    "dist:win": "npm run build && npm run package:win && npm run installer:win"
+  },
+  "dependencies": {
+    "@novpn/shared": "*",
+    "better-sqlite3": "^11.5.0",
+    "express": "^4.21.1",
+    "express-session": "^1.18.1",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "electron": "^35.7.5",
+    "electron-builder": "^26.0.12",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.2",
+    "typescript": "^5.6.3"
+  },
+  "build": {
+    "appId": "ru.appswire.novpn.desktop",
+    "productName": "NoVPN",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "dir"
+      ],
+      "artifactName": "NoVPN-${version}-${arch}.${ext}"
+    }
+  }
+}
