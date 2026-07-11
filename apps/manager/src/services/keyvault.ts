@@ -57,6 +57,37 @@ export function hasServerKeys(host: string): boolean {
   return !!r;
 }
 
+export interface ProxyConfig {
+  user: string;
+  pass: string;
+  httpPort?: number | null;
+  httpsPort?: number | null;
+  socksPort?: number | null;
+  /** Хост для HTTPS-прокси (домен из сертификата). */
+  httpsHost?: string | null;
+}
+
+/** Сохранить конфиг прокси сервера (шифруется целиком). */
+export function saveServerProxy(host: string, proxy: ProxyConfig): void {
+  const domain = domainKey(host);
+  const enc = encryptSecret(JSON.stringify(proxy));
+  db.prepare(
+    `INSERT INTO server_keys(domain, proxy_enc, updated_at) VALUES(@domain,@enc,@now)
+     ON CONFLICT(domain) DO UPDATE SET proxy_enc=excluded.proxy_enc, updated_at=excluded.updated_at`,
+  ).run({ domain, enc, now: nowIso() });
+}
+
+/** Конфиг прокси сервера (для панели/бота). */
+export function getServerProxy(host: string): ProxyConfig | null {
+  const r = db.prepare('SELECT proxy_enc FROM server_keys WHERE domain = ?').get(domainKey(host)) as any;
+  if (!r?.proxy_enc) return null;
+  try {
+    return JSON.parse(decryptSecret(r.proxy_enc)) as ProxyConfig;
+  } catch {
+    return null;
+  }
+}
+
 /** Расшифрованные ключи для передачи в install-скрипт при восстановлении. */
 export function getServerKeys(host: string): ServerKeys | null {
   const r = db.prepare('SELECT * FROM server_keys WHERE domain = ?').get(domainKey(host)) as any;

@@ -5,6 +5,9 @@ import { useState } from 'react';
 import type { Server } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
+import { api } from '../api';
+import type { ServerProxyConfig } from '../api/types';
+import { copyText } from '../lib/clipboard';
 import { Chip, Dot, EmptyState, Field, ScreenHeader, Toggle } from '../components/ui';
 import { serverAgentView, serverEndpointView } from '../lib/status';
 import { gb, plural, rel } from '../lib/format';
@@ -13,8 +16,75 @@ import { COUNTRIES, countryValue } from '../lib/countries';
 type Proto = 'xray' | 'amneziawg' | 'http' | 'https' | 'socks5';
 const PROTO_OPTS: Proto[] = ['xray', 'amneziawg', 'http', 'https', 'socks5'];
 
+function ProxyBox({ proxy }: { proxy: ServerProxyConfig }) {
+  const { showToast } = useApp();
+  const line = (label: string, val: string) => (
+    <div className="row-between" style={{ gap: 8 }}>
+      <span className="small muted">{label}</span>
+      <span className="mono small" style={{ wordBreak: 'break-all' }}>{val}</span>
+    </div>
+  );
+  return (
+    <div className="notice notice-green" style={{ display: 'grid', gap: 4 }}>
+      <div style={{ fontWeight: 700 }}>Прокси установлены</div>
+      {line('Логин', proxy.user)}
+      {line('Пароль', proxy.pass)}
+      {proxy.httpPort ? line('HTTP', `${proxy.user}:${proxy.pass}@host:${proxy.httpPort}`) : null}
+      {proxy.socksPort ? line('SOCKS5', `${proxy.user}:${proxy.pass}@host:${proxy.socksPort}`) : null}
+      {proxy.httpsPort ? line('HTTPS', `${proxy.user}:${proxy.pass}@${proxy.httpsHost}:${proxy.httpsPort}`) : null}
+      <button
+        className="btn btn-outline btn-sm"
+        style={{ marginTop: 6, justifySelf: 'start' }}
+        onClick={async () => {
+          await copyText(`login: ${proxy.user}\npassword: ${proxy.pass}` +
+            (proxy.httpPort ? `\nHTTP: host:${proxy.httpPort}` : '') +
+            (proxy.socksPort ? `\nSOCKS5: host:${proxy.socksPort}` : '') +
+            (proxy.httpsPort ? `\nHTTPS: ${proxy.httpsHost}:${proxy.httpsPort}` : ''));
+          showToast('Скопировано');
+        }}
+      >
+        Копировать
+      </button>
+    </div>
+  );
+}
+
 function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
-  const { editServer, showToast } = useApp();
+  const { editServer, showToast, reload } = useApp();
+  const [pxHttp, setPxHttp] = useState(server.protocols.includes('http'));
+  const [pxHttps, setPxHttps] = useState((server.protocols as string[]).includes('https'));
+  const [pxSocks, setPxSocks] = useState(server.protocols.includes('socks5'));
+  const [pxBusy, setPxBusy] = useState(false);
+  const [pxResult, setPxResult] = useState<ServerProxyConfig | null>(null);
+  const [pxErr, setPxErr] = useState<string | null>(null);
+
+  async function installProxies() {
+    if (!pxHttp && !pxHttps && !pxSocks) {
+      setPxErr('Отметьте хотя бы один тип прокси.');
+      return;
+    }
+    setPxBusy(true);
+    setPxErr(null);
+    try {
+      const r = await api.installServerProxies(server.id, { http: pxHttp, https: pxHttps, socks: pxSocks });
+      setPxResult(r.proxy);
+      await reload();
+      showToast('Прокси установлены');
+    } catch (e) {
+      setPxErr(e instanceof Error ? e.message : 'Не удалось установить прокси');
+    } finally {
+      setPxBusy(false);
+    }
+  }
+  async function showExisting() {
+    try {
+      const r = await api.getServerProxy(server.id);
+      if (r.proxy) setPxResult(r.proxy);
+      else setPxErr('Прокси ещё не установлены на этом сервере.');
+    } catch {
+      setPxErr('Не удалось получить данные прокси.');
+    }
+  }
   const [name, setName] = useState(server.name);
   const [country, setCountry] = useState(server.country ?? '');
   const [vpnHost, setVpnHost] = useState(server.host);
@@ -100,6 +170,29 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
           <Field label="AmneziaWG server pubkey"><input className="input mono" value={awgPub} onChange={(e) => setAwgPub(e.target.value)} placeholder="awg pubkey…" /></Field>
         </div>
       </details>
+
+      {/* Прокси-комплект — реальная установка по SSH */}
+      <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+        <span className="field-label">Прокси на сервере (устанавливаются реально по SSH)</span>
+        <div className="chip-row">
+          <Chip label="HTTP" size="sm" active={pxHttp} onClick={() => setPxHttp((v) => !v)} />
+          <Chip label="HTTPS" size="sm" active={pxHttps} onClick={() => setPxHttps((v) => !v)} />
+          <Chip label="SOCKS5" size="sm" active={pxSocks} onClick={() => setPxSocks((v) => !v)} />
+        </div>
+        <span className="small muted">
+          3proxy (HTTP/SOCKS5) + certbot/stunnel (HTTPS). Для HTTPS нужен домен (не IP) и свободный порт 80.
+        </span>
+        {pxErr ? <div className="notice notice-red small">{pxErr}</div> : null}
+        {pxResult ? <ProxyBox proxy={pxResult} /> : null}
+        <div className="row" style={{ gap: 8, marginTop: 8 }}>
+          <button className="btn btn-secondary btn-sm" disabled={pxBusy} onClick={() => void installProxies()}>
+            {pxBusy ? 'Устанавливаем… (до минуты)' : 'Установить / обновить прокси'}
+          </button>
+          <button className="btn btn-outline btn-sm" onClick={() => void showExisting()}>
+            Показать текущие
+          </button>
+        </div>
+      </div>
 
       <div className="row" style={{ gap: 8 }}>
         <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>

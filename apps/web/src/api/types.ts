@@ -59,6 +59,15 @@ export interface AddServerInput {
   country?: string | null;
 }
 
+export interface ServerProxyConfig {
+  user: string;
+  pass: string;
+  httpPort?: number | null;
+  httpsPort?: number | null;
+  socksPort?: number | null;
+  httpsHost?: string | null;
+}
+
 export interface EditServerInput {
   name?: string;
   country?: string | null;
@@ -122,6 +131,8 @@ export interface ApiClient {
   testServerConnection(input: AddServerInput): Promise<TestServerConnectionResult>;
   addServer(input: AddServerInput): Promise<Server>;
   editServer(id: string, input: EditServerInput): Promise<Server>;
+  installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
+  getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
   setServerDefault(id: string): Promise<Server[]>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
   deleteServer(id: string): Promise<Ok>;

@@ -128,6 +128,97 @@ PersistentKeepalive = 25`;
   return { conf, publicKey: cpub, privateKey: cpriv, presharedKey: psk, clientIp: cip };
 }
 
+// Установка прокси-комплекта (HTTP/SOCKS5 через 3proxy на хосте; HTTPS через
+// certbot+stunnel поверх HTTP-прокси). Идемпотентно, переиспользует логин/пароль.
+export async function sshInstallProxies(
+  server: Server,
+  opts: { http?: boolean; https?: boolean; socks?: boolean },
+): Promise<{ user: string; pass: string; httpPort: number | null; httpsPort: number | null; socksPort: number | null; httpsHost: string | null }> {
+  const domain = server.host;
+  const wantHttps = !!opts.https;
+  // HTTP-прокси нужен и сам по себе, и как бэкенд для HTTPS(stunnel).
+  const wantHttp = !!opts.http || wantHttps;
+  const wantSocks = !!opts.socks;
+  const script = `set -e
+export DEBIAN_FRONTEND=noninteractive
+HTTP_PORT=8080; SOCKS_PORT=1080; HTTPS_PORT=8443; DOMAIN=${domain}
+PUSER=novpn
+if [ -f /etc/3proxy/3proxy.cfg ]; then
+  L=$(grep -m1 '^users ' /etc/3proxy/3proxy.cfg | sed 's/^users //')
+  PUSER=\${L%%:CL:*}; PPASS=\${L##*:CL:}
+fi
+PPASS=\${PPASS:-$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)}
+
+# --- 3proxy (http + socks) ---
+if [ ! -x /usr/local/bin/3proxy ]; then
+  cd /opt; rm -rf 3proxy-src
+  git clone --depth 1 https://github.com/3proxy/3proxy 3proxy-src >/dev/null 2>&1
+  cd 3proxy-src; ln -sf Makefile.Linux Makefile; make -j2 >/tmp/3p.log 2>&1
+  BIN=$(find . -name 3proxy -type f -perm -u+x | head -1); install -m0755 "$BIN" /usr/local/bin/3proxy
+fi
+mkdir -p /etc/3proxy
+{
+  echo "nscache 65536"; echo "nserver 1.1.1.1"; echo "nserver 8.8.8.8"
+  echo "timeouts 1 5 30 60 180 1800 15 60"
+  echo "users $PUSER:CL:$PPASS"; echo "auth strong"; echo "allow $PUSER"
+  ${wantHttp ? 'echo "proxy -n -a -p$HTTP_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
+  ${wantSocks ? 'echo "socks -p$SOCKS_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
+} > /etc/3proxy/3proxy.cfg
+chmod 600 /etc/3proxy/3proxy.cfg
+cat > /etc/systemd/system/3proxy.service <<'SVC'
+[Unit]
+Description=3proxy (NoVPN)
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/3proxy /etc/3proxy/3proxy.cfg
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+SVC
+systemctl daemon-reload; systemctl enable 3proxy >/dev/null 2>&1 || true; systemctl restart 3proxy
+${
+  wantHttps
+    ? `
+# --- HTTPS через certbot + stunnel ---
+apt-get install -y -qq certbot stunnel4 >/tmp/apt.log 2>&1
+if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+  certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$DOMAIN" >/tmp/cb.log 2>&1
+fi
+mkdir -p /etc/stunnel
+printf 'pid = /run/stunnel-novpn.pid\\n[https-proxy]\\naccept = 0.0.0.0:%s\\nconnect = 127.0.0.1:%s\\ncert = /etc/letsencrypt/live/%s/fullchain.pem\\nkey = /etc/letsencrypt/live/%s/privkey.pem\\n' "$HTTPS_PORT" "$HTTP_PORT" "$DOMAIN" "$DOMAIN" > /etc/stunnel/novpn.conf
+cat > /etc/systemd/system/novpn-stunnel.service <<'SVC2'
+[Unit]
+Description=NoVPN stunnel (HTTPS proxy)
+After=network.target 3proxy.service
+[Service]
+ExecStart=/usr/bin/stunnel /etc/stunnel/novpn.conf
+Type=forking
+PIDFile=/run/stunnel-novpn.pid
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+SVC2
+systemctl daemon-reload; systemctl enable novpn-stunnel >/dev/null 2>&1 || true; systemctl restart novpn-stunnel
+`
+    : 'true'
+}
+echo "PUSER=$PUSER"; echo "PPASS=$PPASS"
+echo "HTTP_PORT=${wantHttp ? '$HTTP_PORT' : ''}"
+echo "SOCKS_PORT=${wantSocks ? '$SOCKS_PORT' : ''}"
+echo "HTTPS_PORT=${wantHttps ? '$HTTPS_PORT' : ''}"`;
+  const out = await runScript(creds(server.id), script);
+  const user = grab(out, 'PUSER');
+  const pass = grab(out, 'PPASS');
+  if (!user || !pass) throw new Error('Не удалось установить прокси на сервере.');
+  const num = (k: string) => {
+    const v = grab(out, k);
+    return v ? Number(v) : null;
+  };
+  return { user, pass, httpPort: num('HTTP_PORT'), socksPort: num('SOCKS_PORT'), httpsPort: num('HTTPS_PORT'), httpsHost: wantHttps ? domain : null };
+}
+
 // Сбор статистики AmneziaWG: rx/tx и время последнего рукопожатия по каждому пиру.
 export async function sshSyncAwg(
   serverId: string,

@@ -12,8 +12,8 @@ import type {
 import { config } from './config.js';
 import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg } from './services/sshServer.js';
-import { saveServerKeys } from './services/keyvault.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies } from './services/sshServer.js';
+import { saveServerKeys, saveServerProxy, getServerProxy } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 
 // Выпуск конфига: по SSH (реальный сервер) или через mock-агент (dev).
@@ -347,6 +347,37 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   }
   repo.addLog(`Изменён сервер «${updated.name}»`);
   res.json(repo.getServer(s.id));
+});
+
+// Реальная установка прокси-комплекта (HTTP/HTTPS/SOCKS) на сервер по SSH.
+router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  const b = req.body ?? {};
+  const want = { http: !!b.http, https: !!b.https, socks: !!b.socks };
+  if (!want.http && !want.https && !want.socks) return res.status(400).json(err('validation', 'Выберите хотя бы один тип прокси.'));
+  try {
+    const p = await sshInstallProxies(s, want);
+    saveServerProxy(s.host, p);
+    // Отмечаем протоколы как установленные.
+    const cur = new Set(s.protocols as string[]);
+    if (want.http) cur.add('http');
+    if (want.https) cur.add('https');
+    if (want.socks) cur.add('socks5');
+    repo.updateServerFields(s.id, { protocols: JSON.stringify([...cur]) });
+    repo.addLog(`Установлены прокси на «${s.name}»`);
+    res.json({ ok: true, proxy: p, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки прокси.'));
+  }
+});
+
+// Получить конфиг прокси сервера (логин/пароль/порты) — для показа админу.
+router.get('/api/admin/servers/:id/proxy', requireAdmin, (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  res.json({ proxy: getServerProxy(s.host), host: s.host });
 });
 
 router.post('/api/admin/servers/:id/default', requireAdmin, (req, res) => {

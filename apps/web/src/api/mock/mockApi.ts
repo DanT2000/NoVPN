@@ -266,6 +266,29 @@ export const mockApi: ApiClient = {
     return clone(s);
   },
 
+  async installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }) {
+    await wait(600);
+    const s = state.servers.find((x) => x.id === id)!;
+    const set = new Set(s.protocols as string[]);
+    if (types.http) set.add('http');
+    if (types.https) set.add('https');
+    if (types.socks) set.add('socks5');
+    s.protocols = [...set] as Server['protocols'];
+    const proxy = {
+      user: 'novpn', pass: 'demo-pass-1234',
+      httpPort: types.http || types.https ? 8080 : null,
+      httpsPort: types.https ? 8443 : null,
+      socksPort: types.socks ? 1080 : null,
+      httpsHost: types.https ? s.host : null,
+    };
+    return { ok: true, proxy, server: clone(s) };
+  },
+  async getServerProxy(id: string) {
+    await wait(150);
+    const s = state.servers.find((x) => x.id === id)!;
+    return { proxy: null, host: s.host };
+  },
+
   async setServerDefault(id: string): Promise<Server[]> {
     await wait(250);
     state.servers.forEach((s) => (s.isDefault = s.id === id));
