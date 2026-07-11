@@ -161,6 +161,14 @@ export function setServerDefault(id: string): Server[] {
   tx();
   return listServers();
 }
+export function deleteServer(id: string): void {
+  // Удаление сервера удаляет привязанные к нему устройства (подписки).
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM devices WHERE server_id = ?').run(id);
+    db.prepare('DELETE FROM servers WHERE id = ?').run(id);
+  });
+  tx();
+}
 export function updateServerFields(id: string, fields: Record<string, unknown>): Server | null {
   const cols = Object.keys(fields);
   if (cols.length) {

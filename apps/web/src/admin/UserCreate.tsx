@@ -183,7 +183,7 @@ export function UserCreate() {
           <div className="chip-row">
             <Chip label="1" active={dlMode === '1'} onClick={() => setDlMode('1')} />
             <Chip label="10" active={dlMode === '10'} onClick={() => setDlMode('10')} />
-            <Chip label="Без ограничений" active={dlMode === 'unlim'} onClick={() => setDlMode('unlim')} />
+            <Chip label="∞" active={dlMode === 'unlim'} onClick={() => setDlMode('unlim')} />
             <Chip label="Своё" active={dlMode === 'custom'} onClick={() => setDlMode('custom')} />
           </div>
           {dlMode === 'custom' && (
@@ -203,7 +203,7 @@ export function UserCreate() {
           <div className="chip-row">
             <Chip label="7 дней" active={expMode === '7'} onClick={() => setExpMode('7')} />
             <Chip label="30 дней" active={expMode === '30'} onClick={() => setExpMode('30')} />
-            <Chip label="Без срока" active={expMode === 'never'} onClick={() => setExpMode('never')} />
+            <Chip label="∞" active={expMode === 'never'} onClick={() => setExpMode('never')} />
             <Chip label="Своё" active={expMode === 'custom'} onClick={() => setExpMode('custom')} />
           </div>
           {expMode === 'custom' && (
@@ -221,7 +221,7 @@ export function UserCreate() {
         <div className="field">
           <span className="field-label">Лимит трафика</span>
           <div className="chip-row">
-            <Chip label="Без ограничений" active={trafMode === 'unlim'} onClick={() => setTrafMode('unlim')} />
+            <Chip label="∞" active={trafMode === 'unlim'} onClick={() => setTrafMode('unlim')} />
             <Chip label="Лимит, ГБ" active={trafMode === 'custom'} onClick={() => setTrafMode('custom')} />
           </div>
           {trafMode === 'custom' && (

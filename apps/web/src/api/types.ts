@@ -102,6 +102,7 @@ export interface ApiClient {
   addServer(input: AddServerInput): Promise<Server>;
   setServerDefault(id: string): Promise<Server[]>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
+  deleteServer(id: string): Promise<Ok>;
 
   // ── admin: telegram ──
   saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings>;

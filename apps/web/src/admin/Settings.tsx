@@ -139,7 +139,7 @@ export function Settings() {
 
         {/* Безопасность */}
         <Panel title="Активность, журналы, безопасность">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, alignItems: 'end' }}>
             <Field label="Порог «активного устройства», дней">
               <input
                 className="input"

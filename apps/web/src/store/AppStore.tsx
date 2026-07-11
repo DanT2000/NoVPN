@@ -94,6 +94,7 @@ interface AppContextValue {
   addServer(input: AddServerInput): Promise<Server>;
   setServerDefault(id: string): Promise<void>;
   setServerAutoIssue(id: string, on: boolean): Promise<void>;
+  deleteServer(id: string): Promise<void>;
 
   // telegram / apps / settings
   saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings>;
@@ -314,6 +315,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [patchData],
   );
+  const deleteServer = useCallback(
+    async (id: string) => {
+      await api.deleteServer(id);
+      patchData((d) => ({ ...d, servers: d.servers.filter((x) => x.id !== id), devices: d.devices.filter((x) => x.serverId !== id) }));
+    },
+    [patchData],
+  );
 
   // ── telegram / apps / settings ──
   const saveTelegram = useCallback(
@@ -349,7 +357,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       issueDevice, reissueDevice, revokeDevice, deleteDevice,
       adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
-      addServer, setServerDefault, setServerAutoIssue,
+      addServer, setServerDefault, setServerAutoIssue, deleteServer,
       saveTelegram, saveApps, saveSettings,
     }),
     [
@@ -357,7 +365,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       reload, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
-      addServer, setServerDefault, setServerAutoIssue, saveTelegram, saveApps, saveSettings,
+      addServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],
   );
 

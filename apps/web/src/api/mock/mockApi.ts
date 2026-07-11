@@ -264,6 +264,13 @@ export const mockApi: ApiClient = {
     return clone(s);
   },
 
+  async deleteServer(id: string): Promise<Ok> {
+    await wait(250);
+    state.servers = state.servers.filter((s) => s.id !== id);
+    state.devices = state.devices.filter((d) => d.serverId !== id);
+    return { ok: true };
+  },
+
   async saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings> {
     await wait(350);
     const t = state.telegram;

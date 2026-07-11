@@ -1,5 +1,6 @@
 // Все HTTP-роуты. Пути совпадают с httpApi фронтенда.
 
+import net from 'node:net';
 import { Router } from 'express';
 import type {
   AppSettings,
@@ -231,19 +232,39 @@ router.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
 });
 
 // ── admin: servers ──
-router.post('/api/admin/servers/test-ssh', requireAdmin, (_req, res) => {
-  // TODO(real-ssh): read-only аудит по SSH. Пока — контрактный ответ.
-  res.json({
-    ok: true,
-    audit: [
-      { name: 'SSH-доступ', ok: true, note: 'подключение успешно' },
-      { name: 'ОС', ok: true, note: 'Ubuntu 24.04 LTS' },
-      { name: 'Docker', ok: true, note: 'установлен' },
-      { name: 'Xray', ok: false, note: 'не установлен — будет установлен' },
-      { name: 'AmneziaWG', ok: false, note: 'не установлен — будет установлен' },
-      { name: 'UDP 51820', ok: true, note: 'порт свободен' },
-    ],
+function tcpReachable(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    const done = (v: boolean) => {
+      sock.destroy();
+      resolve(v);
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => done(true));
+    sock.once('timeout', () => done(false));
+    sock.once('error', () => done(false));
+    sock.connect(port, host);
   });
+}
+
+router.post('/api/admin/servers/test-ssh', requireAdmin, async (req, res) => {
+  const b = req.body ?? {};
+  const host = String(b.host || b.vpnHost || '').trim();
+  const port = Number(b.sshPort) || 22;
+  if (!host) return res.json({ ok: false, audit: [{ name: 'Хост', ok: false, note: 'адрес не указан' }] });
+  // Реальная проверка: доступен ли SSH-порт хоста.
+  const reachable = await tcpReachable(host, port, 5000);
+  const audit = [
+    {
+      name: `SSH-порт ${port} на ${host}`,
+      ok: reachable,
+      note: reachable ? 'порт открыт, хост доступен' : 'не удалось подключиться — проверьте адрес/порт/файрвол',
+    },
+  ];
+  if (reachable) {
+    audit.push({ name: 'Аудит ПО (ОС, Docker, протоколы)', ok: false, note: 'выполнит агент после установки по SSH' });
+  }
+  res.json({ ok: reachable, audit });
 });
 
 router.post('/api/admin/servers', requireAdmin, (req, res) => {
@@ -268,6 +289,13 @@ router.post('/api/admin/servers/:id/default', requireAdmin, (req, res) => {
 router.post('/api/admin/servers/:id/auto-issue', requireAdmin, (req, res) => {
   const on = !!req.body?.on;
   res.json(repo.updateServerFields(req.params.id!, { auto_issue: on ? 1 : 0 }));
+});
+
+router.delete('/api/admin/servers/:id', requireAdmin, (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  repo.deleteServer(req.params.id!);
+  if (s) repo.addLog(`Удалён сервер «${s.name}»`);
+  res.json({ ok: true });
 });
 
 // ── admin: telegram ──
@@ -302,10 +330,19 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
   res.json(safe);
 });
 
-router.post('/api/admin/telegram/test', requireAdmin, (req, res) => {
+router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
   const token = String(req.body?.token ?? '');
-  if (!token || token.length < 10) return res.json({ ok: false, message: 'Токен не задан или слишком короткий.' });
-  res.json({ ok: true, message: 'Токен принят. Проверка бота появится вместе с интеграцией Telegram.' });
+  if (!/^\d+:[A-Za-z0-9_-]{30,}$/.test(token))
+    return res.json({ ok: false, message: 'Токен не задан или неверного формата (ожидается 123456:AA...).' });
+  try {
+    // Реальная проверка через Telegram Bot API.
+    const r = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const d = (await r.json()) as { ok: boolean; result?: { username?: string }; description?: string };
+    if (d.ok && d.result?.username) return res.json({ ok: true, message: `Бот @${d.result.username} отвечает.` });
+    return res.json({ ok: false, message: `Telegram отклонил токен: ${d.description ?? 'неизвестная ошибка'}` });
+  } catch {
+    return res.json({ ok: false, message: 'Не удалось связаться с Telegram API (проверьте сеть/прокси).' });
+  }
 });
 
 // ── admin: apps ──

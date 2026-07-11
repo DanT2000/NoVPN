@@ -11,6 +11,14 @@ import { Chip, Field, ProgressBar, ScreenHeader } from '../components/ui';
 type AuthMethod = 'key' | 'password';
 type Component = 'xray' | 'amneziawg' | 'http' | 'socks5';
 
+const isIpLike = (h: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(h.trim());
+function isValidHost(h: string): boolean {
+  const t = h.trim();
+  if (!t) return false;
+  if (isIpLike(t)) return t.split('.').every((o) => Number(o) >= 0 && Number(o) <= 255);
+  return /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(t);
+}
+
 const STEP_LABELS = ['1. Данные', '2. Проверка', '3. Компоненты', '4. Установка', '5. Готово'];
 
 const INSTALL_LOG = [
@@ -181,14 +189,24 @@ export function ServerWizard() {
           <Field label="Название">
             <input className="input" placeholder="Финляндия" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="IP или hostname">
+          <Field label="Домен или IP">
             <input
               className="input mono"
-              placeholder="203.0.113.10"
+              placeholder="fi1.example.com"
               value={host}
               onChange={(e) => setHost(e.target.value)}
             />
           </Field>
+          {isIpLike(host) ? (
+            <div className="notice notice-amber small">
+              ⚠️ Рекомендуем указывать <b>домен</b>, а не IP. Подписки, выпущенные на IP-адрес,
+              привязаны к нему: при удалении сервера они станут недействительными. Домен можно
+              переназначить на другой сервер — подписки сохранятся.
+            </div>
+          ) : null}
+          {host.trim() && !isValidHost(host) ? (
+            <div className="notice notice-red small">Укажите корректный домен или IP-адрес.</div>
+          ) : null}
           <div className="grid-2">
             <Field label="SSH-порт">
               <input className="input mono" value={sshPort} onChange={(e) => setSshPort(e.target.value)} />
@@ -224,7 +242,7 @@ export function ServerWizard() {
           </Field>
           <button
             className="btn btn-primary"
-            disabled={!host.trim()}
+            disabled={!isValidHost(host)}
             onClick={() => setStep(2)}
           >
             К проверке соединения

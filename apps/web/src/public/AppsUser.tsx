@@ -3,7 +3,16 @@ import type { AppClient } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Chip, EmptyState } from '../components/ui';
 
-const PLATFORMS = ['Все', 'Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
+const PLATFORMS = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
+type Platform = (typeof PLATFORMS)[number];
+function detectPlatform(): Platform {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  if (/android/i.test(ua)) return 'Android';
+  if (/iphone|ipad|ipod/i.test(ua)) return 'iOS';
+  if (/mac/i.test(ua)) return 'macOS';
+  if (/linux/i.test(ua)) return 'Linux';
+  return 'Windows';
+}
 const COMPAT_LABEL: Record<AppClient['compat'][number], string> = {
   xray: 'Xray',
   'amnezia-app': 'AmneziaVPN',
@@ -12,10 +21,10 @@ const COMPAT_LABEL: Record<AppClient['compat'][number], string> = {
 
 export function AppsUser() {
   const { data, publicUser, goPublic, showToast } = useApp();
-  const [platform, setPlatform] = useState<(typeof PLATFORMS)[number]>('Все');
+  const [platform, setPlatform] = useState<Platform>(detectPlatform());
   if (!data) return null;
 
-  const apps = data.apps.filter((a) => a.enabled && (platform === 'Все' || a.platform === platform));
+  const apps = data.apps.filter((a) => a.enabled && a.platform === platform);
 
   return (
     <div className="stack" style={{ gap: 14, paddingTop: 12 }}>

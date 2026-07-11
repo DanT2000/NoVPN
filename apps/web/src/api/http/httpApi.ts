@@ -66,6 +66,7 @@ export const httpApi: ApiClient = {
   addServer: (input: AddServerInput) => req<Server>('POST', '/api/admin/servers', input),
   setServerDefault: (id) => req<Server[]>('POST', `/api/admin/servers/${id}/default`),
   setServerAutoIssue: (id, on) => req<Server>('POST', `/api/admin/servers/${id}/auto-issue`, { on }),
+  deleteServer: (id) => req<Ok>('DELETE', `/api/admin/servers/${id}`),
 
   saveTelegram: (input: SaveTelegramInput) => req<TelegramSettings>('PUT', '/api/admin/telegram', input),
   testTelegram: (token) => req<TestTelegramResult>('POST', '/api/admin/telegram/test', { token }),

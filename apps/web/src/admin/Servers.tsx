@@ -29,7 +29,7 @@ function Metric({ label, value, color }: { label: string; value: React.ReactNode
 }
 
 export function Servers() {
-  const { data, isMobile, goAdmin, setServerAutoIssue, setServerDefault, showToast } = useApp();
+  const { data, isMobile, goAdmin, setServerAutoIssue, setServerDefault, deleteServer, showToast, showConfirm } = useApp();
   if (!data) return null;
 
   const servers = data.servers;
@@ -109,17 +109,36 @@ export function Servers() {
                     />
                     <span className="small">Автоматическая выдача</span>
                   </div>
-                  {!s.isDefault ? (
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    {!s.isDefault ? (
+                      <button
+                        className="btn btn-outline btn-sm"
+                        onClick={async () => {
+                          await setServerDefault(s.id);
+                          showToast(`«${s.name}» — сервер по умолчанию`);
+                        }}
+                      >
+                        Сделать по умолчанию
+                      </button>
+                    ) : null}
                     <button
-                      className="btn btn-outline btn-sm"
-                      onClick={async () => {
-                        await setServerDefault(s.id);
-                        showToast(`«${s.name}» — сервер по умолчанию`);
-                      }}
+                      className="btn btn-danger-outline btn-sm"
+                      onClick={() =>
+                        showConfirm({
+                          title: 'Удалить сервер?',
+                          text: `«${s.name}» и все подписки, выпущенные на этот сервер, будут удалены. Действие нельзя отменить.`,
+                          confirmLabel: 'Удалить',
+                          danger: true,
+                          onConfirm: async () => {
+                            await deleteServer(s.id);
+                            showToast('Сервер удалён');
+                          },
+                        })
+                      }
                     >
-                      Сделать по умолчанию
+                      Удалить
                     </button>
-                  ) : null}
+                  </div>
                 </div>
               </div>
             );
