@@ -198,6 +198,7 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.tags !== undefined) fields.tags = JSON.stringify(b.tags);
   if (b.deviceLimit !== undefined) fields.device_limit = b.deviceLimit;
   if (b.trafficLimitGb !== undefined) fields.traffic_limit_gb = b.trafficLimitGb;
+  if (b.expiresAt !== undefined) fields.expires_at = b.expiresAt; // null = снять срок
   if (b.resetPolicy !== undefined) fields.reset_policy = b.resetPolicy === 'monthly' ? 'monthly' : 'never';
   if (b.allowedServers !== undefined) fields.allowed_servers = JSON.stringify(b.allowedServers);
   if (b.defaultServerId !== undefined) fields.default_server_id = b.defaultServerId;
@@ -313,6 +314,39 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
   }
   repo.addLog(`Добавлен сервер «${s.name}»`);
   res.json({ ...s, enrollToken });
+});
+
+router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const b = req.body ?? {};
+  const fields: Record<string, unknown> = {};
+  if (b.name !== undefined) fields.name = String(b.name);
+  if (b.country !== undefined) fields.country = b.country || null;
+  const vpnHost = b.vpnHost ?? b.host;
+  if (vpnHost !== undefined && String(vpnHost).trim()) fields.host = String(vpnHost).trim();
+  if (b.sshHost !== undefined) fields.ssh_host = b.sshHost;
+  if (b.sshPort !== undefined) fields.ssh_port = Number(b.sshPort) || 22;
+  if (b.sshUser !== undefined) fields.ssh_user = b.sshUser;
+  // Новый SSH-пароль задаём только если пришёл непустой secret (иначе не трогаем).
+  if (b.secret && b.authMethod !== 'key') fields.ssh_pass_enc = encryptSecret(String(b.secret));
+  if (Array.isArray(b.components)) {
+    const protocols = b.components.filter((p: string) => p === 'xray' || p === 'amneziawg' || p === 'http' || p === 'socks5');
+    fields.protocols = JSON.stringify(protocols);
+  }
+  const updated = repo.updateServerFields(s.id, fields) ?? s;
+  // Обновление серверных ключей (для выпуска конфигов) — по домену.
+  if (b.serverKeys && (b.serverKeys.awgServerPubKey || b.serverKeys.xrayRealityPubKey)) {
+    saveServerKeys(updated.host, {
+      xrayRealityPubKey: b.serverKeys.xrayRealityPubKey,
+      xrayShortId: b.serverKeys.xrayShortId,
+      xraySni: b.serverKeys.xraySni,
+      awgServerPubKey: b.serverKeys.awgServerPubKey,
+    });
+    repo.updateServerFields(s.id, { agent: 'online', endpoint_ok: 1 });
+  }
+  repo.addLog(`Изменён сервер «${updated.name}»`);
+  res.json(repo.getServer(s.id));
 });
 
 router.post('/api/admin/servers/:id/default', requireAdmin, (req, res) => {

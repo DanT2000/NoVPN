@@ -21,6 +21,7 @@ import type {
   ApiClient,
   CodeResult,
   CreateUserInput,
+  EditServerInput,
   Ok,
   SaveTelegramInput,
   UpdateUserPatch,
@@ -248,6 +249,20 @@ export const mockApi: ApiClient = {
     };
     state.servers.push(s);
     log(`Добавлен сервер «${s.name}»`);
+    return clone(s);
+  },
+
+  async editServer(id: string, input: EditServerInput): Promise<Server> {
+    await wait(300);
+    const s = state.servers.find((x) => x.id === id)!;
+    if (input.name !== undefined) s.name = input.name;
+    if (input.country !== undefined) s.country = input.country ?? null;
+    if (input.vpnHost) s.host = input.vpnHost;
+    if (input.components)
+      s.protocols = input.components.filter(
+        (p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg',
+      );
+    log(`Изменён сервер «${s.name}»`);
     return clone(s);
   },
 

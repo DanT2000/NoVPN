@@ -1,17 +1,33 @@
-// A5 — Карточка пользователя. Статистика, код, срок, лимиты, доступ, устройства.
+// A5 — Карточка пользователя. Единый профиль (как при создании), код, срок,
+// выпуск конфигов, устройства, история.
 
 import { useState } from 'react';
-import type { IssueDeviceResult, Protocol, User } from '@novpn/shared';
+import type { IssueDeviceResult, Protocol, Server, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader } from '../components/ui';
 import { Qr } from '../components/Qr';
-import { dateShort, daysLeft, gb, rel } from '../lib/format';
+import { dateShort, daysLeft, gb, rel, DAY_MS } from '../lib/format';
 import { countActiveDevices, devStatusOf, serverAgentView, statusOf } from '../lib/status';
 import { copyText, downloadText } from '../lib/clipboard';
 
 const CATEGORIES = ['Общие', 'Семья', 'Друзья', 'Работа', 'Админ'] as const;
 const digits = (s: string) => s.replace(/\D+/g, '');
+const posInt = (s: string): number | null => {
+  const n = parseInt(s, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+const posNum = (s: string): number | null => {
+  const n = parseFloat(s.replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/** Какие VPN-протоколы реально установлены хотя бы на одном из выбранных серверов. */
+function installedOn(servers: Server[], ids: string[]): Protocol[] {
+  const set = new Set<Protocol>();
+  for (const s of servers) if (ids.includes(s.id)) for (const p of s.protocols) set.add(p);
+  return [...set];
+}
 
 export function UserCard() {
   const { data, nav, goAdmin } = useApp();
@@ -53,6 +69,9 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
+type DlMode = '1' | '10' | 'unlim' | 'custom';
+type TrafMode = 'unlim' | 'custom';
+
 function UserCardInner({ user }: { user: User }) {
   const {
     data, isMobile, goAdmin, showToast, showConfirm,
@@ -60,80 +79,127 @@ function UserCardInner({ user }: { user: User }) {
     reissueDevice, revokeDevice, issueDevice,
   } = useApp();
 
-  // Выпуск конфига админом
-  const [issueOpen, setIssueOpen] = useState(false);
-  const [issServer, setIssServer] = useState<string>(user.allowedServers[0] ?? '');
-  const [issProto, setIssProto] = useState<'xray' | 'amneziawg'>(user.allowedProtocols[0] ?? 'xray');
-  const [issName, setIssName] = useState('');
-  const [issuing, setIssuing] = useState(false);
-  const [issued, setIssued] = useState<IssueDeviceResult | null>(null);
-  const [issErr, setIssErr] = useState<string | null>(null);
-  const doIssue = async () => {
-    if (!issServer || issuing) return;
-    setIssuing(true);
-    setIssErr(null);
-    try {
-      const r = await issueDevice({ userId: user.id, name: issName.trim() || 'Устройство', serverId: issServer, protocol: issProto });
-      setIssued(r);
-    } catch (e) {
-      setIssErr(e instanceof Error ? e.message : 'Ошибка выпуска конфига');
-    } finally {
-      setIssuing(false);
-    }
-  };
+  const servers = data?.servers ?? [];
 
-  // Основное
+  // ── Профиль (единая форма как при создании) ──
   const [name, setName] = useState(user.name);
   const [category, setCategory] = useState<string>(user.category ?? 'Общие');
   const [comment, setComment] = useState(user.comment);
   const [tagsRaw, setTagsRaw] = useState(user.tags.join(', '));
 
-  // Лимиты · трафик
-  const [deviceLimitStr, setDeviceLimitStr] = useState(user.deviceLimit == null ? '' : String(user.deviceLimit));
-  const [trafficStr, setTrafficStr] = useState(user.trafficLimitGb == null ? '' : String(user.trafficLimitGb));
+  const [dlMode, setDlMode] = useState<DlMode>(
+    user.deviceLimit == null ? 'unlim' : user.deviceLimit === 1 ? '1' : user.deviceLimit === 10 ? '10' : 'custom',
+  );
+  const [dlCustom, setDlCustom] = useState(user.deviceLimit && ![1, 10].includes(user.deviceLimit) ? String(user.deviceLimit) : '3');
+  const [trafMode, setTrafMode] = useState<TrafMode>(user.trafficLimitGb == null ? 'unlim' : 'custom');
+  const [trafCustom, setTrafCustom] = useState(user.trafficLimitGb == null ? '' : String(user.trafficLimitGb));
   const [resetPolicy, setResetPolicy] = useState<'never' | 'monthly'>(user.resetPolicy);
 
-  // Доступ
   const [allowedServers, setAllowedServers] = useState<string[]>([...user.allowedServers]);
+  const [defaultServerId, setDefaultServerId] = useState<string | null>(user.defaultServerId ?? user.allowedServers[0] ?? null);
   const [protocols, setProtocols] = useState<Protocol[]>([...user.allowedProtocols]);
+  const [savingProfile, setSavingProfile] = useState(false);
 
-  // Код
+  // ── Код ──
   const [manualCode, setManualCode] = useState('');
   const [codeError, setCodeError] = useState<string | null>(null);
 
-  // Срок
+  // ── Срок ──
   const [extendDays, setExtendDays] = useState('');
+
+  // ── Выпуск конфига ──
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [issServer, setIssServer] = useState<string>(user.allowedServers[0] ?? '');
+  const issuableFor = (sid: string): Protocol[] => {
+    const inst = servers.find((s) => s.id === sid)?.protocols ?? [];
+    return (['xray', 'amneziawg'] as Protocol[]).filter((p) => inst.includes(p) && user.allowedProtocols.includes(p as User['allowedProtocols'][number]));
+  };
+  const [issProto, setIssProto] = useState<Protocol>(() => issuableFor(user.allowedServers[0] ?? '')[0] ?? 'xray');
+  const [issName, setIssName] = useState('');
+  const [issuing, setIssuing] = useState(false);
+  const [issued, setIssued] = useState<IssueDeviceResult | null>(null);
+  const [issErr, setIssErr] = useState<string | null>(null);
 
   if (!data) return null;
 
-  const servers = data.servers;
   const isAdmin = category === 'Админ';
   const activeDevices = countActiveDevices(user.id, data.devices);
   const userDevices = data.devices.filter((d) => d.userId === user.id);
   const history = data.history[user.id] ?? [];
   const usagePct = user.trafficLimitGb ? Math.min(100, (user.trafficUsedGb / user.trafficLimitGb) * 100) : 0;
+  const selectedServers = servers.filter((s) => allowedServers.includes(s.id));
+  const installed = installedOn(servers, allowedServers);
+
+  // Протоколы к показу: только установленные (xray/amnezia) + прокси для админа.
+  const protocolOptions: Array<{ key: Protocol; label: string }> = [
+    ...(['xray', 'amneziawg'] as Protocol[])
+      .filter((p) => installed.includes(p))
+      .map((p) => ({ key: p, label: p === 'xray' ? 'Xray' : 'Amnezia' })),
+    ...(isAdmin
+      ? ([
+          { key: 'http', label: 'HTTP-прокси' },
+          { key: 'socks5', label: 'SOCKS5' },
+        ] as Array<{ key: Protocol; label: string }>)
+      : []),
+  ];
 
   let expLine: string;
   if (!user.expiresAt) expLine = 'Бессрочно';
   else if (new Date(user.expiresAt).getTime() < Date.now()) expLine = `Срок истёк ${dateShort(user.expiresAt)}`;
   else expLine = `Осталось ${daysLeft(user.expiresAt) ?? 0} дн · до ${dateShort(user.expiresAt)}`;
 
-  const protocolOptions: Array<{ key: Protocol; label: string }> = [
-    { key: 'xray', label: 'Xray' },
-    { key: 'amneziawg', label: 'Amnezia' },
-    ...(isAdmin
-      ? ([
-          { key: 'http', label: 'HTTP' },
-          { key: 'socks5', label: 'SOCKS5' },
-        ] as Array<{ key: Protocol; label: string }>)
-      : []),
-  ];
+  const issuable = issuableFor(issServer);
+  const effIssProto = issuable.includes(issProto) ? issProto : issuable[0];
 
   function toggleServer(id: string) {
-    setAllowedServers((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setAllowedServers((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      if (next.length === 0) setDefaultServerId(null);
+      else if (!defaultServerId || !next.includes(defaultServerId)) setDefaultServerId(next[0] ?? null);
+      return next;
+    });
+  }
+  function changeCategory(v: string) {
+    setCategory(v);
+    if (v !== 'Админ') setProtocols((prev) => prev.filter((p) => p === 'xray' || p === 'amneziawg'));
   }
   function toggleProtocol(p: Protocol) {
     setProtocols((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  }
+
+  async function saveProfile() {
+    if (allowedServers.length === 0) {
+      showToast('Выберите хотя бы один сервер');
+      return;
+    }
+    const eff = protocols.filter((p) =>
+      p === 'xray' || p === 'amneziawg' ? installed.includes(p) : isAdmin && (p === 'http' || p === 'socks5'),
+    );
+    if (eff.length === 0) {
+      showToast('Выберите хотя бы один установленный протокол');
+      return;
+    }
+    const deviceLimit = dlMode === '1' ? 1 : dlMode === '10' ? 10 : dlMode === 'unlim' ? null : posInt(dlCustom);
+    const trafficLimitGb = trafMode === 'unlim' ? null : posNum(trafCustom);
+    const def = defaultServerId && allowedServers.includes(defaultServerId) ? defaultServerId : allowedServers[0] ?? null;
+    setSavingProfile(true);
+    try {
+      await updateUser(user.id, {
+        name: name.trim() || user.name,
+        category,
+        comment,
+        tags: tagsRaw.split(',').map((t) => t.trim()).filter(Boolean),
+        deviceLimit,
+        trafficLimitGb,
+        resetPolicy,
+        allowedServers,
+        defaultServerId: def,
+        allowedProtocols: eff as User['allowedProtocols'],
+      });
+      showToast('Профиль сохранён');
+    } finally {
+      setSavingProfile(false);
+    }
   }
 
   function disableUser() {
@@ -146,9 +212,6 @@ function UserCardInner({ user }: { user: User }) {
         await setUserActive(user.id, false);
       },
     });
-  }
-  async function enableUser() {
-    await setUserActive(user.id, true);
   }
   function removeUser() {
     showConfirm({
@@ -163,7 +226,6 @@ function UserCardInner({ user }: { user: User }) {
       },
     });
   }
-
   function reissue() {
     showConfirm({
       title: 'Перевыпустить код?',
@@ -185,7 +247,6 @@ function UserCardInner({ user }: { user: User }) {
     setManualCode('');
     showToast('Код сохранён');
   }
-
   async function doExtend(days: number) {
     await extendUser(user.id, days);
     showToast(`Продлено на ${days} дн`);
@@ -197,40 +258,14 @@ function UserCardInner({ user }: { user: User }) {
       setExtendDays('');
     }
   }
-
-  async function saveBasic() {
-    await updateUser(user.id, {
-      name: name.trim() || user.name,
-      category,
-      comment,
-      tags: tagsRaw.split(',').map((t) => t.trim()).filter(Boolean),
-    });
-    showToast('Сохранено');
+  async function makeUnlimited() {
+    await updateUser(user.id, { expiresAt: null });
+    showToast('Срок снят — доступ бессрочный');
   }
-
-  async function saveLimits() {
-    const dl = deviceLimitStr.trim() === '' ? null : (() => { const n = parseInt(deviceLimitStr, 10); return Number.isFinite(n) && n > 0 ? n : null; })();
-    const tg = trafficStr.trim() === '' ? null : (() => { const n = parseFloat(trafficStr.replace(',', '.')); return Number.isFinite(n) && n > 0 ? n : null; })();
-    await updateUser(user.id, { deviceLimit: dl, trafficLimitGb: tg, resetPolicy });
-    showToast('Лимиты сохранены');
-  }
-
-  async function saveAccess() {
-    if (allowedServers.length === 0) {
-      showToast('Выберите хотя бы один сервер');
-      return;
-    }
-    const eff = isAdmin ? protocols : protocols.filter((p) => p === 'xray' || p === 'amneziawg');
-    const defaultServerId =
-      user.defaultServerId && allowedServers.includes(user.defaultServerId)
-        ? user.defaultServerId
-        : allowedServers[0] ?? null;
-    await updateUser(user.id, {
-      allowedServers,
-      defaultServerId,
-      allowedProtocols: eff as User['allowedProtocols'],
-    });
-    showToast('Доступ сохранён');
+  async function setExactDays(days: number) {
+    const expiresAt = new Date(Date.now() + days * DAY_MS).toISOString();
+    await updateUser(user.id, { expiresAt });
+    showToast(`Срок: ${days} дн от сегодня`);
   }
 
   function confirmRevoke(deviceId: string, deviceName: string) {
@@ -246,6 +281,20 @@ function UserCardInner({ user }: { user: User }) {
     });
   }
 
+  async function doIssue() {
+    if (!issServer || !effIssProto || issuing) return;
+    setIssuing(true);
+    setIssErr(null);
+    try {
+      const r = await issueDevice({ userId: user.id, name: issName.trim() || 'Устройство', serverId: issServer, protocol: effIssProto as 'xray' | 'amneziawg' });
+      setIssued(r);
+    } catch (e) {
+      setIssErr(e instanceof Error ? e.message : 'Ошибка выпуска конфига');
+    } finally {
+      setIssuing(false);
+    }
+  }
+
   return (
     <div className="stack">
       <ScreenHeader
@@ -259,7 +308,7 @@ function UserCardInner({ user }: { user: User }) {
                 Отключить
               </button>
             ) : (
-              <button className="btn btn-secondary" onClick={() => void enableUser()}>
+              <button className="btn btn-secondary" onClick={() => void setUserActive(user.id, true)}>
                 Включить
               </button>
             )}
@@ -273,129 +322,172 @@ function UserCardInner({ user }: { user: User }) {
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 12 }}>
         <StatCard label="Статус" value={statusOf(user).label} />
         <StatCard label="Устройства" value={`${activeDevices}/${user.deviceLimit ?? '∞'}`} />
-        <StatCard label="Трафик" value={`${gb(user.trafficUsedGb)}/${gb(user.trafficLimitGb)}`} />
+        <StatCard label="Трафик" value={`${gb(user.trafficUsedGb)} / ${gb(user.trafficLimitGb)}`} />
         <StatCard label="Активность" value={rel(user.lastActivityAt)} />
       </div>
 
-      <Panel title="Код доступа">
-        <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: '0.06em' }}>
-            {user.code}
-          </span>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={async () => {
-              await copyText(user.code);
-              showToast('Код скопирован');
-            }}
-          >
-            Копировать
-          </button>
-          <button className="btn btn-outline btn-sm" onClick={reissue}>
-            Перевыпустить
-          </button>
-        </div>
-        <Field label="Задать код вручную">
-          <input
-            className="input mono"
-            inputMode="numeric"
-            maxLength={6}
-            placeholder="задать вручную"
-            value={manualCode}
-            onChange={(e) => {
-              setManualCode(digits(e.target.value));
-              setCodeError(null);
-            }}
-            style={{ maxWidth: 200 }}
-          />
-        </Field>
-        {codeError && <div className="notice notice-red">{codeError}</div>}
-        <div>
-          <button className="btn btn-primary btn-sm" onClick={() => void saveCode()}>
-            Сохранить код
-          </button>
-        </div>
-      </Panel>
-
-      <Panel title="Срок действия">
-        <div>{expLine}</div>
-        <div className="chip-row">
-          <Chip label="+7 дн" onClick={() => void doExtend(7)} />
-          <Chip label="+30 дн" onClick={() => void doExtend(30)} />
-          <Chip label="+90 дн" onClick={() => void doExtend(90)} />
-        </div>
-        <div className="row" style={{ gap: 8 }}>
-          <input
-            className="input"
-            inputMode="numeric"
-            placeholder="дней"
-            value={extendDays}
-            onChange={(e) => setExtendDays(digits(e.target.value))}
-            style={{ maxWidth: 140 }}
-          />
-          <button className="btn btn-primary btn-sm" onClick={extendCustom}>
-            Продлить
-          </button>
-        </div>
-      </Panel>
-
-      <Panel title="Основное">
-        <Field label="Имя">
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
-        </Field>
-        <Field label="Категория">
-          <select className="select" value={category} onChange={(e) => setCategory(e.target.value)}>
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Комментарий">
-          <input className="input" value={comment} onChange={(e) => setComment(e.target.value)} />
-        </Field>
-        <Field label="Теги">
-          <input className="input" placeholder="vip, промо" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} />
-        </Field>
-        <div>
-          <button className="btn btn-primary btn-sm" onClick={() => void saveBasic()}>
-            Сохранить
-          </button>
-        </div>
-      </Panel>
-
-      <Panel title="Лимиты · трафик">
-        <div className="grid-2">
-          <Field label="Устройств (пусто = ∞)">
-            <input className="input" inputMode="numeric" value={deviceLimitStr} onChange={(e) => setDeviceLimitStr(digits(e.target.value))} />
+      {/* Код + Срок в две колонки */}
+      <div className="grid-2">
+        <Panel title="Код доступа">
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: '0.06em' }}>
+              {user.code}
+            </span>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={async () => {
+                await copyText(user.code);
+                showToast('Код скопирован');
+              }}
+            >
+              Копировать
+            </button>
+            <button className="btn btn-outline btn-sm" onClick={reissue}>
+              Перевыпустить
+            </button>
+          </div>
+          <Field label="Задать код вручную">
+            <div className="row" style={{ gap: 8 }}>
+              <input
+                className="input mono"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6 цифр"
+                value={manualCode}
+                onChange={(e) => {
+                  setManualCode(digits(e.target.value));
+                  setCodeError(null);
+                }}
+                style={{ maxWidth: 160 }}
+              />
+              <button className="btn btn-primary btn-sm" onClick={() => void saveCode()}>
+                Сохранить
+              </button>
+            </div>
           </Field>
-          <Field label="Трафик, ГБ (пусто = ∞)">
+          {codeError && <div className="notice notice-red">{codeError}</div>}
+        </Panel>
+
+        <Panel title="Срок действия">
+          <div style={{ fontWeight: 600 }}>{expLine}</div>
+          <div className="chip-row">
+            <Chip label="+7 дн" onClick={() => void doExtend(7)} />
+            <Chip label="+30 дн" onClick={() => void doExtend(30)} />
+            <Chip label="+90 дн" onClick={() => void doExtend(90)} />
+            <Chip label="∞ снять срок" active={!user.expiresAt} onClick={() => void makeUnlimited()} />
+          </div>
+          <div className="row" style={{ gap: 8 }}>
             <input
               className="input"
-              inputMode="decimal"
-              value={trafficStr}
-              onChange={(e) => setTrafficStr(e.target.value.replace(/[^\d.,]/g, ''))}
+              inputMode="numeric"
+              placeholder="дней от сегодня"
+              value={extendDays}
+              onChange={(e) => setExtendDays(digits(e.target.value))}
+              style={{ maxWidth: 150 }}
             />
+            <button className="btn btn-outline btn-sm" onClick={extendCustom}>
+              Продлить
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => {
+                const n = parseInt(extendDays, 10);
+                if (Number.isFinite(n) && n > 0) {
+                  void setExactDays(n);
+                  setExtendDays('');
+                }
+              }}
+            >
+              Задать срок
+            </button>
+          </div>
+        </Panel>
+      </div>
+
+      {/* ЕДИНЫЙ ПРОФИЛЬ — как при создании, поля предзаполнены */}
+      <Panel
+        title="Профиль"
+        extra={
+          <button className="btn btn-primary btn-sm" disabled={savingProfile} onClick={() => void saveProfile()}>
+            {savingProfile ? 'Сохраняем…' : 'Сохранить профиль'}
+          </button>
+        }
+      >
+        <div className="grid-2">
+          <Field label="Имя">
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="Категория">
+            <select className="select" value={category} onChange={(e) => changeCategory(e.target.value)}>
+              {(CATEGORIES.includes(category as (typeof CATEGORIES)[number]) ? CATEGORIES : [category, ...CATEGORIES]).map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Комментарий">
+            <input className="input" placeholder="Виден только вам" value={comment} onChange={(e) => setComment(e.target.value)} />
+          </Field>
+          <Field label="Теги">
+            <input className="input" placeholder="vip, промо" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} />
           </Field>
         </div>
-        <div className="chip-row">
-          <Chip label="Сброс: никогда" active={resetPolicy === 'never'} onClick={() => setResetPolicy('never')} />
-          <Chip label="Сброс: ежемесячно" active={resetPolicy === 'monthly'} onClick={() => setResetPolicy('monthly')} />
-        </div>
-        <ProgressBar pct={usagePct} />
-        <div className="small muted">
-          {gb(user.trafficUsedGb)} / {gb(user.trafficLimitGb)}
-        </div>
-        <div>
-          <button className="btn btn-primary btn-sm" onClick={() => void saveLimits()}>
-            Сохранить
-          </button>
-        </div>
-      </Panel>
 
-      <Panel title="Доступ">
-        <div className="field">
+        <div className="grid-2" style={{ marginTop: 4 }}>
+          <div className="field">
+            <span className="field-label">Лимит устройств</span>
+            <div className="chip-row">
+              <Chip label="1" active={dlMode === '1'} onClick={() => setDlMode('1')} />
+              <Chip label="10" active={dlMode === '10'} onClick={() => setDlMode('10')} />
+              <Chip label="∞" active={dlMode === 'unlim'} onClick={() => setDlMode('unlim')} />
+              <Chip label="Своё" active={dlMode === 'custom'} onClick={() => setDlMode('custom')} />
+            </div>
+            {dlMode === 'custom' && (
+              <input
+                className="input"
+                inputMode="numeric"
+                placeholder="число"
+                value={dlCustom}
+                onChange={(e) => setDlCustom(digits(e.target.value))}
+                style={{ maxWidth: 200, marginTop: 8 }}
+              />
+            )}
+          </div>
+          <div className="field">
+            <span className="field-label">Лимит трафика</span>
+            <div className="chip-row">
+              <Chip label="∞" active={trafMode === 'unlim'} onClick={() => setTrafMode('unlim')} />
+              <Chip label="Лимит, ГБ" active={trafMode === 'custom'} onClick={() => setTrafMode('custom')} />
+            </div>
+            {trafMode === 'custom' && (
+              <input
+                className="input"
+                inputMode="decimal"
+                placeholder="ГБ"
+                value={trafCustom}
+                onChange={(e) => setTrafCustom(e.target.value.replace(/[^\d.,]/g, ''))}
+                style={{ maxWidth: 200, marginTop: 8 }}
+              />
+            )}
+          </div>
+          <div className="field">
+            <span className="field-label">Сброс трафика</span>
+            <div className="chip-row">
+              <Chip label="Никогда" active={resetPolicy === 'never'} onClick={() => setResetPolicy('never')} />
+              <Chip label="Ежемесячно" active={resetPolicy === 'monthly'} onClick={() => setResetPolicy('monthly')} />
+            </div>
+          </div>
+          <div className="field">
+            <span className="field-label">Расход трафика</span>
+            <ProgressBar pct={usagePct} />
+            <div className="small muted" style={{ marginTop: 4 }}>
+              {gb(user.trafficUsedGb)} / {gb(user.trafficLimitGb)}
+            </div>
+          </div>
+        </div>
+
+        <div className="field" style={{ marginTop: 4 }}>
           <span className="field-label">Разрешённые серверы</span>
           {servers.length === 0 ? (
             <span className="small muted">Нет доступных серверов.</span>
@@ -426,11 +518,11 @@ function UserCardInner({ user }: { user: User }) {
                       <Dot color={serverAgentView(s).dot} />
                       <span style={{ fontWeight: 600 }}>
                         {s.name} ({s.country ?? '—'})
-                        {user.defaultServerId === s.id ? <span className="small muted"> · по умолчанию</span> : null}
+                        {defaultServerId === s.id ? <span className="small muted"> · по умолчанию</span> : null}
                       </span>
                     </span>
                     <span className="mono small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {s.host}
+                      {s.protocols.map((p) => PROTOCOL_LABELS[p]).join(' · ') || s.host}
                     </span>
                   </button>
                 );
@@ -438,29 +530,33 @@ function UserCardInner({ user }: { user: User }) {
             </div>
           )}
         </div>
+
+        {selectedServers.length > 1 ? (
+          <div className="field">
+            <span className="field-label">Сервер по умолчанию</span>
+            <div className="chip-row">
+              {selectedServers.map((s) => (
+                <Chip key={s.id} label={s.name} active={defaultServerId === s.id} onClick={() => setDefaultServerId(s.id)} />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="field">
           <span className="field-label">Разрешённые протоколы</span>
-          <div className="chip-row">
-            {protocolOptions.map((p) => (
-              <Chip key={p.key} label={p.label} active={protocols.includes(p.key)} onClick={() => toggleProtocol(p.key)} />
-            ))}
-          </div>
+          {protocolOptions.length === 0 ? (
+            <span className="small muted">На выбранных серверах нет установленных протоколов.</span>
+          ) : (
+            <div className="chip-row">
+              {protocolOptions.map((p) => (
+                <Chip key={p.key} label={p.label} active={protocols.includes(p.key)} onClick={() => toggleProtocol(p.key)} />
+              ))}
+            </div>
+          )}
           <span className="small muted">
-            {isAdmin
-              ? 'Категория «Админ»: дополнительно доступны прокси HTTP и SOCKS5.'
-              : 'HTTP и SOCKS5 доступны только для категории «Админ».'}
+            Показаны только протоколы, установленные на выбранных серверах{isAdmin ? '. Для «Админ» доступны прокси HTTP/SOCKS5.' : '.'}
           </span>
         </div>
-        <div>
-          <button className="btn btn-primary btn-sm" onClick={() => void saveAccess()}>
-            Сохранить
-          </button>
-        </div>
-      </Panel>
-
-      <Panel title="Telegram">
-        <div>{user.telegram ? `Привязан: ${user.telegram}` : 'Не привязан'}</div>
-        <span className="small muted">Привязка выполняется пользователем через бота.</span>
       </Panel>
 
       <Panel
@@ -483,7 +579,14 @@ function UserCardInner({ user }: { user: User }) {
             {!issued ? (
               <>
                 <Field label="Сервер">
-                  <select className="select" value={issServer} onChange={(e) => setIssServer(e.target.value)}>
+                  <select
+                    className="select"
+                    value={issServer}
+                    onChange={(e) => {
+                      setIssServer(e.target.value);
+                      setIssProto(issuableFor(e.target.value)[0] ?? 'xray');
+                    }}
+                  >
                     {user.allowedServers.map((sid) => {
                       const srv = servers.find((s) => s.id === sid);
                       return (
@@ -494,18 +597,25 @@ function UserCardInner({ user }: { user: User }) {
                     })}
                   </select>
                 </Field>
-                <Field label="Протокол">
-                  <div className="chip-row">
-                    {user.allowedProtocols.map((p) => (
-                      <Chip key={p} label={PROTOCOL_LABELS[p]} active={issProto === p} size="sm" onClick={() => setIssProto(p)} />
-                    ))}
+                {issuable.length === 0 ? (
+                  <div className="notice notice-amber small">
+                    На этом сервере нет установленных протоколов, разрешённых пользователю. Добавьте протокол в
+                    настройках сервера или разрешите его пользователю.
                   </div>
-                </Field>
+                ) : (
+                  <Field label="Протокол">
+                    <div className="chip-row">
+                      {issuable.map((p) => (
+                        <Chip key={p} label={PROTOCOL_LABELS[p]} active={effIssProto === p} size="sm" onClick={() => setIssProto(p)} />
+                      ))}
+                    </div>
+                  </Field>
+                )}
                 <Field label="Название устройства">
                   <input className="input" placeholder="Например, Телефон" value={issName} onChange={(e) => setIssName(e.target.value)} />
                 </Field>
                 {issErr ? <div className="notice notice-red small">{issErr}</div> : null}
-                <button className="btn btn-primary btn-sm" disabled={!issServer || issuing} onClick={doIssue}>
+                <button className="btn btn-primary btn-sm" disabled={!issServer || issuable.length === 0 || issuing} onClick={() => void doIssue()}>
                   {issuing ? 'Выпускаем…' : 'Создать конфиг'}
                 </button>
               </>
@@ -581,6 +691,11 @@ function UserCardInner({ user }: { user: User }) {
             );
           })
         )}
+      </Panel>
+
+      <Panel title="Telegram">
+        <div>{user.telegram ? `Привязан: ${user.telegram}` : 'Не привязан'}</div>
+        <span className="small muted">Привязка выполняется пользователем через бота.</span>
       </Panel>
 
       <Panel title="История изменений">

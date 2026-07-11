@@ -19,6 +19,7 @@ import type {
   ApiClient,
   CodeResult,
   CreateUserInput,
+  EditServerInput,
   Ok,
   SaveTelegramInput,
   UpdateUserPatch,
@@ -64,6 +65,7 @@ export const httpApi: ApiClient = {
   testServerConnection: (input: AddServerInput) =>
     req<TestServerConnectionResult>('POST', '/api/admin/servers/test-ssh', input),
   addServer: (input: AddServerInput) => req<Server>('POST', '/api/admin/servers', input),
+  editServer: (id: string, input: EditServerInput) => req<Server>('PATCH', `/api/admin/servers/${id}`, input),
   setServerDefault: (id) => req<Server[]>('POST', `/api/admin/servers/${id}/default`),
   setServerAutoIssue: (id, on) => req<Server>('POST', `/api/admin/servers/${id}/auto-issue`, { on }),
   deleteServer: (id) => req<Ok>('DELETE', `/api/admin/servers/${id}`),

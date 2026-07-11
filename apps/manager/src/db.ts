@@ -101,7 +101,9 @@ CREATE TABLE IF NOT EXISTS apps (
   local_file TEXT,
   instruction TEXT DEFAULT '',
   enabled INTEGER DEFAULT 1,
-  sort INTEGER DEFAULT 0
+  sort INTEGER DEFAULT 0,
+  icon TEXT,
+  download_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -164,7 +166,11 @@ CREATE INDEX IF NOT EXISTS idx_jobs_server ON jobs(server_id, state);
 `);
 
 // Миграции для существующих БД (ADD COLUMN идемпотентно — игнорируем дубликаты).
-for (const stmt of ['ALTER TABLE servers ADD COLUMN ssh_pass_enc TEXT']) {
+for (const stmt of [
+  'ALTER TABLE servers ADD COLUMN ssh_pass_enc TEXT',
+  'ALTER TABLE apps ADD COLUMN icon TEXT',
+  'ALTER TABLE apps ADD COLUMN download_url TEXT',
+]) {
   try {
     db.exec(stmt);
   } catch {

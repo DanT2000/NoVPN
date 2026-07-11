@@ -53,12 +53,16 @@ export function AppsUser() {
             <div className="row" style={{ gap: 12, marginBottom: 8 }}>
               <div
                 style={{
-                  width: 38, height: 38, borderRadius: 'var(--r-ctrl)', background: 'var(--surface-btn-2)',
+                  width: 38, height: 38, borderRadius: 'var(--r-ctrl)', background: 'var(--surface-btn-2)', overflow: 'hidden',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800,
                   color: 'var(--accent-light)', flex: 'none',
                 }}
               >
-                {a.client.charAt(0)}
+                {a.icon ? (
+                  <img src={a.icon} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  a.client.charAt(0)
+                )}
               </div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 700 }}>{a.client}</div>
@@ -89,6 +93,11 @@ export function AppsUser() {
               {a.store && a.source ? (
                 <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(a.source))}>
                   {a.store}
+                </button>
+              ) : null}
+              {a.downloadUrl ? (
+                <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(a.downloadUrl!))}>
+                  Скачать
                 </button>
               ) : null}
               {a.localFile ? (

@@ -17,6 +17,7 @@ import { api } from '../api';
 import type {
   AddServerInput,
   CreateUserInput,
+  EditServerInput,
   SaveTelegramInput,
   UpdateUserPatch,
 } from '../api/types';
@@ -92,6 +93,7 @@ interface AppContextValue {
 
   // server ops
   addServer(input: AddServerInput): Promise<Server>;
+  editServer(id: string, input: EditServerInput): Promise<Server>;
   setServerDefault(id: string): Promise<void>;
   setServerAutoIssue(id: string, on: boolean): Promise<void>;
   deleteServer(id: string): Promise<void>;
@@ -301,6 +303,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [patchData],
   );
+  const editServer = useCallback(
+    async (id: string, input: EditServerInput) => {
+      const s = await api.editServer(id, input);
+      patchData((d) => ({ ...d, servers: d.servers.map((x) => (x.id === id ? s : x)) }));
+      return s;
+    },
+    [patchData],
+  );
   const setServerDefault = useCallback(
     async (id: string) => {
       const servers = await api.setServerDefault(id);
@@ -357,7 +367,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       issueDevice, reissueDevice, revokeDevice, deleteDevice,
       adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
-      addServer, setServerDefault, setServerAutoIssue, deleteServer,
+      addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer,
       saveTelegram, saveApps, saveSettings,
     }),
     [
@@ -365,7 +375,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       reload, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
-      addServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
+      addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],
   );
 

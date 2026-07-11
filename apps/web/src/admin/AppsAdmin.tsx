@@ -142,8 +142,37 @@ export function AppsAdmin() {
                 className="card stack"
                 style={{ gap: 12, opacity: app.enabled ? 1 : 0.62 }}
               >
-                {/* Верхняя строка: имя, платформа, управление */}
+                {/* Верхняя строка: иконка, имя, платформа, управление */}
                 <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <label
+                    title="Загрузить иконку"
+                    style={{
+                      width: 48, height: 48, borderRadius: 12, flex: 'none', cursor: 'pointer', overflow: 'hidden',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: 'var(--surface)', border: '1px solid var(--border-input)', fontSize: 20,
+                    }}
+                  >
+                    {app.icon ? (
+                      <img src={app.icon} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <span className="muted">＋</span>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        if (file.size > 1024 * 1024) {
+                          showToast('Иконка больше 1 МБ — выберите меньше');
+                          return;
+                        }
+                        patchApp(app.id, { icon: await readFileAsDataUrl(file) });
+                      }}
+                    />
+                  </label>
                   <div style={{ flex: '1 1 180px', minWidth: 160 }}>
                     <Field label="Клиент">
                       <input
@@ -248,13 +277,31 @@ export function AppsAdmin() {
                     />
                   </Field>
                 </div>
-                <Field label="Официальный источник (GitHub / сайт)">
-                  <input
-                    className="input"
-                    value={app.source}
-                    onChange={(e) => patchApp(app.id, { source: e.target.value })}
-                  />
-                </Field>
+                <div className="grid-2">
+                  <Field label="Официальный источник (GitHub / сайт)">
+                    <input
+                      className="input"
+                      placeholder="https://…"
+                      value={app.source}
+                      onChange={(e) => patchApp(app.id, { source: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Прямая ссылка на скачивание">
+                    <input
+                      className="input"
+                      placeholder="ссылка на .apk / .exe / .zip"
+                      value={app.downloadUrl ?? ''}
+                      onChange={(e) => patchApp(app.id, { downloadUrl: e.target.value || null })}
+                    />
+                  </Field>
+                </div>
+                {app.icon ? (
+                  <div>
+                    <button className="btn btn-outline btn-sm" onClick={() => patchApp(app.id, { icon: null })}>
+                      Убрать иконку
+                    </button>
+                  </div>
+                ) : null}
                 <Field label="Инструкция">
                   <textarea
                     className="textarea"

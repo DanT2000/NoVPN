@@ -97,6 +97,10 @@ export interface AppClient {
   localFile: string | null;
   instruction: string;
   enabled: boolean;
+  /** Иконка клиента (data URL). */
+  icon?: string | null;
+  /** Прямая ссылка на скачивание (отдельно от офиц. сайта/стора). */
+  downloadUrl?: string | null;
 }
 
 export interface TelegramSettings {

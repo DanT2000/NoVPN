@@ -87,5 +87,7 @@ export function rowToApp(r: any): AppClient {
     localFile: r.local_file ?? null,
     instruction: r.instruction ?? '',
     enabled: b(r.enabled),
+    icon: r.icon ?? null,
+    downloadUrl: r.download_url ?? null,
   };
 }

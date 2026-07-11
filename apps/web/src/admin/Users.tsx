@@ -4,7 +4,7 @@ import { useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { User } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
-import { Chip, Pill, Panel, EmptyState, ScreenHeader, Loading } from '../components/ui';
+import { Chip, Pill, Panel, EmptyState, ScreenHeader, Loading, Toggle } from '../components/ui';
 import { statusOf, userFilterKey, countActiveDevices } from '../lib/status';
 import { gb, dateShort, plural } from '../lib/format';
 
@@ -33,9 +33,10 @@ function rowProps(onClick: () => void) {
 }
 
 export function Users() {
-  const { data, loading, loadError, isMobile, goAdmin } = useApp();
+  const { data, loading, loadError, isMobile, goAdmin, setUserActive, showToast } = useApp();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
+  const [busy, setBusy] = useState<string | null>(null);
 
   if (loadError) return <div className="notice notice-red">{loadError}</div>;
   if (loading || !data) return <Loading text="Загружаем пользователей…" />;
@@ -121,6 +122,27 @@ export function Users() {
                   <div className="row" style={{ gap: 16, flex: 'none' }}>
                     {isMobile ? null : <span className="small mono muted">{metrics(u)}</span>}
                     <Pill s={statusOf(u)} size="sm" />
+                    <span
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      title={u.isActive ? 'Активен — нажмите, чтобы отключить' : 'Отключён — нажмите, чтобы включить'}
+                      style={{ display: 'inline-flex' }}
+                    >
+                      <Toggle
+                        on={u.isActive}
+                        ariaLabel={u.isActive ? 'Отключить пользователя' : 'Включить пользователя'}
+                        onChange={async (v) => {
+                          if (busy) return;
+                          setBusy(u.id);
+                          try {
+                            await setUserActive(u.id, v);
+                            showToast(v ? 'Включён' : 'Отключён — устройства отозваны');
+                          } finally {
+                            setBusy(null);
+                          }
+                        }}
+                      />
+                    </span>
                   </div>
                 </div>
               );

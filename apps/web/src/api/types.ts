@@ -44,6 +44,7 @@ export type UpdateUserPatch = Partial<
     | 'allowedServers'
     | 'defaultServerId'
     | 'allowedProtocols'
+    | 'expiresAt'
   >
 >;
 
@@ -56,6 +57,24 @@ export interface AddServerInput {
   vpnHost?: string;
   components: Array<'xray' | 'amneziawg' | 'http' | 'socks5'>;
   country?: string | null;
+}
+
+export interface EditServerInput {
+  name?: string;
+  country?: string | null;
+  vpnHost?: string;
+  sshHost?: string;
+  sshPort?: number;
+  sshUser?: string;
+  authMethod?: 'key' | 'password';
+  secret?: string;
+  components?: Array<'xray' | 'amneziawg' | 'http' | 'socks5'>;
+  serverKeys?: {
+    xrayRealityPubKey?: string;
+    xrayShortId?: string;
+    xraySni?: string;
+    awgServerPubKey?: string;
+  };
 }
 
 export interface SaveTelegramInput {
@@ -100,6 +119,7 @@ export interface ApiClient {
   // ── admin: servers ──
   testServerConnection(input: AddServerInput): Promise<TestServerConnectionResult>;
   addServer(input: AddServerInput): Promise<Server>;
+  editServer(id: string, input: EditServerInput): Promise<Server>;
   setServerDefault(id: string): Promise<Server[]>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
   deleteServer(id: string): Promise<Ok>;

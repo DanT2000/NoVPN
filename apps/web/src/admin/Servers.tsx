@@ -1,11 +1,102 @@
-// A6 — Серверы. Список серверов с метриками и управлением выдачей.
+// A6 — Серверы. Список серверов с метриками, редактированием и управлением выдачей.
 
 import type React from 'react';
+import { useState } from 'react';
+import type { Server } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
-import { Dot, EmptyState, ScreenHeader, Toggle } from '../components/ui';
+import { Chip, Dot, EmptyState, Field, ScreenHeader, Toggle } from '../components/ui';
 import { serverAgentView, serverEndpointView } from '../lib/status';
 import { gb, plural, rel } from '../lib/format';
+
+type Proto = 'xray' | 'amneziawg' | 'http' | 'socks5';
+const PROTO_OPTS: Proto[] = ['xray', 'amneziawg', 'http', 'socks5'];
+
+function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
+  const { editServer, showToast } = useApp();
+  const [name, setName] = useState(server.name);
+  const [country, setCountry] = useState(server.country ?? '');
+  const [vpnHost, setVpnHost] = useState(server.host);
+  const [sshPort, setSshPort] = useState('22');
+  const [sshUser, setSshUser] = useState('root');
+  const [secret, setSecret] = useState('');
+  const [protocols, setProtocols] = useState<Proto[]>(server.protocols as Proto[]);
+  const [xPub, setXPub] = useState('');
+  const [xSid, setXSid] = useState('');
+  const [xSni, setXSni] = useState('');
+  const [awgPub, setAwgPub] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const toggle = (p: Proto) => setProtocols((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+
+  async function save() {
+    setSaving(true);
+    try {
+      const serverKeys =
+        xPub || xSid || xSni || awgPub
+          ? { xrayRealityPubKey: xPub || undefined, xrayShortId: xSid || undefined, xraySni: xSni || undefined, awgServerPubKey: awgPub || undefined }
+          : undefined;
+      await editServer(server.id, {
+        name: name.trim() || server.name,
+        country: country.trim() || null,
+        vpnHost: vpnHost.trim() || server.host,
+        sshPort: parseInt(sshPort, 10) || 22,
+        sshUser: sshUser.trim() || 'root',
+        authMethod: 'password',
+        secret: secret.trim() || undefined,
+        components: protocols,
+        serverKeys,
+      });
+      showToast('Сервер изменён');
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="stack" style={{ gap: 12, borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+      <div className="grid-2">
+        <Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="Страна"><input className="input" value={country} onChange={(e) => setCountry(e.target.value)} placeholder="Финляндия" /></Field>
+        <Field label="Домен или IP (VPN-endpoint)"><input className="input mono" value={vpnHost} onChange={(e) => setVpnHost(e.target.value)} /></Field>
+        <Field label="SSH-порт"><input className="input" inputMode="numeric" value={sshPort} onChange={(e) => setSshPort(e.target.value.replace(/\D/g, ''))} /></Field>
+        <Field label="SSH-пользователь"><input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} /></Field>
+        <Field label="Новый SSH-пароль (пусто = не менять)"><input className="input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••" /></Field>
+      </div>
+
+      <div className="field">
+        <span className="field-label">Протоколы (установленные на сервере)</span>
+        <div className="chip-row">
+          {PROTO_OPTS.map((p) => (
+            <Chip key={p} label={PROTOCOL_LABELS[p]} size="sm" active={protocols.includes(p)} onClick={() => toggle(p)} />
+          ))}
+        </div>
+        <span className="small muted">
+          Отмечайте только реально установленные протоколы — по ним выдаются конфиги. Для выпуска нужен серверный
+          ключ протокола (ниже).
+        </span>
+      </div>
+
+      <details>
+        <summary className="small muted" style={{ cursor: 'pointer' }}>Серверные ключи (заполните при добавлении протокола; пусто = не менять)</summary>
+        <div className="grid-2" style={{ marginTop: 10 }}>
+          <Field label="Xray Reality pubkey"><input className="input mono" value={xPub} onChange={(e) => setXPub(e.target.value)} placeholder="pbk…" /></Field>
+          <Field label="Xray shortId"><input className="input mono" value={xSid} onChange={(e) => setXSid(e.target.value)} placeholder="sid…" /></Field>
+          <Field label="Xray SNI"><input className="input mono" value={xSni} onChange={(e) => setXSni(e.target.value)} placeholder="www.microsoft.com" /></Field>
+          <Field label="AmneziaWG server pubkey"><input className="input mono" value={awgPub} onChange={(e) => setAwgPub(e.target.value)} placeholder="awg pubkey…" /></Field>
+        </div>
+      </details>
+
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>
+          {saving ? 'Сохраняем…' : 'Сохранить сервер'}
+        </button>
+        <button className="btn btn-outline btn-sm" onClick={onClose}>Отмена</button>
+      </div>
+    </div>
+  );
+}
 
 function Metric({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
   return (
@@ -30,6 +121,7 @@ function Metric({ label, value, color }: { label: string; value: React.ReactNode
 
 export function Servers() {
   const { data, isMobile, goAdmin, setServerAutoIssue, setServerDefault, deleteServer, showToast, showConfirm } = useApp();
+  const [editing, setEditing] = useState<string | null>(null);
   if (!data) return null;
 
   const servers = data.servers;
@@ -110,6 +202,12 @@ export function Servers() {
                     <span className="small">Автоматическая выдача</span>
                   </div>
                   <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => setEditing((cur) => (cur === s.id ? null : s.id))}
+                    >
+                      {editing === s.id ? 'Скрыть' : 'Изменить'}
+                    </button>
                     {!s.isDefault ? (
                       <button
                         className="btn btn-outline btn-sm"
@@ -140,6 +238,8 @@ export function Servers() {
                     </button>
                   </div>
                 </div>
+
+                {editing === s.id ? <ServerEditForm server={s} onClose={() => setEditing(null)} /> : null}
               </div>
             );
           })}

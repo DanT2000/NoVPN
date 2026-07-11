@@ -12,9 +12,15 @@ export function plural(n: number, one: string, few: string, many: string): strin
   return many;
 }
 
-/** «12,5 ГБ» или «∞» для null. */
+/** «12,5 ГБ» / «45 МБ» / «∞». До 0.1 ГБ (~100 МБ) показываем в МБ, дальше в ГБ. */
 export function gb(n: number | null | undefined): string {
   if (n == null) return '∞';
+  if (n <= 0) return '0 МБ';
+  if (n < 0.1) {
+    const mb = n * 1024;
+    const v = mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10;
+    return `${v.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МБ`;
+  }
   return `${n.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ГБ`;
 }
 
