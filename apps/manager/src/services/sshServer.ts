@@ -128,6 +128,21 @@ PersistentKeepalive = 25`;
   return { conf, publicKey: cpub, privateKey: cpriv, presharedKey: psk, clientIp: cip };
 }
 
+// Сбор статистики AmneziaWG: rx/tx и время последнего рукопожатия по каждому пиру.
+export async function sshSyncAwg(
+  serverId: string,
+): Promise<Array<{ publicKey: string; handshake: number; rx: number; tx: number }>> {
+  const out = await runScript(creds(serverId), `awg show awg0 dump | awk 'NR>1{print $1" "$5" "$6" "$7}'`);
+  const peers: Array<{ publicKey: string; handshake: number; rx: number; tx: number }> = [];
+  for (const line of out.split('\n')) {
+    const p = line.trim().split(/\s+/);
+    if (p.length >= 4 && p[0] && p[0].length > 20) {
+      peers.push({ publicKey: p[0], handshake: Number(p[1]) || 0, rx: Number(p[2]) || 0, tx: Number(p[3]) || 0 });
+    }
+  }
+  return peers;
+}
+
 export async function sshRevokeXray(server: Server, uuid: string): Promise<void> {
   const script = `set -e
 python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));c['inbounds'][0]['settings']['clients']=[x for x in c['inbounds'][0]['settings']['clients'] if x.get('id')!='${uuid}'];json.dump(c,open(p,'w'),indent=2)"

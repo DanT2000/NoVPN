@@ -163,14 +163,19 @@ export function UserCreate() {
         <Field label="Комментарий">
           <input className="input" placeholder="Виден только вам" value={comment} onChange={(e) => setComment(e.target.value)} />
         </Field>
-        <Field label="Категория">
-          <select className="select" value={category} onChange={(e) => changeCategory(e.target.value)}>
+        <Field label="Категория" hint="можно выбрать из списка или вписать свою (напр. «Церковь»)">
+          <input
+            className="input"
+            list="user-categories"
+            placeholder="Общие"
+            value={category}
+            onChange={(e) => changeCategory(e.target.value)}
+          />
+          <datalist id="user-categories">
             {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
+              <option key={c} value={c} />
             ))}
-          </select>
+          </datalist>
         </Field>
         <Field label="Теги">
           <input className="input" placeholder="vip, промо" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} />

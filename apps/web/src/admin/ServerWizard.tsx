@@ -7,9 +7,10 @@ import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import type { AddServerInput } from '../api/types';
 import { Chip, Field, ProgressBar, ScreenHeader } from '../components/ui';
+import { COUNTRIES, countryValue } from '../lib/countries';
 
 type AuthMethod = 'key' | 'password';
-type Component = 'xray' | 'amneziawg' | 'http' | 'socks5';
+type Component = 'xray' | 'amneziawg' | 'http' | 'https' | 'socks5';
 
 const isIpLike = (h: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(h.trim());
 function isValidHost(h: string): boolean {
@@ -75,6 +76,7 @@ export function ServerWizard() {
 
   // Шаг 1 — данные
   const [name, setName] = useState('');
+  const [country, setCountry] = useState('');
   const [host, setHost] = useState('');
   const [sshPort, setSshPort] = useState('22');
   const [sshUser, setSshUser] = useState('root');
@@ -113,7 +115,7 @@ export function ServerWizard() {
     authMethod,
     vpnHost: host.trim(), // домен/IP один раз — он же и публичный VPN-endpoint
     components: components(),
-    country: null,
+    country: country || null,
   });
 
   // Симуляция установки на шаге 4.
@@ -187,6 +189,16 @@ export function ServerWizard() {
         <div className="stack" style={{ maxWidth: 560 }}>
           <Field label="Название">
             <input className="input" placeholder="Финляндия" value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="Страна (флаг)">
+            <select className="select" value={country} onChange={(e) => setCountry(e.target.value)}>
+              <option value="">— не указана —</option>
+              {COUNTRIES.map((c) => (
+                <option key={c.code} value={countryValue(c)}>
+                  {c.flag} {c.name}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="Домен или IP">
             <input

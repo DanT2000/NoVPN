@@ -32,10 +32,13 @@ function rowProps(onClick: () => void) {
   };
 }
 
+const CATEGORIES = ['Общие', 'Семья', 'Друзья', 'Работа', 'Админ'] as const;
+
 export function Users() {
   const { data, loading, loadError, isMobile, goAdmin, setUserActive, showToast } = useApp();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
+  const [catFilter, setCatFilter] = useState<string>('all');
   const [busy, setBusy] = useState<string | null>(null);
 
   if (loadError) return <div className="notice notice-red">{loadError}</div>;
@@ -50,8 +53,12 @@ export function Users() {
       if (!hay.includes(q)) return false;
     }
     if (filter !== 'all' && userFilterKey(u) !== filter) return false;
+    if (catFilter !== 'all' && (u.category ?? '') !== catFilter) return false;
     return true;
   });
+
+  // Категории: базовые + любые встречающиеся у пользователей (кастомные).
+  const catList = Array.from(new Set([...CATEGORIES, ...users.map((u) => u.category ?? '').filter(Boolean)]));
 
   const total = users.length;
   const title = `${total} ${plural(total, 'пользователь', 'пользователя', 'пользователей')}`;
@@ -96,6 +103,14 @@ export function Users() {
           ))}
         </div>
 
+        <div className="chip-row">
+          <span className="small muted" style={{ alignSelf: 'center', marginRight: 4 }}>Категория:</span>
+          <Chip label="Все" size="sm" active={catFilter === 'all'} onClick={() => setCatFilter('all')} />
+          {catList.map((c) => (
+            <Chip key={c} label={c} size="sm" active={catFilter === c} onClick={() => setCatFilter(c)} />
+          ))}
+        </div>
+
         {filtered.length === 0 ? (
           <EmptyState title="Никого не нашлось" text="Измените запрос или сбросьте фильтры." />
         ) : (
@@ -126,7 +141,7 @@ export function Users() {
                       onClick={(e) => e.stopPropagation()}
                       onKeyDown={(e) => e.stopPropagation()}
                       title={u.isActive ? 'Активен — нажмите, чтобы отключить' : 'Отключён — нажмите, чтобы включить'}
-                      style={{ display: 'inline-flex' }}
+                      style={{ display: 'inline-flex', alignItems: 'center', padding: '10px 12px', margin: '-10px -4px -10px 0' }}
                     >
                       <Toggle
                         on={u.isActive}

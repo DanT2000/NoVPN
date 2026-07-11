@@ -109,6 +109,9 @@ export interface TelegramSettings {
   tokenMasked: string | null;
   mode: TelegramMode;
   proxyOn: boolean;
+  /** Источник прокси: взять адрес выбранного сервера или указать вручную. */
+  proxySource?: 'server' | 'manual';
+  proxyServerId?: string | null;
   proxyType: ProxyType;
   proxyHost: string;
   proxyPort: string;

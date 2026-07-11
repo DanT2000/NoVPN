@@ -417,14 +417,19 @@ function UserCardInner({ user }: { user: User }) {
           <Field label="Имя">
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="Категория">
-            <select className="select" value={category} onChange={(e) => changeCategory(e.target.value)}>
-              {(CATEGORIES.includes(category as (typeof CATEGORIES)[number]) ? CATEGORIES : [category, ...CATEGORIES]).map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
+          <Field label="Категория" hint="из списка или своя (напр. «Церковь»)">
+            <input
+              className="input"
+              list="user-categories-edit"
+              placeholder="Общие"
+              value={category}
+              onChange={(e) => changeCategory(e.target.value)}
+            />
+            <datalist id="user-categories-edit">
+              {Array.from(new Set([...CATEGORIES, ...(data?.users.map((u) => u.category ?? '').filter(Boolean) ?? [])])).map((c) => (
+                <option key={c} value={c} />
               ))}
-            </select>
+            </datalist>
           </Field>
           <Field label="Комментарий">
             <input className="input" placeholder="Виден только вам" value={comment} onChange={(e) => setComment(e.target.value)} />

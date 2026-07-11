@@ -1,8 +1,8 @@
 // Перечисления и словари статусов NoVPN.
 // Значения — стабильные машинные коды; человекочитаемые подписи (RU) — в labels.ts.
 
-/** Протоколы. xray/amneziawg — для пользователей; http/socks5 — только для админа. */
-export const PROTOCOLS = ['xray', 'amneziawg', 'http', 'socks5'] as const;
+/** Протоколы. xray/amneziawg — для пользователей; http/https/socks5 — прокси (админ). */
+export const PROTOCOLS = ['xray', 'amneziawg', 'http', 'https', 'socks5'] as const;
 export type Protocol = (typeof PROTOCOLS)[number];
 
 /** Протоколы, доступные обычным пользователям. */
@@ -68,7 +68,7 @@ export type UserAccessState = (typeof USER_ACCESS_STATES)[number];
 export type TelegramMode = 'polling' | 'webhook';
 
 /** Тип прокси для Telegram или админских proxy-доступов. */
-export type ProxyType = 'http' | 'socks5';
+export type ProxyType = 'http' | 'https' | 'socks5';
 
 /** Состояние задания агента. */
 export const JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'canceled'] as const;

@@ -34,7 +34,8 @@ export function UserCreated() {
 function UserCreatedInner({ user }: { user: User }) {
   const { data, isMobile, goAdmin, showToast } = useApp();
   const template = data?.settings.messageTemplate ?? '';
-  const domain = data?.settings.domain ?? '';
+  // Если домен в настройках не задан — берём текущий адрес сайта, чтобы {url} не был пустым.
+  const domain = (data?.settings.domain || (typeof window !== 'undefined' ? window.location.origin : '')) ?? '';
   const [message, setMessage] = useState(() => buildMessage(template, user, domain));
   if (!data) return null;
 

@@ -15,6 +15,8 @@ export function Telegram() {
   const [token, setToken] = useState('');
   const [mode, setMode] = useState<TelegramMode>(tg?.mode ?? 'polling');
   const [proxyOn, setProxyOn] = useState(tg?.proxyOn ?? false);
+  const [proxySource, setProxySource] = useState<'server' | 'manual'>(tg?.proxySource ?? 'manual');
+  const [proxyServerId, setProxyServerId] = useState<string | null>(tg?.proxyServerId ?? null);
   const [proxyType, setProxyType] = useState<ProxyType>(tg?.proxyType ?? 'http');
   const [proxyHost, setProxyHost] = useState(tg?.proxyHost ?? '');
   const [proxyPort, setProxyPort] = useState(tg?.proxyPort ?? '');
@@ -42,6 +44,8 @@ export function Telegram() {
         token: token.trim() ? token.trim() : undefined,
         mode,
         proxyOn,
+        proxySource,
+        proxyServerId: proxySource === 'server' ? proxyServerId : null,
         proxyType,
         proxyHost,
         proxyPort,
@@ -108,7 +112,7 @@ export function Telegram() {
               Сохранить
             </button>
             <button className="btn btn-secondary" disabled={testing} onClick={() => void runTest()}>
-              {testing ? 'Проверяем…' : 'Проверить соединение'}
+              {testing ? 'Проверяем…' : token.trim() ? 'Проверить введённый токен' : 'Проверить сохранённого бота'}
             </button>
           </div>
 
@@ -129,28 +133,66 @@ export function Telegram() {
               <Field label="Тип">
                 <div className="chip-row">
                   <Chip label="HTTP" active={proxyType === 'http'} onClick={() => setProxyType('http')} />
+                  <Chip label="HTTPS" active={proxyType === 'https'} onClick={() => setProxyType('https')} />
                   <Chip label="SOCKS5" active={proxyType === 'socks5'} onClick={() => setProxyType('socks5')} />
                 </div>
+                {proxyType === 'socks5' ? (
+                  <div className="notice notice-amber small" style={{ marginTop: 8 }}>
+                    SOCKS5 в России часто нестабилен и блокируется — для Telegram надёжнее HTTPS.
+                  </div>
+                ) : proxyType === 'https' ? (
+                  <span className="small muted">HTTPS — трафик к прокси шифруется, предпочтительный вариант.</span>
+                ) : null}
               </Field>
-              <div className="grid-2">
-                <Field label="host">
-                  <input className="input mono" value={proxyHost} onChange={(e) => setProxyHost(e.target.value)} />
+
+              <Field label="Источник">
+                <div className="chip-row">
+                  <Chip label="Выбрать сервер" active={proxySource === 'server'} onClick={() => setProxySource('server')} />
+                  <Chip label="Указать вручную" active={proxySource === 'manual'} onClick={() => setProxySource('manual')} />
+                </div>
+              </Field>
+
+              {proxySource === 'server' ? (
+                <Field label="Сервер-прокси">
+                  {data.servers.length === 0 ? (
+                    <span className="small muted">Серверов пока нет — добавьте сервер или укажите прокси вручную.</span>
+                  ) : (
+                    <select
+                      className="select"
+                      value={proxyServerId ?? ''}
+                      onChange={(e) => setProxyServerId(e.target.value || null)}
+                    >
+                      <option value="">— выберите сервер —</option>
+                      {data.servers.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}{s.country ? ` ${s.country}` : ''} · {s.host}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <span className="small muted">Адрес прокси возьмётся с этого сервера (порт по типу прокси).</span>
                 </Field>
-                <Field label="port">
-                  <input className="input mono" value={proxyPort} onChange={(e) => setProxyPort(e.target.value)} />
-                </Field>
-                <Field label="login (необязательно)">
-                  <input className="input" value={proxyLogin} onChange={(e) => setProxyLogin(e.target.value)} />
-                </Field>
-                <Field label="password">
-                  <input
-                    className="input"
-                    type="password"
-                    value={proxyPass}
-                    onChange={(e) => setProxyPass(e.target.value)}
-                  />
-                </Field>
-              </div>
+              ) : (
+                <div className="grid-2">
+                  <Field label="host">
+                    <input className="input mono" value={proxyHost} onChange={(e) => setProxyHost(e.target.value)} />
+                  </Field>
+                  <Field label="port">
+                    <input className="input mono" value={proxyPort} onChange={(e) => setProxyPort(e.target.value)} />
+                  </Field>
+                  <Field label="login (необязательно)">
+                    <input className="input" value={proxyLogin} onChange={(e) => setProxyLogin(e.target.value)} />
+                  </Field>
+                  <Field label="password">
+                    <input
+                      className="input"
+                      type="password"
+                      value={proxyPass}
+                      onChange={(e) => setProxyPass(e.target.value)}
+                    />
+                  </Field>
+                </div>
+              )}
             </>
           ) : (
             <span className="small muted">Прокси выключен.</span>

@@ -8,9 +8,10 @@ import { useApp } from '../store/AppStore';
 import { Chip, Dot, EmptyState, Field, ScreenHeader, Toggle } from '../components/ui';
 import { serverAgentView, serverEndpointView } from '../lib/status';
 import { gb, plural, rel } from '../lib/format';
+import { COUNTRIES, countryValue } from '../lib/countries';
 
-type Proto = 'xray' | 'amneziawg' | 'http' | 'socks5';
-const PROTO_OPTS: Proto[] = ['xray', 'amneziawg', 'http', 'socks5'];
+type Proto = 'xray' | 'amneziawg' | 'http' | 'https' | 'socks5';
+const PROTO_OPTS: Proto[] = ['xray', 'amneziawg', 'http', 'https', 'socks5'];
 
 function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
   const { editServer, showToast } = useApp();
@@ -58,7 +59,19 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
     <div className="stack" style={{ gap: 12, borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
       <div className="grid-2">
         <Field label="Название"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
-        <Field label="Страна"><input className="input" value={country} onChange={(e) => setCountry(e.target.value)} placeholder="Финляндия" /></Field>
+        <Field label="Страна (флаг)">
+          <select className="select" value={country} onChange={(e) => setCountry(e.target.value)}>
+            <option value="">— не указана —</option>
+            {COUNTRIES.map((c) => (
+              <option key={c.code} value={countryValue(c)}>
+                {c.flag} {c.name}
+              </option>
+            ))}
+            {country && !COUNTRIES.some((c) => countryValue(c) === country) ? (
+              <option value={country}>{country}</option>
+            ) : null}
+          </select>
+        </Field>
         <Field label="Домен или IP (VPN-endpoint)"><input className="input mono" value={vpnHost} onChange={(e) => setVpnHost(e.target.value)} /></Field>
         <Field label="SSH-порт"><input className="input" inputMode="numeric" value={sshPort} onChange={(e) => setSshPort(e.target.value.replace(/\D/g, ''))} /></Field>
         <Field label="SSH-пользователь"><input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} /></Field>

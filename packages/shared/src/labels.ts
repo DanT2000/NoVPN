@@ -13,6 +13,7 @@ export const PROTOCOL_LABELS: Record<Protocol, string> = {
   xray: 'Xray',
   amneziawg: 'AmneziaWG',
   http: 'HTTP-прокси',
+  https: 'HTTPS-прокси',
   socks5: 'SOCKS5',
 };
 

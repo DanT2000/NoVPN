@@ -27,7 +27,7 @@ export interface CreateUserInput {
   resetPolicy: 'never' | 'monthly';
   allowedServers: string[];
   defaultServerId: string | null;
-  allowedProtocols: Array<'xray' | 'amneziawg' | 'http' | 'socks5'>;
+  allowedProtocols: Array<'xray' | 'amneziawg' | 'http' | 'https' | 'socks5'>;
   code: string;
 }
 
@@ -55,7 +55,7 @@ export interface AddServerInput {
   sshUser: string;
   authMethod: 'key' | 'password';
   vpnHost?: string;
-  components: Array<'xray' | 'amneziawg' | 'http' | 'socks5'>;
+  components: Array<'xray' | 'amneziawg' | 'http' | 'https' | 'socks5'>;
   country?: string | null;
 }
 
@@ -68,7 +68,7 @@ export interface EditServerInput {
   sshUser?: string;
   authMethod?: 'key' | 'password';
   secret?: string;
-  components?: Array<'xray' | 'amneziawg' | 'http' | 'socks5'>;
+  components?: Array<'xray' | 'amneziawg' | 'http' | 'https' | 'socks5'>;
   serverKeys?: {
     xrayRealityPubKey?: string;
     xrayShortId?: string;
@@ -82,7 +82,9 @@ export interface SaveTelegramInput {
   token?: string; // если задан — заменяет; иначе не трогаем
   mode: 'polling' | 'webhook';
   proxyOn: boolean;
-  proxyType: 'http' | 'socks5';
+  proxySource?: 'server' | 'manual';
+  proxyServerId?: string | null;
+  proxyType: 'http' | 'https' | 'socks5';
   proxyHost: string;
   proxyPort: string;
   proxyLogin: string;

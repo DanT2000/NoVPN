@@ -14,7 +14,7 @@ import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg } from './services/sshServer.js';
 import { saveServerKeys } from './services/keyvault.js';
-import { encryptSecret, maskTail, randomToken } from './lib/crypto.js';
+import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 
 // Выпуск конфига: по SSH (реальный сервер) или через mock-агент (dev).
 async function createXrayCfg(server: import('@novpn/shared').Server, name: string) {
@@ -331,7 +331,7 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   // Новый SSH-пароль задаём только если пришёл непустой secret (иначе не трогаем).
   if (b.secret && b.authMethod !== 'key') fields.ssh_pass_enc = encryptSecret(String(b.secret));
   if (Array.isArray(b.components)) {
-    const protocols = b.components.filter((p: string) => p === 'xray' || p === 'amneziawg' || p === 'http' || p === 'socks5');
+    const protocols = b.components.filter((p: string) => p === 'xray' || p === 'amneziawg' || p === 'http' || p === 'https' || p === 'socks5');
     fields.protocols = JSON.stringify(protocols);
   }
   const updated = repo.updateServerFields(s.id, fields) ?? s;
@@ -373,7 +373,9 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
     enabled: !!b.enabled,
     mode: b.mode === 'webhook' ? 'webhook' : 'polling',
     proxyOn: !!b.proxyOn,
-    proxyType: b.proxyType === 'socks5' ? 'socks5' : 'http',
+    proxySource: b.proxySource === 'server' ? 'server' : 'manual',
+    proxyServerId: b.proxyServerId ?? null,
+    proxyType: b.proxyType === 'socks5' ? 'socks5' : b.proxyType === 'https' ? 'https' : 'http',
     proxyHost: String(b.proxyHost ?? ''),
     proxyPort: String(b.proxyPort ?? ''),
     proxyLogin: String(b.proxyLogin ?? ''),
@@ -397,7 +399,18 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
 });
 
 router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
-  const token = String(req.body?.token ?? '');
+  // Если новый токен не введён — проверяем СОХРАНЁННЫЙ (расшифровываем).
+  let token = String(req.body?.token ?? '').trim();
+  if (!token) {
+    const enc = repo.getTelegramTokenEnc();
+    if (enc) {
+      try {
+        token = decryptSecret(enc);
+      } catch {
+        /* игнор — упадёт на валидации ниже */
+      }
+    }
+  }
   if (!/^\d+:[A-Za-z0-9_-]{30,}$/.test(token))
     return res.json({ ok: false, message: 'Токен не задан или неверного формата (ожидается 123456:AA...).' });
   try {

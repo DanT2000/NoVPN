@@ -102,6 +102,25 @@ export function getDeviceRow(id: string): { uuid: string | null; public_key: str
 export function countActiveDevices(userId: string): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_active = 1').get(userId) as { n: number }).n;
 }
+/** Активные устройства сервера с ключами — для синхронизации трафика. */
+export function listServerDeviceKeys(
+  serverId: string,
+): Array<{ id: string; userId: string | null; publicKey: string | null; uuid: string | null; protocol: string }> {
+  return (
+    db.prepare('SELECT id, user_id, public_key, uuid, protocol FROM devices WHERE server_id = ? AND is_active = 1').all(serverId) as any[]
+  ).map((r) => ({ id: r.id, userId: r.user_id ?? null, publicKey: r.public_key ?? null, uuid: r.uuid ?? null, protocol: r.protocol }));
+}
+/** Пересчёт расхода трафика и последней активности пользователя из его устройств. */
+export function recomputeUserUsage(userId: string): void {
+  const row = db
+    .prepare('SELECT COALESCE(SUM(traffic_gb),0) AS tg, MAX(last_seen_at) AS ls FROM devices WHERE user_id = ? AND is_active = 1')
+    .get(userId) as { tg: number; ls: string | null };
+  db.prepare('UPDATE users SET traffic_used_gb = @tg, last_activity_at = COALESCE(@ls, last_activity_at) WHERE id = @id').run({
+    tg: row.tg ?? 0,
+    ls: row.ls ?? null,
+    id: userId,
+  });
+}
 export function insertDevice(d: {
   userId: string | null; name: string; serverId: string; protocol: string;
   uuid?: string | null; publicKey?: string | null; privateKeyEnc?: string | null; presharedKeyEnc?: string | null;
@@ -264,6 +283,18 @@ export function saveSettings(s: AppSettings): AppSettings {
 export function getTelegram(): TelegramSettings {
   return getSetting<TelegramSettings>('telegram', {} as TelegramSettings);
 }
+/** Безопасная версия — без зашифрованных секретов (для bootstrap/ответов наружу). */
+export function getTelegramSafe(): TelegramSettings {
+  const { tokenEnc: _t, proxyPassEnc: _p, ...safe } = getTelegram() as TelegramSettings & {
+    tokenEnc?: string;
+    proxyPassEnc?: string;
+  };
+  return safe;
+}
+/** Зашифрованный токен сохранённого бота (для проверки соединения к текущему). */
+export function getTelegramTokenEnc(): string | null {
+  return (getTelegram() as { tokenEnc?: string }).tokenEnc ?? null;
+}
 export function saveTelegramRaw(t: TelegramSettings): TelegramSettings {
   setSetting('telegram', t);
   return t;
@@ -299,7 +330,7 @@ export function buildBootstrap(): BootstrapData {
     devices: listDevices(),
     servers: listServers(),
     apps: listApps(),
-    telegram: getTelegram(),
+    telegram: getTelegramSafe(),
     settings: getSettings(),
     adminLog: listLog(),
     jobErrors: listJobErrors(),
