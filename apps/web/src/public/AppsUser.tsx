@@ -1,17 +1,11 @@
 import { useState } from 'react';
-import type { AppClient } from '@novpn/shared';
+import type { AppClient, AppPlatform } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Chip, EmptyState } from '../components/ui';
 import { isDataFile, dataFileName, downloadUrl, openUrl } from '../lib/clipboard';
 
-function normalizeUrl(u: string): string {
-  const t = u.trim();
-  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
-}
-
-const PLATFORMS = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
-type Platform = (typeof PLATFORMS)[number];
-function detectPlatform(): Platform {
+const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
+function detectPlatform(): AppPlatform {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (/android/i.test(ua)) return 'Android';
   if (/iphone|ipad|ipod/i.test(ua)) return 'iOS';
@@ -25,12 +19,21 @@ const COMPAT_LABEL: Record<AppClient['compat'][number], string> = {
   amneziawg: 'AmneziaWG',
 };
 
+function normalizeUrl(u: string): string {
+  const t = u.trim();
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
+
 export function AppsUser() {
-  const { data, publicUser, goPublic, showToast } = useApp();
-  const [platform, setPlatform] = useState<Platform>(detectPlatform());
+  const { data, publicUser, goPublic } = useApp();
+  const [platform, setPlatform] = useState<AppPlatform>(detectPlatform());
   if (!data) return null;
 
-  const apps = data.apps.filter((a) => a.enabled && a.platform === platform);
+  // Клиенты, у которых есть запись под выбранную платформу.
+  const apps = data.apps
+    .filter((a) => a.enabled)
+    .map((a) => ({ app: a, entry: a.platforms.find((p) => p.platform === platform) }))
+    .filter((x): x is { app: AppClient; entry: NonNullable<typeof x.entry> } => Boolean(x.entry));
 
   return (
     <div className="stack" style={{ gap: 14, paddingTop: 12 }}>
@@ -48,12 +51,12 @@ export function AppsUser() {
       {apps.length === 0 ? (
         <EmptyState title="Нет приложений для этой платформы" text="Выберите другую платформу выше." />
       ) : (
-        apps.map((a) => (
+        apps.map(({ app: a, entry }) => (
           <div key={a.id} className="card">
             <div className="row" style={{ gap: 12, marginBottom: 8 }}>
               <div
                 style={{
-                  width: 38, height: 38, borderRadius: 'var(--r-ctrl)', background: 'var(--surface-btn-2)', overflow: 'hidden',
+                  width: 40, height: 40, borderRadius: 'var(--r-ctrl)', background: 'var(--surface-btn-2)', overflow: 'hidden',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800,
                   color: 'var(--accent-light)', flex: 'none',
                 }}
@@ -66,50 +69,34 @@ export function AppsUser() {
               </div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 700 }}>{a.client}</div>
-                <div className="small muted">
-                  {a.platform} · v{a.version}
+                <div className="chip-row" style={{ marginTop: 2 }}>
+                  {a.compat.map((c) => (
+                    <span key={c} className="badge">{COMPAT_LABEL[c]}</span>
+                  ))}
                 </div>
               </div>
             </div>
 
-            <div className="chip-row" style={{ marginBottom: 8 }}>
-              {a.compat.map((c) => (
-                <span key={c} className="badge">
-                  {COMPAT_LABEL[c]}
-                </span>
-              ))}
-            </div>
-
-            <p className="small body" style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
-              {a.instruction}
-            </p>
+            {a.instruction ? (
+              <p className="small body" style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
+                {a.instruction}
+              </p>
+            ) : null}
 
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              {entry.url ? (
+                <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
+                  Установить / скачать
+                </button>
+              ) : null}
+              {entry.file ? (
+                <button className="btn btn-secondary btn-sm" onClick={() => downloadUrl(isDataFile(entry.file) ? dataFileName(entry.file) : 'file', entry.file!)}>
+                  Скачать файл
+                </button>
+              ) : null}
               {a.source ? (
                 <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(a.source))}>
                   Официальный сайт
-                </button>
-              ) : null}
-              {a.store && a.source ? (
-                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(a.source))}>
-                  {a.store}
-                </button>
-              ) : null}
-              {a.downloadUrl ? (
-                <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(a.downloadUrl!))}>
-                  Скачать
-                </button>
-              ) : null}
-              {a.localFile ? (
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() =>
-                    isDataFile(a.localFile)
-                      ? downloadUrl(dataFileName(a.localFile), a.localFile)
-                      : showToast(`Файл ${a.localFile} недоступен — загрузите его в админке`)
-                  }
-                >
-                  Скачать {dataFileName(a.localFile)}
                 </button>
               ) : null}
             </div>

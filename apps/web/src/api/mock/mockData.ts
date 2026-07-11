@@ -2,7 +2,6 @@
 // Используются ТОЛЬКО mock-адаптером; компоненты их не импортируют.
 
 import type {
-  AppClient,
   AppSettings,
   Device,
   JobError,
@@ -11,6 +10,7 @@ import type {
   TelegramSettings,
   User,
 } from '@novpn/shared';
+import { DEFAULT_APPS } from '@novpn/shared';
 
 const now = Date.now();
 const D = 86400000;
@@ -43,23 +43,7 @@ export const DEVICES: Device[] = [
   { id: 'd8', userId: null, name: 'Импортированный доступ', serverId: 's1', protocol: 'amneziawg', isActive: true, lastSeenAt: null, trafficGb: 0, createdAt: iso(now - 200 * D), osHint: null, source: 'unassigned', managementLevel: 'observed', monitoringAvailable: false },
 ];
 
-export const APPS: AppClient[] = [
-  { id: 'a1', platform: 'Android', client: 'v2rayNG', compat: ['xray'], source: 'https://github.com/2dust/v2rayNG', store: 'Google Play', version: '1.9.16', localFile: null, instruction: 'Установите → нажмите «+» → «Импорт из буфера» → вставьте ссылку → подключитесь.', enabled: true },
-  { id: 'a2', platform: 'Android', client: 'AmneziaVPN', compat: ['amnezia-app'], source: 'https://amnezia.org', store: 'Google Play', version: '4.8', localFile: null, instruction: 'Установите → «Подключение по ключу» → вставьте vpn:// ключ.', enabled: true },
-  { id: 'a3', platform: 'Android', client: 'AmneziaWG', compat: ['amneziawg'], source: 'https://github.com/amnezia-vpn/amneziawg-android', store: 'Google Play', version: '1.1', localFile: null, instruction: 'Установите → «+» → «Импорт из файла» или сканируйте QR конфига.', enabled: true },
-  { id: 'a4', platform: 'iOS', client: 'Happ', compat: ['xray'], source: 'https://happ.su', store: 'App Store', version: '1.14', localFile: null, instruction: 'Установите → «Добавить подписку/ссылку» → вставьте ссылку.', enabled: true },
-  { id: 'a5', platform: 'iOS', client: 'AmneziaVPN', compat: ['amnezia-app'], source: 'https://amnezia.org', store: 'App Store', version: '4.8', localFile: null, instruction: 'Установите → «Подключение по ключу» → вставьте vpn:// ключ.', enabled: true },
-  { id: 'a6', platform: 'iOS', client: 'AmneziaWG', compat: ['amneziawg'], source: 'https://apps.apple.com/app/amneziawg', store: 'App Store', version: '1.2', localFile: null, instruction: 'Установите → «+» → импортируйте .conf или QR.', enabled: true },
-  { id: 'a7', platform: 'Windows', client: 'v2rayN', compat: ['xray'], source: 'https://github.com/2dust/v2rayN', store: null, version: '6.60', localFile: 'v2rayN-6.60.zip', instruction: 'Распакуйте → «Серверы» → «Импорт из буфера» → вставьте ссылку.', enabled: true },
-  { id: 'a8', platform: 'Windows', client: 'AmneziaVPN', compat: ['amnezia-app', 'amneziawg'], source: 'https://amnezia.org', store: null, version: '4.8', localFile: null, instruction: 'Установите → добавьте ключ vpn:// или импортируйте .conf.', enabled: true },
-  { id: 'a9', platform: 'macOS', client: 'Happ', compat: ['xray'], source: 'https://happ.su', store: 'App Store', version: '1.14', localFile: null, instruction: 'Установите → «Добавить ссылку» → вставьте ссылку.', enabled: true },
-  { id: 'a10', platform: 'macOS', client: 'AmneziaVPN', compat: ['amnezia-app', 'amneziawg'], source: 'https://amnezia.org', store: null, version: '4.8', localFile: null, instruction: 'Установите → добавьте ключ vpn:// или импортируйте .conf.', enabled: true },
-  { id: 'a11', platform: 'Linux', client: 'NekoRay', compat: ['xray'], source: 'https://github.com/MatsuriDayo/nekoray', store: null, version: '4.0.1', localFile: null, instruction: 'Установите → «Программа» → «Добавить профиль из буфера».', enabled: true },
-  { id: 'a12', platform: 'Linux', client: 'AmneziaWG (CLI)', compat: ['amneziawg'], source: 'https://github.com/amnezia-vpn/amneziawg-linux-kernel-module', store: null, version: '—', localFile: null, instruction: 'Сохраните .conf в /etc/amnezia/amneziawg/ → awg-quick up awg0.', enabled: true },
-  { id: 'a13', platform: 'Windows', client: 'AmneziaWG', compat: ['amneziawg'], source: 'https://github.com/amnezia-vpn/amneziawg-windows-client', store: null, version: '1.0', localFile: 'amneziawg-windows.zip', instruction: 'Распакуйте → «Импорт туннеля из файла» → выберите .conf → активируйте.', enabled: true },
-  { id: 'a14', platform: 'macOS', client: 'AmneziaWG', compat: ['amneziawg'], source: 'https://apps.apple.com/app/amneziawg', store: 'App Store', version: '1.2', localFile: null, instruction: 'Установите → «+» → импортируйте .conf или сканируйте QR.', enabled: true },
-  { id: 'a15', platform: 'Linux', client: 'AmneziaVPN', compat: ['amnezia-app', 'amneziawg'], source: 'https://amnezia.org', store: null, version: '4.8', localFile: null, instruction: 'Установите AppImage → добавьте ключ vpn:// или импортируйте .conf.', enabled: true },
-];
+export const APPS = DEFAULT_APPS;
 
 export const TELEGRAM: TelegramSettings = {
   enabled: false, tokenMasked: null, mode: 'polling',

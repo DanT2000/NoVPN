@@ -106,6 +106,13 @@ CREATE TABLE IF NOT EXISTS apps (
   download_url TEXT
 );
 
+-- Клиент-приложения хранятся как JSON (клиент-центричная модель с платформами).
+CREATE TABLE IF NOT EXISTS app_clients (
+  id TEXT PRIMARY KEY,
+  sort INTEGER DEFAULT 0,
+  data TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value TEXT

@@ -1,28 +1,25 @@
-// A9 — Приложения. Редактируемый каталог клиентов и инструкций.
+// A9 — Приложения. Клиент-центричный каталог: один клиент → платформы со
+// ссылками/файлами. Иконка, совместимость, инструкция — на уровне клиента.
 
 import { useState } from 'react';
-import type { AppClient } from '@novpn/shared';
+import type { AppClient, AppPlatform, AppPlatformEntry } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { Chip, EmptyState, Field, ScreenHeader, Toggle } from '../components/ui';
 import { readFileAsDataUrl, dataUrlWithName, isDataFile, dataFileName, dataFileSizeKb } from '../lib/clipboard';
 
-const MAX_APP_FILE_MB = 40;
-
-type Platform = AppClient['platform'];
 type CompatValue = AppClient['compat'][number];
-type Filter = 'Все' | Platform;
 
-const PLATFORMS: Platform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
-const FILTERS: Filter[] = ['Все', 'Android', 'iOS', 'Windows', 'macOS', 'Linux'];
+const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
 const COMPAT_OPTIONS: Array<{ value: CompatValue; label: string }> = [
   { value: 'xray', label: 'Xray' },
   { value: 'amnezia-app', label: 'AmneziaVPN' },
   { value: 'amneziawg', label: 'AmneziaWG' },
 ];
+const MAX_APP_FILE_MB = 40;
 
 function kindLabel(compat: AppClient['compat']): string {
   if (compat.includes('xray')) return 'Xray · VLESS-ссылка + QR';
-  if (compat.includes('amnezia-app')) return 'AmneziaVPN · vpn:// (скоро) + .conf';
+  if (compat.includes('amnezia-app')) return 'AmneziaVPN · .conf / ключ';
   if (compat.includes('amneziawg')) return 'AmneziaWG · .conf + QR';
   return 'формат не задан';
 }
@@ -30,24 +27,32 @@ function kindLabel(compat: AppClient['compat']): string {
 export function AppsAdmin() {
   const { data, saveApps, showConfirm, showToast } = useApp();
   const [localApps, setLocalApps] = useState<AppClient[]>(() =>
-    data ? data.apps.map((a) => ({ ...a, compat: [...a.compat] })) : [],
+    data ? data.apps.map((a) => ({ ...a, compat: [...a.compat], platforms: a.platforms.map((p) => ({ ...p })) })) : [],
   );
-  const [filter, setFilter] = useState<Filter>('Все');
   const [saving, setSaving] = useState(false);
 
   if (!data) return null;
-
-  const total = localApps.length;
-  const shown = filter === 'Все' ? localApps : localApps.filter((a) => a.platform === filter);
 
   const patchApp = (id: string, patch: Partial<AppClient>) =>
     setLocalApps((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
 
   const toggleCompat = (app: AppClient, value: CompatValue) => {
-    const compat = app.compat.includes(value)
-      ? app.compat.filter((c) => c !== value)
-      : [...app.compat, value];
+    const compat = app.compat.includes(value) ? app.compat.filter((c) => c !== value) : [...app.compat, value];
     patchApp(app.id, { compat });
+  };
+
+  const togglePlatform = (app: AppClient, platform: AppPlatform) => {
+    const has = app.platforms.some((p) => p.platform === platform);
+    const platforms = has
+      ? app.platforms.filter((p) => p.platform !== platform)
+      : [...app.platforms, { platform }];
+    patchApp(app.id, { platforms });
+  };
+
+  const patchPlatform = (app: AppClient, platform: AppPlatform, patch: Partial<AppPlatformEntry>) => {
+    patchApp(app.id, {
+      platforms: app.platforms.map((p) => (p.platform === platform ? { ...p, ...patch } : p)),
+    });
   };
 
   const moveApp = (id: string, dir: -1 | 1) =>
@@ -67,25 +72,22 @@ export function AppsAdmin() {
   const removeApp = (app: AppClient) =>
     showConfirm({
       title: 'Удалить клиента?',
-      text: `«${app.client}» будет удалён из списка приложений. Действие нельзя отменить.`,
+      text: `«${app.client}» будет удалён из каталога. Действие нельзя отменить.`,
       confirmLabel: 'Удалить',
       danger: true,
       onConfirm: () => setLocalApps((prev) => prev.filter((a) => a.id !== app.id)),
     });
 
   const addClient = () => {
-    const platform: Platform = filter === 'Все' ? 'Android' : filter;
     const item: AppClient = {
-      id: `a${Date.now()}`,
-      platform,
+      id: `app_${Date.now()}`,
       client: 'Новый клиент',
       compat: ['xray'],
       source: '',
-      store: null,
-      version: '—',
-      localFile: null,
       instruction: '',
       enabled: true,
+      icon: null,
+      platforms: [],
     };
     setLocalApps((prev) => [...prev, item]);
   };
@@ -113,36 +115,20 @@ export function AppsAdmin() {
       />
 
       <p className="body" style={{ marginTop: 0, marginBottom: 16, lineHeight: 1.6 }}>
-        Пользователь выбирает систему → приложение. Протокол и формат конфигурации подбираются автоматически
-        по совместимости, указанной в карточке. На каждой платформе показываются только активные клиенты.
+        Один клиент — одна карточка. Отметьте платформы, на которых он доступен, и добавьте для каждой
+        ссылку (стор/сайт/прямую) и/или файл. Пользователь выберет систему и увидит нужный вариант.
       </p>
 
-      <div className="row-between" style={{ gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-        <div className="chip-row">
-          {FILTERS.map((f) => (
-            <Chip key={f} label={f} size="sm" active={filter === f} onClick={() => setFilter(f)} />
-          ))}
-        </div>
-        <span className="small muted mono">{shown.length} из {total}</span>
-      </div>
-
-      {shown.length === 0 ? (
-        <EmptyState
-          title="Нет клиентов для этой платформы"
-          text="Добавьте клиента кнопкой выше — платформа подставится автоматически."
-        />
+      {localApps.length === 0 ? (
+        <EmptyState title="Каталог пуст" text="Добавьте клиента кнопкой выше." />
       ) : (
         <div className="stack" style={{ gap: 14 }}>
-          {shown.map((app) => {
+          {localApps.map((app) => {
             const idx = localApps.findIndex((a) => a.id === app.id);
             const noCompat = app.compat.length === 0;
             return (
-              <div
-                key={app.id}
-                className="card stack"
-                style={{ gap: 12, opacity: app.enabled ? 1 : 0.62 }}
-              >
-                {/* Верхняя строка: иконка, имя, платформа, управление */}
+              <div key={app.id} className="card stack" style={{ gap: 12, opacity: app.enabled ? 1 : 0.62 }}>
+                {/* Верхняя строка: иконка, имя, управление */}
                 <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                   <label
                     title="Загрузить иконку"
@@ -175,60 +161,16 @@ export function AppsAdmin() {
                   </label>
                   <div style={{ flex: '1 1 180px', minWidth: 160 }}>
                     <Field label="Клиент">
-                      <input
-                        className="input"
-                        value={app.client}
-                        onChange={(e) => patchApp(app.id, { client: e.target.value })}
-                      />
-                    </Field>
-                  </div>
-                  <div style={{ flex: '0 1 160px', minWidth: 130 }}>
-                    <Field label="Платформа">
-                      <select
-                        className="select"
-                        value={app.platform}
-                        onChange={(e) => patchApp(app.id, { platform: e.target.value as Platform })}
-                      >
-                        {PLATFORMS.map((p) => (
-                          <option key={p} value={p}>{p}</option>
-                        ))}
-                      </select>
+                      <input className="input" value={app.client} onChange={(e) => patchApp(app.id, { client: e.target.value })} />
                     </Field>
                   </div>
                   <div className="row" style={{ gap: 6 }}>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      style={{ width: 36, padding: 0 }}
-                      aria-label="Выше"
-                      disabled={idx <= 0}
-                      onClick={() => moveApp(app.id, -1)}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      style={{ width: 36, padding: 0 }}
-                      aria-label="Ниже"
-                      disabled={idx >= localApps.length - 1}
-                      onClick={() => moveApp(app.id, 1)}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      className="btn btn-danger-outline btn-sm"
-                      style={{ width: 36, padding: 0 }}
-                      aria-label="Удалить"
-                      onClick={() => removeApp(app)}
-                    >
-                      ✕
-                    </button>
+                    <button className="btn btn-outline btn-sm" style={{ width: 36, padding: 0 }} aria-label="Выше" disabled={idx <= 0} onClick={() => moveApp(app.id, -1)}>↑</button>
+                    <button className="btn btn-outline btn-sm" style={{ width: 36, padding: 0 }} aria-label="Ниже" disabled={idx >= localApps.length - 1} onClick={() => moveApp(app.id, 1)}>↓</button>
+                    <button className="btn btn-danger-outline btn-sm" style={{ width: 36, padding: 0 }} aria-label="Удалить" onClick={() => removeApp(app)}>✕</button>
                   </div>
                   <div className="row" style={{ gap: 8 }}>
-                    <Toggle
-                      on={app.enabled}
-                      onChange={(v) => patchApp(app.id, { enabled: v })}
-                      ariaLabel="Активна"
-                    />
+                    <Toggle on={app.enabled} onChange={(v) => patchApp(app.id, { enabled: v })} ariaLabel="Активна" />
                     <span className="small">{app.enabled ? 'Активна' : 'Отключена'}</span>
                   </div>
                 </div>
@@ -237,111 +179,78 @@ export function AppsAdmin() {
                 <Field label="Совместимость">
                   <div className="chip-row">
                     {COMPAT_OPTIONS.map((opt) => (
-                      <Chip
-                        key={opt.value}
-                        label={opt.label}
-                        size="sm"
-                        active={app.compat.includes(opt.value)}
-                        onClick={() => toggleCompat(app, opt.value)}
-                      />
+                      <Chip key={opt.value} label={opt.label} size="sm" active={app.compat.includes(opt.value)} onClick={() => toggleCompat(app, opt.value)} />
                     ))}
                   </div>
                 </Field>
-
                 {noCompat ? (
-                  <div className="notice notice-red">
-                    Выберите хотя бы один формат — иначе клиент не появится у пользователя.
+                  <div className="notice notice-red small">Выберите хотя бы один формат — иначе клиент не появится у пользователя.</div>
+                ) : (
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <span className="small muted">Пользователь получит</span>
+                    <span className="badge">{kindLabel(app.compat)}</span>
                   </div>
-                ) : null}
+                )}
 
-                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <span className="small muted">Пользователь получит</span>
-                  <span className="badge">{kindLabel(app.compat)}</span>
+                <div className="grid-2">
+                  <Field label="Официальный сайт">
+                    <input className="input" placeholder="https://…" value={app.source} onChange={(e) => patchApp(app.id, { source: e.target.value })} />
+                  </Field>
+                  <Field label="Инструкция">
+                    <input className="input" value={app.instruction} onChange={(e) => patchApp(app.id, { instruction: e.target.value })} />
+                  </Field>
                 </div>
 
-                {/* Поля */}
-                <div className="grid-2">
-                  <Field label="Версия">
-                    <input
-                      className="input"
-                      value={app.version}
-                      onChange={(e) => patchApp(app.id, { version: e.target.value })}
-                    />
-                  </Field>
-                  <Field label="Магазин / стор">
-                    <input
-                      className="input"
-                      placeholder="Google Play / App Store / —"
-                      value={app.store ?? ''}
-                      onChange={(e) => patchApp(app.id, { store: e.target.value || null })}
-                    />
-                  </Field>
-                </div>
-                <div className="grid-2">
-                  <Field label="Официальный источник (GitHub / сайт)">
-                    <input
-                      className="input"
-                      placeholder="https://…"
-                      value={app.source}
-                      onChange={(e) => patchApp(app.id, { source: e.target.value })}
-                    />
-                  </Field>
-                  <Field label="Прямая ссылка на скачивание">
-                    <input
-                      className="input"
-                      placeholder="ссылка на .apk / .exe / .zip"
-                      value={app.downloadUrl ?? ''}
-                      onChange={(e) => patchApp(app.id, { downloadUrl: e.target.value || null })}
-                    />
-                  </Field>
-                </div>
-                {app.icon ? (
-                  <div>
-                    <button className="btn btn-outline btn-sm" onClick={() => patchApp(app.id, { icon: null })}>
-                      Убрать иконку
-                    </button>
+                {/* Платформы */}
+                <div className="field">
+                  <span className="field-label">Платформы (отметьте и заполните ссылку/файл)</span>
+                  <div className="chip-row" style={{ marginBottom: 8 }}>
+                    {PLATFORMS.map((p) => (
+                      <Chip key={p} label={p} size="sm" active={app.platforms.some((x) => x.platform === p)} onClick={() => togglePlatform(app, p)} />
+                    ))}
                   </div>
-                ) : null}
-                <Field label="Инструкция">
-                  <textarea
-                    className="textarea"
-                    value={app.instruction}
-                    onChange={(e) => patchApp(app.id, { instruction: e.target.value })}
-                  />
-                </Field>
-
-                {/* Файл */}
-                <div className="row-between" style={{ gap: 12, flexWrap: 'wrap' }}>
-                  <span className="small muted mono">
-                    {app.localFile
-                      ? `файл: ${dataFileName(app.localFile)}${isDataFile(app.localFile) ? ` (${dataFileSizeKb(app.localFile)} КБ)` : ''}`
-                      : 'локальный файл не загружен'}
-                  </span>
-                  <div className="row" style={{ gap: 8 }}>
-                    <label className="btn btn-outline btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
-                      {app.localFile ? 'Заменить файл' : 'Загрузить файл'}
-                      <input
-                        type="file"
-                        style={{ display: 'none' }}
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          e.target.value = '';
-                          if (!file) return;
-                          if (file.size > MAX_APP_FILE_MB * 1024 * 1024) {
-                            showToast(`Файл больше ${MAX_APP_FILE_MB} МБ — используйте ссылку в поле «Источник»`);
-                            return;
-                          }
-                          const dataUrl = dataUrlWithName(await readFileAsDataUrl(file), file.name);
-                          patchApp(app.id, { localFile: dataUrl });
-                          showToast('Файл прикреплён (не забудьте «Сохранить»)');
-                        }}
-                      />
-                    </label>
-                    {app.localFile ? (
-                      <button className="btn btn-outline btn-sm" onClick={() => patchApp(app.id, { localFile: null })}>
-                        Убрать
-                      </button>
-                    ) : null}
+                  <div className="stack" style={{ gap: 10 }}>
+                    {PLATFORMS.filter((p) => app.platforms.some((x) => x.platform === p)).map((p) => {
+                      const entry = app.platforms.find((x) => x.platform === p)!;
+                      return (
+                        <div key={p} className="card" style={{ gap: 8 }}>
+                          <div className="row-between" style={{ gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 700 }}>{p}</span>
+                            <span className="small muted mono">
+                              {entry.file ? `файл: ${dataFileName(entry.file)}${isDataFile(entry.file) ? ` (${dataFileSizeKb(entry.file)} КБ)` : ''}` : 'файл не загружен'}
+                            </span>
+                          </div>
+                          <input
+                            className="input"
+                            placeholder="Ссылка: стор / сайт / прямая на .apk/.exe/.zip"
+                            value={entry.url ?? ''}
+                            onChange={(e) => patchPlatform(app, p, { url: e.target.value || null })}
+                          />
+                          <div className="row" style={{ gap: 8 }}>
+                            <label className="btn btn-outline btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+                              {entry.file ? 'Заменить файл' : 'Загрузить файл'}
+                              <input
+                                type="file"
+                                style={{ display: 'none' }}
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  e.target.value = '';
+                                  if (!file) return;
+                                  if (file.size > MAX_APP_FILE_MB * 1024 * 1024) {
+                                    showToast(`Файл больше ${MAX_APP_FILE_MB} МБ — используйте ссылку`);
+                                    return;
+                                  }
+                                  patchPlatform(app, p, { file: dataUrlWithName(await readFileAsDataUrl(file), file.name) });
+                                }}
+                              />
+                            </label>
+                            {entry.file ? (
+                              <button className="btn btn-outline btn-sm" onClick={() => patchPlatform(app, p, { file: null })}>Убрать файл</button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>

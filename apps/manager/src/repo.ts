@@ -258,17 +258,13 @@ export function applyTrafficSample(serverId: string, key: string, received: numb
 
 // ── apps ──
 export function listApps(): AppClient[] {
-  return (db.prepare('SELECT * FROM apps ORDER BY sort ASC').all() as any[]).map(rowToApp);
+  return (db.prepare('SELECT id, data FROM app_clients ORDER BY sort ASC').all() as any[]).map(rowToApp);
 }
 export function replaceApps(apps: AppClient[]): AppClient[] {
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM apps').run();
-    const stmt = db.prepare(
-      'INSERT INTO apps(id,platform,client,compat,source,store,version,local_file,instruction,enabled,sort,icon,download_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    );
-    apps.forEach((a, i) =>
-      stmt.run(a.id, a.platform, a.client, JSON.stringify(a.compat), a.source, a.store, a.version, a.localFile, a.instruction, a.enabled ? 1 : 0, i, a.icon ?? null, a.downloadUrl ?? null),
-    );
+    db.prepare('DELETE FROM app_clients').run();
+    const stmt = db.prepare('INSERT INTO app_clients(id, sort, data) VALUES(?,?,?)');
+    apps.forEach((a, i) => stmt.run(a.id, i, JSON.stringify(a)));
   });
   tx();
   return listApps();

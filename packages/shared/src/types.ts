@@ -85,22 +85,31 @@ export interface Device {
   conf?: string | null;
 }
 
+export type AppPlatform = 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux';
+
+/** Один клиент на конкретной платформе: ссылка и/или загруженный файл. */
+export interface AppPlatformEntry {
+  platform: AppPlatform;
+  /** Ссылка (стор/сайт/прямая) для этой платформы. */
+  url?: string | null;
+  /** Загруженный файл (data URL) для этой платформы. */
+  file?: string | null;
+}
+
+/** Клиент-приложение: одна карточка на все платформы, ссылки/файлы — по платформам. */
 export interface AppClient {
   id: string;
-  platform: 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux';
   client: string;
   /** С какими форматами совместим: xray | amneziawg | amnezia-app (vpn://). */
   compat: Array<'xray' | 'amneziawg' | 'amnezia-app'>;
+  /** Офиц. сайт клиента (общий). */
   source: string;
-  store: string | null;
-  version: string;
-  localFile: string | null;
   instruction: string;
   enabled: boolean;
   /** Иконка клиента (data URL). */
   icon?: string | null;
-  /** Прямая ссылка на скачивание (отдельно от офиц. сайта/стора). */
-  downloadUrl?: string | null;
+  /** Платформы, на которых доступен клиент, со ссылками/файлами. */
+  platforms: AppPlatformEntry[];
 }
 
 export interface TelegramSettings {

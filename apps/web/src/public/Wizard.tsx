@@ -67,7 +67,7 @@ export function Wizard() {
   const chosenApp = data.apps.find((a) => a.id === appId) ?? null;
 
   const availableApps = data.apps.filter((a) => {
-    if (!a.enabled || a.platform !== platform) return false;
+    if (!a.enabled || !a.platforms.some((p) => p.platform === platform)) return false;
     const proto = appProtocol(a);
     const userOk = (user.allowedProtocols as string[]).includes(proto);
     const serverOk = chosenServer ? (chosenServer.protocols as string[]).includes(proto) : true;
@@ -221,10 +221,12 @@ export function Wizard() {
                   return (
                     <button key={a.id} type="button" onClick={() => setAppId(a.id)} className="card"
                       style={{ textAlign: 'left', cursor: 'pointer', border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 34, height: 34, borderRadius: 'var(--r-ctrl)', background: 'var(--surface-btn-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: 'var(--accent-light)' }}>{a.client.charAt(0)}</div>
+                      <div style={{ width: 34, height: 34, borderRadius: 'var(--r-ctrl)', background: 'var(--surface-btn-2)', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: 'var(--accent-light)' }}>
+                        {a.icon ? <img src={a.icon} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : a.client.charAt(0)}
+                      </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div className="row" style={{ gap: 8 }}><span style={{ fontWeight: 700 }}>{a.client}</span><span className="badge">{kindLabel}</span></div>
-                        <div className="small muted">{a.platform} · v{a.version}</div>
+                        <div className="small muted">{platform}</div>
                       </div>
                     </button>
                   );

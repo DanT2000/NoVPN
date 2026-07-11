@@ -76,18 +76,15 @@ export function rowToServer(r: any): Server {
 }
 
 export function rowToApp(r: any): AppClient {
+  const d = j<Partial<AppClient>>(r.data, {});
   return {
     id: r.id,
-    platform: r.platform,
-    client: r.client,
-    compat: j<AppClient['compat']>(r.compat, []),
-    source: r.source ?? '',
-    store: r.store ?? null,
-    version: r.version ?? '',
-    localFile: r.local_file ?? null,
-    instruction: r.instruction ?? '',
-    enabled: b(r.enabled),
-    icon: r.icon ?? null,
-    downloadUrl: r.download_url ?? null,
+    client: d.client ?? '',
+    compat: d.compat ?? [],
+    source: d.source ?? '',
+    instruction: d.instruction ?? '',
+    enabled: d.enabled ?? true,
+    icon: d.icon ?? null,
+    platforms: Array.isArray(d.platforms) ? d.platforms : [],
   };
 }
