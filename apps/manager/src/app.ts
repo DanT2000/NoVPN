@@ -13,9 +13,10 @@ export function createApp() {
   // когда прокси сообщает https (иначе secure:true не ставит cookie за прокси).
   app.set('trust proxy', true);
   // Сохраняем «сырое» тело для проверки подписи агента.
+  // Лимит 64mb: логотип/файлы клиентов админ загружает как data URL (хранятся в БД).
   app.use(
     express.json({
-      limit: '1mb',
+      limit: '64mb',
       verify: (req, _res, buf) => {
         (req as express.Request & { rawBody?: string }).rawBody = buf.toString('utf8');
       },

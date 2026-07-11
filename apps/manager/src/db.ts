@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS servers (
   ssh_host TEXT,
   ssh_port INTEGER,
   ssh_user TEXT,
+  ssh_pass_enc TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -161,6 +162,15 @@ CREATE INDEX IF NOT EXISTS idx_devices_server ON devices(server_id);
 CREATE INDEX IF NOT EXISTS idx_history_user ON user_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_server ON jobs(server_id, state);
 `);
+
+// Миграции для существующих БД (ADD COLUMN идемпотентно — игнорируем дубликаты).
+for (const stmt of ['ALTER TABLE servers ADD COLUMN ssh_pass_enc TEXT']) {
+  try {
+    db.exec(stmt);
+  } catch {
+    /* колонка уже есть */
+  }
+}
 
 export function getSetting<T>(key: string, fallback: T): T {
   const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;

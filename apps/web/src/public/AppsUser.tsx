@@ -2,6 +2,12 @@ import { useState } from 'react';
 import type { AppClient } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Chip, EmptyState } from '../components/ui';
+import { isDataFile, dataFileName, downloadUrl, openUrl } from '../lib/clipboard';
+
+function normalizeUrl(u: string): string {
+  const t = u.trim();
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
 
 const PLATFORMS = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
 type Platform = (typeof PLATFORMS)[number];
@@ -75,17 +81,26 @@ export function AppsUser() {
             </p>
 
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn btn-outline btn-sm" onClick={() => showToast(`Ссылка: ${a.source}`)}>
-                Официальный сайт
-              </button>
-              {a.store ? (
-                <button className="btn btn-outline btn-sm" onClick={() => showToast(`Открыть ${a.store}`)}>
+              {a.source ? (
+                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(a.source))}>
+                  Официальный сайт
+                </button>
+              ) : null}
+              {a.store && a.source ? (
+                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(a.source))}>
                   {a.store}
                 </button>
               ) : null}
               {a.localFile ? (
-                <button className="btn btn-secondary btn-sm" onClick={() => showToast(`Файл ${a.localFile} пока недоступен`)}>
-                  Скачать {a.localFile}
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() =>
+                    isDataFile(a.localFile)
+                      ? downloadUrl(dataFileName(a.localFile), a.localFile)
+                      : showToast(`Файл ${a.localFile} недоступен — загрузите его в админке`)
+                  }
+                >
+                  Скачать {dataFileName(a.localFile)}
                 </button>
               ) : null}
             </div>

@@ -4,6 +4,9 @@ import { useState } from 'react';
 import type { AppClient } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { Chip, EmptyState, Field, ScreenHeader, Toggle } from '../components/ui';
+import { readFileAsDataUrl, dataUrlWithName, isDataFile, dataFileName, dataFileSizeKb } from '../lib/clipboard';
+
+const MAX_APP_FILE_MB = 40;
 
 type Platform = AppClient['platform'];
 type CompatValue = AppClient['compat'][number];
@@ -263,14 +266,36 @@ export function AppsAdmin() {
                 {/* Файл */}
                 <div className="row-between" style={{ gap: 12, flexWrap: 'wrap' }}>
                   <span className="small muted mono">
-                    {app.localFile ? `файл: ${app.localFile}` : 'локальный файл не загружен'}
+                    {app.localFile
+                      ? `файл: ${dataFileName(app.localFile)}${isDataFile(app.localFile) ? ` (${dataFileSizeKb(app.localFile)} КБ)` : ''}`
+                      : 'локальный файл не загружен'}
                   </span>
-                  <button
-                    className="btn btn-outline btn-sm"
-                    onClick={() => showToast('Загрузка файла пока недоступна')}
-                  >
-                    Загрузить файл
-                  </button>
+                  <div className="row" style={{ gap: 8 }}>
+                    <label className="btn btn-outline btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+                      {app.localFile ? 'Заменить файл' : 'Загрузить файл'}
+                      <input
+                        type="file"
+                        style={{ display: 'none' }}
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = '';
+                          if (!file) return;
+                          if (file.size > MAX_APP_FILE_MB * 1024 * 1024) {
+                            showToast(`Файл больше ${MAX_APP_FILE_MB} МБ — используйте ссылку в поле «Источник»`);
+                            return;
+                          }
+                          const dataUrl = dataUrlWithName(await readFileAsDataUrl(file), file.name);
+                          patchApp(app.id, { localFile: dataUrl });
+                          showToast('Файл прикреплён (не забудьте «Сохранить»)');
+                        }}
+                      />
+                    </label>
+                    {app.localFile ? (
+                      <button className="btn btn-outline btn-sm" onClick={() => patchApp(app.id, { localFile: null })}>
+                        Убрать
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             );

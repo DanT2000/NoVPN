@@ -4,6 +4,9 @@ import { useState } from 'react';
 import type { AppSettings, UserProtocol } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { Chip, Field, Panel } from '../components/ui';
+import { readFileAsDataUrl } from '../lib/clipboard';
+
+const MAX_LOGO_MB = 2;
 
 const PROTO_OPTIONS: Array<{ value: UserProtocol; label: string }> = [
   { value: 'xray', label: 'Xray' },
@@ -20,6 +23,7 @@ export function Settings() {
   const s = data?.settings;
 
   const [appName, setAppName] = useState(s?.appName ?? '');
+  const [logo, setLogo] = useState<string | null>(s?.logo ?? null);
   const [domain, setDomain] = useState(s?.domain ?? '');
   const [defaultServerId, setDefaultServerId] = useState<string | null>(s?.defaultServerId ?? null);
   const [defaultProtocols, setDefaultProtocols] = useState<UserProtocol[]>(s?.defaultProtocols ?? []);
@@ -45,6 +49,7 @@ export function Settings() {
       const input: AppSettings = {
         ...s,
         appName,
+        logo,
         domain,
         defaultServerId,
         defaultProtocols,
@@ -79,20 +84,46 @@ export function Settings() {
           <Field label="Основной домен">
             <input className="input mono" value={domain} onChange={(e) => setDomain(e.target.value)} />
           </Field>
-          <div className="row" style={{ gap: 14, flexWrap: 'wrap' }}>
+          <div className="row" style={{ gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             <div
               aria-hidden
               style={{
-                width: 56, height: 56, borderRadius: 'var(--r-card)', flex: 'none',
+                width: 56, height: 56, borderRadius: 'var(--r-card)', flex: 'none', overflow: 'hidden',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: 'var(--accent)', color: 'var(--text-on-accent)', fontSize: 24, fontWeight: 700,
+                background: logo ? 'var(--surface)' : 'var(--accent)',
+                color: 'var(--text-on-accent)', fontSize: 24, fontWeight: 700,
               }}
             >
-              {logoLetter}
+              {logo ? (
+                <img src={logo} alt="Логотип" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                logoLetter
+              )}
             </div>
-            <button className="btn btn-outline" onClick={() => showToast('Загрузка логотипа пока недоступна')}>
-              Загрузить логотип
-            </button>
+            <label className="btn btn-outline" style={{ cursor: 'pointer', margin: 0 }}>
+              {logo ? 'Заменить логотип' : 'Загрузить логотип'}
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (!file) return;
+                  if (file.size > MAX_LOGO_MB * 1024 * 1024) {
+                    showToast(`Логотип больше ${MAX_LOGO_MB} МБ — выберите файл меньше`);
+                    return;
+                  }
+                  setLogo(await readFileAsDataUrl(file));
+                  showToast('Логотип выбран (не забудьте «Сохранить»)');
+                }}
+              />
+            </label>
+            {logo ? (
+              <button className="btn btn-outline" onClick={() => setLogo(null)}>
+                Убрать
+              </button>
+            ) : null}
           </div>
         </Panel>
 

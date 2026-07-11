@@ -95,6 +95,10 @@ export function getDevice(id: string): Device | null {
   const r = db.prepare('SELECT * FROM devices WHERE id = ?').get(id) as any;
   return r ? rowToDevice(r) : null;
 }
+/** Сырая строка устройства (с uuid/public_key) — для отзыва на сервере. */
+export function getDeviceRow(id: string): { uuid: string | null; public_key: string | null; protocol: string; server_id: string } | null {
+  return (db.prepare('SELECT uuid, public_key, protocol, server_id FROM devices WHERE id = ?').get(id) as any) ?? null;
+}
 export function countActiveDevices(userId: string): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_active = 1').get(userId) as { n: number }).n;
 }
@@ -139,19 +143,27 @@ export function getServer(id: string): Server | null {
 }
 export function insertServer(s: {
   name: string; country: string | null; host: string; protocols: string[]; agent?: string; endpointOk?: boolean;
-  sshHost?: string; sshPort?: number; sshUser?: string; enrollSecretEnc?: string | null;
+  sshHost?: string; sshPort?: number; sshUser?: string; sshPassEnc?: string | null; enrollSecretEnc?: string | null;
 }): Server {
   const id = newId('s');
   db.prepare(
     `INSERT INTO servers(id,name,country,host,agent,endpoint_ok,service_health,protocols,is_default,auto_issue,
-      last_sync_at,recommended,ssh_host,ssh_port,ssh_user,enroll_secret_enc,created_at)
-     VALUES(@id,@name,@country,@host,@agent,@endpoint_ok,'unknown',@protocols,0,1,@now,0,@ssh_host,@ssh_port,@ssh_user,@enroll,@now)`,
+      last_sync_at,recommended,ssh_host,ssh_port,ssh_user,ssh_pass_enc,enroll_secret_enc,created_at)
+     VALUES(@id,@name,@country,@host,@agent,@endpoint_ok,'unknown',@protocols,0,1,@now,0,@ssh_host,@ssh_port,@ssh_user,@sshpass,@enroll,@now)`,
   ).run({
     id, name: s.name, country: s.country, host: s.host, agent: s.agent ?? 'never',
     endpoint_ok: s.endpointOk ? 1 : 0, protocols: JSON.stringify(s.protocols), now: nowIso(),
-    ssh_host: s.sshHost ?? null, ssh_port: s.sshPort ?? null, ssh_user: s.sshUser ?? null, enroll: s.enrollSecretEnc ?? null,
+    ssh_host: s.sshHost ?? null, ssh_port: s.sshPort ?? null, ssh_user: s.sshUser ?? null,
+    sshpass: s.sshPassEnc ?? null, enroll: s.enrollSecretEnc ?? null,
   });
   return getServer(id)!;
+}
+
+/** SSH-доступ к серверу (расшифрованный) — для выпуска конфигов из панели. */
+export function getServerSsh(id: string): { host: string; port: number; user: string; passwordEnc: string | null } | null {
+  const r = db.prepare('SELECT host, ssh_host, ssh_port, ssh_user, ssh_pass_enc FROM servers WHERE id = ?').get(id) as any;
+  if (!r) return null;
+  return { host: r.ssh_host || r.host, port: r.ssh_port || 22, user: r.ssh_user || 'root', passwordEnc: r.ssh_pass_enc ?? null };
 }
 export function setServerDefault(id: string): Server[] {
   const tx = db.transaction(() => {

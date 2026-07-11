@@ -1,13 +1,14 @@
 // A5 — Карточка пользователя. Статистика, код, срок, лимиты, доступ, устройства.
 
 import { useState } from 'react';
-import type { Protocol, User } from '@novpn/shared';
+import type { IssueDeviceResult, Protocol, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
-import { Chip, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader } from '../components/ui';
+import { Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader } from '../components/ui';
+import { Qr } from '../components/Qr';
 import { dateShort, daysLeft, gb, rel } from '../lib/format';
 import { countActiveDevices, devStatusOf, serverAgentView, statusOf } from '../lib/status';
-import { copyText } from '../lib/clipboard';
+import { copyText, downloadText } from '../lib/clipboard';
 
 const CATEGORIES = ['Общие', 'Семья', 'Друзья', 'Работа', 'Админ'] as const;
 const digits = (s: string) => s.replace(/\D+/g, '');
@@ -56,8 +57,30 @@ function UserCardInner({ user }: { user: User }) {
   const {
     data, isMobile, goAdmin, showToast, showConfirm,
     updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
-    reissueDevice, revokeDevice,
+    reissueDevice, revokeDevice, issueDevice,
   } = useApp();
+
+  // Выпуск конфига админом
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [issServer, setIssServer] = useState<string>(user.allowedServers[0] ?? '');
+  const [issProto, setIssProto] = useState<'xray' | 'amneziawg'>(user.allowedProtocols[0] ?? 'xray');
+  const [issName, setIssName] = useState('');
+  const [issuing, setIssuing] = useState(false);
+  const [issued, setIssued] = useState<IssueDeviceResult | null>(null);
+  const [issErr, setIssErr] = useState<string | null>(null);
+  const doIssue = async () => {
+    if (!issServer || issuing) return;
+    setIssuing(true);
+    setIssErr(null);
+    try {
+      const r = await issueDevice({ userId: user.id, name: issName.trim() || 'Устройство', serverId: issServer, protocol: issProto });
+      setIssued(r);
+    } catch (e) {
+      setIssErr(e instanceof Error ? e.message : 'Ошибка выпуска конфига');
+    } finally {
+      setIssuing(false);
+    }
+  };
 
   // Основное
   const [name, setName] = useState(user.name);
@@ -443,11 +466,84 @@ function UserCardInner({ user }: { user: User }) {
       <Panel
         title="Устройства и конфиги"
         extra={
-          <button className="btn btn-outline btn-sm" onClick={() => showToast('Выпуск конфига — в мастере устройства')}>
-            + Выпустить конфиг
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => {
+              setIssueOpen((v) => !v);
+              setIssued(null);
+              setIssErr(null);
+            }}
+          >
+            {issueOpen ? 'Закрыть' : '+ Выпустить конфиг'}
           </button>
         }
       >
+        {issueOpen ? (
+          <div className="card stack" style={{ gap: 12, marginBottom: 8 }}>
+            {!issued ? (
+              <>
+                <Field label="Сервер">
+                  <select className="select" value={issServer} onChange={(e) => setIssServer(e.target.value)}>
+                    {user.allowedServers.map((sid) => {
+                      const srv = servers.find((s) => s.id === sid);
+                      return (
+                        <option key={sid} value={sid}>
+                          {srv ? `${srv.name}${srv.country ? ` (${srv.country})` : ''}` : sid}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </Field>
+                <Field label="Протокол">
+                  <div className="chip-row">
+                    {user.allowedProtocols.map((p) => (
+                      <Chip key={p} label={PROTOCOL_LABELS[p]} active={issProto === p} size="sm" onClick={() => setIssProto(p)} />
+                    ))}
+                  </div>
+                </Field>
+                <Field label="Название устройства">
+                  <input className="input" placeholder="Например, Телефон" value={issName} onChange={(e) => setIssName(e.target.value)} />
+                </Field>
+                {issErr ? <div className="notice notice-red small">{issErr}</div> : null}
+                <button className="btn btn-primary btn-sm" disabled={!issServer || issuing} onClick={doIssue}>
+                  {issuing ? 'Выпускаем…' : 'Создать конфиг'}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="notice notice-green small">Конфиг готов — скопируй и передай пользователю.</div>
+                <Qr text={(issued.link ?? issued.conf)!} caption="Или отсканируйте QR" />
+                <div className="field-label">{issued.link ? 'Ссылка (Xray)' : 'Конфигурация AmneziaWG (.conf)'}</div>
+                <ConfigBox text={(issued.link ?? issued.conf)!} />
+                {issued.vpnKeyNote ? <div className="notice notice-amber small">{issued.vpnKeyNote}</div> : null}
+                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={async () => {
+                      await copyText((issued.link ?? issued.conf)!);
+                      showToast(issued.link ? 'Ссылка скопирована' : 'Конфигурация скопирована');
+                    }}
+                  >
+                    Копировать
+                  </button>
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={() =>
+                      issued.link
+                        ? downloadText(`novpn-${issued.device.name}.txt`, issued.link)
+                        : downloadText(`novpn-${issued.device.name}.conf`, issued.conf!)
+                    }
+                  >
+                    Скачать
+                  </button>
+                  <button className="btn btn-outline btn-sm" onClick={() => { setIssued(null); setIssName(''); }}>
+                    Ещё один
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
         {userDevices.length === 0 ? (
           <span className="small muted">Конфигов пока нет.</span>
         ) : (

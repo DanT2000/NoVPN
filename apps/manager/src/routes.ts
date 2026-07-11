@@ -12,7 +12,17 @@ import type {
 import { config } from './config.js';
 import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg } from './services/sshServer.js';
+import { saveServerKeys } from './services/keyvault.js';
 import { encryptSecret, maskTail, randomToken } from './lib/crypto.js';
+
+// Выпуск конфига: по SSH (реальный сервер) или через mock-агент (dev).
+async function createXrayCfg(server: import('@novpn/shared').Server, name: string) {
+  return (await sshHasSshAccess(server.id)) ? sshCreateXray(server, name) : agentService.createXray(server, name);
+}
+async function createAwgCfg(server: import('@novpn/shared').Server, name: string) {
+  return (await sshHasSshAccess(server.id)) ? sshCreateAwg(server, name) : agentService.createAmneziaWG(server, name);
+}
 import * as repo from './repo.js';
 
 export const router = Router();
@@ -56,12 +66,12 @@ async function issueForUser(user: User, name: string, serverId: string, protocol
   if (!server.protocols.includes(protocol)) throw new Error('Сервер не поддерживает этот протокол.');
 
   if (protocol === 'xray') {
-    const r = await agentService.createXray(server, name);
+    const r = await createXrayCfg(server, name);
     const device = repo.insertDevice({ userId: user.id, name, serverId, protocol, uuid: r.uuid, publicKey: r.publicKey, link: r.link });
     repo.addHistory(user.id, `Выпущен конфиг «${name}» (Xray, ${server.name})`);
     return { device, link: r.link };
   }
-  const r = await agentService.createAmneziaWG(server, name);
+  const r = await createAwgCfg(server, name);
   const device = repo.insertDevice({
     userId: user.id, name, serverId, protocol, publicKey: r.publicKey,
     privateKeyEnc: encryptSecret(r.privateKey), presharedKeyEnc: encryptSecret(r.presharedKey),
@@ -101,11 +111,11 @@ router.post('/api/public/devices/:id/reissue', async (req, res) => {
     const server = repo.getServer(d.serverId)!;
     let out: IssueDeviceResult;
     if (d.protocol === 'xray') {
-      const r = await agentService.createXray(server, d.name);
+      const r = await createXrayCfg(server, d.name);
       const device = repo.updateDeviceFields(d.id, { is_active: 1, revoked_at: null, uuid: r.uuid, public_key: r.publicKey, link: r.link, conf: null })!;
       out = { device, link: r.link };
     } else {
-      const r = await agentService.createAmneziaWG(server, d.name);
+      const r = await createAwgCfg(server, d.name);
       const device = repo.updateDeviceFields(d.id, {
         is_active: 1, revoked_at: null, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
         preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: r.conf, link: null,
@@ -119,9 +129,20 @@ router.post('/api/public/devices/:id/reissue', async (req, res) => {
   }
 });
 
-router.post('/api/public/devices/:id/revoke', (req, res) => {
+router.post('/api/public/devices/:id/revoke', async (req, res) => {
   const d = repo.getDevice(req.params.id!);
   if (!d) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
+  // Реальный отзыв на сервере (если сервер управляется по SSH).
+  try {
+    const row = repo.getDeviceRow(d.id);
+    const server = repo.getServer(d.serverId);
+    if (row && server && (await sshHasSshAccess(server.id))) {
+      if (row.protocol === 'xray' && row.uuid) await sshRevokeXray(server, row.uuid);
+      else if (row.protocol === 'amneziawg' && row.public_key) await sshRevokeAwg(server, row.public_key);
+    }
+  } catch {
+    /* даже если на сервере не удалось — помечаем отозванным в панели */
+  }
   repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: repo.nowIso() });
   res.json({ ok: true });
 });
@@ -271,15 +292,26 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
   const b = req.body ?? {};
   const components: string[] = Array.isArray(b.components) ? b.components : [];
   const protocols = components.filter((p) => p === 'xray' || p === 'amneziawg');
-  // Одноразовый enrollment-token: агент обменяет его на постоянную идентичность.
+  // Одноразовый enrollment-token (для будущего агент-режима).
   const enrollToken = randomToken();
+  // Если переданы серверные ключи — сервер уже установлен, панель работает по SSH.
+  const hasKeys = !!(b.serverKeys && (b.serverKeys.awgServerPubKey || b.serverKeys.xrayRealityPubKey));
   const s = repo.insertServer({
     name: String(b.name ?? 'Сервер'), country: b.country ?? null, host: String(b.vpnHost || b.host || ''),
-    protocols, agent: 'never', endpointOk: false, sshHost: b.host, sshPort: b.sshPort, sshUser: b.sshUser,
+    protocols, agent: hasKeys ? 'online' : 'never', endpointOk: hasKeys,
+    sshHost: b.host, sshPort: b.sshPort, sshUser: b.sshUser,
+    sshPassEnc: b.secret && b.authMethod !== 'key' ? encryptSecret(String(b.secret)) : null,
     enrollSecretEnc: encryptSecret(enrollToken),
   });
+  if (hasKeys) {
+    saveServerKeys(s.host, {
+      xrayRealityPubKey: b.serverKeys.xrayRealityPubKey,
+      xrayShortId: b.serverKeys.xrayShortId,
+      xraySni: b.serverKeys.xraySni,
+      awgServerPubKey: b.serverKeys.awgServerPubKey,
+    });
+  }
   repo.addLog(`Добавлен сервер «${s.name}»`);
-  // enrollToken возвращается ОДИН раз (для установочной команды агента); наружу больше не отдаётся.
   res.json({ ...s, enrollToken });
 });
 
