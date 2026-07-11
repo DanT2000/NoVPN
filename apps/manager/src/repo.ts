@@ -102,18 +102,20 @@ export function getDeviceRow(id: string): { uuid: string | null; public_key: str
 export function countActiveDevices(userId: string): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_active = 1').get(userId) as { n: number }).n;
 }
-/** Активные устройства сервера с ключами — для синхронизации трафика. */
+// Устройства сервера с ключами — для синхронизации трафика. Берём ВСЕ (в т.ч.
+// отозванные, но не удалённые): пользователь мог перевыпустить конфиг, а телефон
+// остался на старом пире — его трафик всё равно нужно показать.
 export function listServerDeviceKeys(
   serverId: string,
 ): Array<{ id: string; userId: string | null; publicKey: string | null; uuid: string | null; protocol: string }> {
   return (
-    db.prepare('SELECT id, user_id, public_key, uuid, protocol FROM devices WHERE server_id = ? AND is_active = 1').all(serverId) as any[]
+    db.prepare('SELECT id, user_id, public_key, uuid, protocol FROM devices WHERE server_id = ? AND public_key IS NOT NULL').all(serverId) as any[]
   ).map((r) => ({ id: r.id, userId: r.user_id ?? null, publicKey: r.public_key ?? null, uuid: r.uuid ?? null, protocol: r.protocol }));
 }
-/** Пересчёт расхода трафика и последней активности пользователя из его устройств. */
+/** Пересчёт расхода трафика и последней активности пользователя из ВСЕХ его устройств. */
 export function recomputeUserUsage(userId: string): void {
   const row = db
-    .prepare('SELECT COALESCE(SUM(traffic_gb),0) AS tg, MAX(last_seen_at) AS ls FROM devices WHERE user_id = ? AND is_active = 1')
+    .prepare('SELECT COALESCE(SUM(traffic_gb),0) AS tg, MAX(last_seen_at) AS ls FROM devices WHERE user_id = ?')
     .get(userId) as { tg: number; ls: string | null };
   db.prepare('UPDATE users SET traffic_used_gb = @tg, last_activity_at = COALESCE(@ls, last_activity_at) WHERE id = @id').run({
     tg: row.tg ?? 0,
