@@ -16,7 +16,9 @@ COPY packages/shared/package.json packages/shared/
 COPY apps/web/package.json apps/web/
 COPY apps/manager/package.json apps/manager/
 COPY apps/agent/package.json apps/agent/
-RUN npm install
+# --include=dev обязателен: Coolify задаёт NODE_ENV=production, иначе devDeps
+# (typescript, vite) не установятся и сборка упадёт с «tsc: not found».
+RUN npm install --include=dev
 
 # исходники и сборка: shared → web → manager
 COPY packages/shared packages/shared
