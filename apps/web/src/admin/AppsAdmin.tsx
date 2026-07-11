@@ -267,7 +267,7 @@ export function AppsAdmin() {
                   </span>
                   <button
                     className="btn btn-outline btn-sm"
-                    onClick={() => showToast('Загрузка файлов появится на этапе backend-агентов.')}
+                    onClick={() => showToast('Загрузка файла пока недоступна')}
                   >
                     Загрузить файл
                   </button>

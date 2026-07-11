@@ -48,10 +48,6 @@ export function Servers() {
         }
       />
 
-      <div className="notice notice-amber" style={{ marginBottom: 16 }}>
-        Раздел работает на mock API-контракте: реальные SSH-подключения и установка появятся на этапе backend-агентов.
-      </div>
-
       {n === 0 ? (
         <EmptyState
           title="Серверов пока нет"

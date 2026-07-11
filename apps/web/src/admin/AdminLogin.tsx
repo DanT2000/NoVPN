@@ -1,4 +1,4 @@
-// A0 — Вход администратора. Центрированная карточка, demo: admin / admin.
+// A0 — Вход администратора. Центрированная карточка.
 
 import { useState } from 'react';
 import { useApp } from '../store/AppStore';
@@ -79,14 +79,6 @@ export function AdminLogin() {
               {busy ? 'Входим…' : 'Войти'}
             </button>
           </form>
-
-          <p className="small muted" style={{ marginTop: 14, marginBottom: 0, lineHeight: 1.5 }}>
-            Двухфакторная аутентификация предусмотрена архитектурой и появится на этапе backend.
-          </p>
-        </div>
-
-        <div className="mono center" style={{ marginTop: 16, color: 'var(--text-faint)', fontSize: 12 }}>
-          demo: admin / admin
         </div>
       </div>
     </div>

@@ -90,7 +90,7 @@ export function Settings() {
             >
               {logoLetter}
             </div>
-            <button className="btn btn-outline" onClick={() => showToast('Загрузка логотипа появится на этапе backend-агентов.')}>
+            <button className="btn btn-outline" onClick={() => showToast('Загрузка логотипа пока недоступна')}>
               Загрузить логотип
             </button>
           </div>
