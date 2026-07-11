@@ -31,6 +31,9 @@ RUN npm run build --workspace packages/shared \
 # ---- runtime ----
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
+# curl нужен healthcheck'у Coolify (он вызывает curl/wget внутри контейнера)
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production \
     PORT=3000 \
     WEB_DIST=/app/apps/web/dist \
