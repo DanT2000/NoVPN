@@ -360,7 +360,10 @@ async function runProvision(serverId: string, comps: string[]): Promise<void> {
       }));
       if (devs.length) await sshResyncDevices(s, devs);
     }
-    const protocols = comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p));
+    const proto = new Set(comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)));
+    // Не сбрасываем уже установленные прокси, если их не трогали в этой установке.
+    for (const p of ['http', 'https', 'socks5']) if ((s.protocols as string[]).includes(p)) proto.add(p);
+    const protocols = [...proto];
     repo.updateServerFields(s.id, { protocols: JSON.stringify(protocols), agent: 'online', endpoint_ok: 1, last_sync_at: repo.nowIso() });
     repo.addLog(`${restoring ? 'Переустановлен' : 'Установлен'} сервер «${s.name}» (${protocols.join(', ')})`);
     provisionStatus.set(serverId, { state: 'done', message: 'Установка завершена.', restored: restoring, at: Date.now() });
