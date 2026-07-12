@@ -198,16 +198,22 @@ export async function sshResyncDevices(
   server: Server,
   items: Array<{ name: string; protocol: string; uuid?: string | null; awgPub?: string | null; clientIp?: string | null; psk?: string | null }>,
 ): Promise<void> {
-  const xray = items.filter((i) => i.protocol === 'xray' && i.uuid).map((i) => ({ id: i.uuid, name: san(i.name) }));
+  const xray = items.filter((i) => i.protocol === 'xray' && i.uuid).map((i) => ({ id: i.uuid!, name: san(i.name) }));
   const awg = items.filter((i) => i.protocol === 'amneziawg' && i.awgPub && i.clientIp);
   const lines: string[] = ['set +e'];
   if (xray.length) {
-    const json = JSON.stringify(xray).replace(/'/g, "'\\''");
+    // UUID/имя пишем во временный файл (без встраивания JSON в python -c — иначе
+    // двойные кавычки JSON ломают обёртку python3 -c "…").
+    lines.push('rm -f /tmp/novpn-xray-clients');
+    for (const c of xray) {
+      const nm = c.name.replace(/'/g, '');
+      lines.push(`printf '%s\\t%s\\n' '${c.id}' '${nm}' >> /tmp/novpn-xray-clients`);
+    }
     lines.push(
-      `python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));ex={x['id'] for x in c['inbounds'][0]['settings']['clients']};` +
-        `[c['inbounds'][0]['settings']['clients'].append({'id':d['id'],'flow':'xtls-rprx-vision','email':d['name']}) for d in json.loads('${json}') if d['id'] not in ex];` +
-        `json.dump(c,open(p,'w'),indent=2)"`,
-      'docker restart amnezia-xray >/dev/null 2>&1 || true',
+      `python3 -c 'import json;p="/opt/amnezia/xray/server.json";c=json.load(open(p));cl=c["inbounds"][0]["settings"]["clients"];ex={x.get("id") for x in cl};` +
+        `[cl.append({"id":u,"flow":"xtls-rprx-vision","email":n}) for u,n in (l.rstrip("\\n").split("\\t") for l in open("/tmp/novpn-xray-clients")) if u not in ex];` +
+        `json.dump(c,open(p,"w"),indent=2)'`,
+      'docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null 2>&1 && docker restart amnezia-xray >/dev/null 2>&1 || true',
     );
   }
   for (const a of awg) {
