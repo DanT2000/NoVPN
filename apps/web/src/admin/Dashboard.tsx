@@ -43,8 +43,11 @@ export function Dashboard() {
     const key = statusOf(u).key;
     return key === 'active' || key === 'expiring';
   }).length;
-  const activeDevices = devices.filter((d) => d.isActive).length;
-  const traffic30 = servers.reduce((sum, s) => sum + s.trafficGb, 0);
+  // Реальные числа: считаем только активные конфиги существующих пользователей.
+  const existingIds = new Set(users.map((u) => u.id));
+  const activeDevices = devices.filter((d) => d.isActive && d.userId && existingIds.has(d.userId)).length;
+  const totalTraffic = servers.reduce((sum, s) => sum + (s.trafficGb || 0), 0);
+  const onlineServers = servers.filter((s) => s.agent === 'online').length;
 
   const attention = users.filter((u) => {
     const key = statusOf(u).key;
@@ -55,9 +58,9 @@ export function Dashboard() {
 
   const stats = [
     { label: 'Активные пользователи', value: String(activeUsers), sub: `из ${users.length} всего` },
-    { label: 'Активные устройства', value: String(activeDevices), sub: `выпущено конфигов: ${devices.length}` },
-    { label: 'Трафик сегодня', value: '8,2 ГБ', sub: 'по всем серверам' },
-    { label: 'Трафик за 30 дней', value: gb(traffic30), sub: 'суммарно' },
+    { label: 'Активные конфиги', value: String(activeDevices), sub: 'сейчас выдано' },
+    { label: 'Трафик', value: gb(totalTraffic), sub: 'суммарно по серверам' },
+    { label: 'Серверы', value: `${onlineServers}/${servers.length}`, sub: 'онлайн' },
   ];
 
   const linkBtn = {
