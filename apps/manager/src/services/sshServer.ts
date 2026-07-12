@@ -59,6 +59,19 @@ function runScript(
 const san = (n: string) => (n.replace(/[^\w .-]/g, '').trim().slice(0, 40) || 'device');
 const grab = (out: string, k: string) => out.match(new RegExp('^' + k + '=(.+)$', 'm'))?.[1]?.trim();
 
+// Последовательный доступ к серверу: правки server.json/awg0.conf нельзя делать
+// параллельно (иначе гонка → битый конфиг → xray -test падает, exit 23).
+const serverLocks = new Map<string, Promise<unknown>>();
+function withServerLock<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = serverLocks.get(serverId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  serverLocks.set(
+    serverId,
+    run.catch(() => {}),
+  );
+  return run;
+}
+
 // ── Провижининг сервера с нуля (xray Reality + AmneziaWG) ──
 // Скрипт без bash-${…} (кроме инжектов сверху) — безопасно в JS-шаблоне.
 // Параметры обфускации AWG фиксированы → восстановление по домену требует только приватный ключ.
@@ -243,13 +256,19 @@ export async function sshCreateXray(server: Server, deviceName: string): Promise
   const sni = keys?.xraySni;
   if (!pbk || !sid || !sni) throw new Error('В панели нет reality-ключей этого сервера. Переустановите/зарегистрируйте сервер.');
   const nm = san(deviceName);
-  const script = `set -e
-UUID=$(docker exec amnezia-xray xray uuid)
-python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));c['inbounds'][0]['settings']['clients'].append({'id':'$UUID','flow':'xtls-rprx-vision','email':'${nm}'});json.dump(c,open(p,'w'),indent=2)"
+  const email = `${nm}-${Math.floor(Math.random() * 1e9).toString(36)}`; // уникальный email клиента
+  // Сериализуем правки конфига на сервере (иначе гонка → битый server.json → exit 23).
+  const out = await withServerLock(server.id, () => {
+    const script = `set -e
+UUID=$(cat /proc/sys/kernel/random/uuid)
+# ждём готовности контейнера (мог перезапускаться после прошлой выдачи)
+for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
+python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));c['inbounds'][0]['settings']['clients'].append({'id':'$UUID','flow':'xtls-rprx-vision','email':'${email}'});json.dump(c,open(p,'w'),indent=2)"
 docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null
 docker restart amnezia-xray >/dev/null
 echo "UUID=$UUID"`;
-  const out = await runScript(creds(server.id), script);
+    return runScript(creds(server.id), script, 120000);
+  });
   const uuid = grab(out, 'UUID');
   if (!uuid) throw new Error('Не удалось создать Xray-клиента на сервере.');
   const link =
@@ -278,7 +297,7 @@ p(){ awk -F'= ' -v k="$1" 'index($0,k" ")==1{print $2; exit}' "$CONF"; }
 echo "CPRIV=$CPRIV"; echo "CPUB=$CPUB"; echo "PSK=$PSK"; echo "CIP=$CIP"
 echo "Jc=$(p Jc)"; echo "Jmin=$(p Jmin)"; echo "Jmax=$(p Jmax)"; echo "S1=$(p S1)"; echo "S2=$(p S2)"
 echo "H1=$(p H1)"; echo "H2=$(p H2)"; echo "H3=$(p H3)"; echo "H4=$(p H4)"`;
-  const out = await runScript(creds(server.id), script);
+  const out = await withServerLock(server.id, () => runScript(creds(server.id), script, 60000));
   const cpriv = grab(out, 'CPRIV');
   const cpub = grab(out, 'CPUB');
   const psk = grab(out, 'PSK');
@@ -419,7 +438,7 @@ export async function sshRevokeXray(server: Server, uuid: string): Promise<void>
 python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));c['inbounds'][0]['settings']['clients']=[x for x in c['inbounds'][0]['settings']['clients'] if x.get('id')!='${uuid}'];json.dump(c,open(p,'w'),indent=2)"
 docker restart amnezia-xray >/dev/null
 echo OK`;
-  await runScript(creds(server.id), script);
+  await withServerLock(server.id, () => runScript(creds(server.id), script, 60000));
 }
 
 export async function sshRevokeAwg(server: Server, publicKey: string): Promise<void> {
@@ -427,5 +446,5 @@ export async function sshRevokeAwg(server: Server, publicKey: string): Promise<v
 awg set awg0 peer "${publicKey}" remove || true
 PUB="${publicKey}" python3 -c "import os,re;p='/etc/amnezia/amneziawg/awg0.conf';t=open(p).read();pub=re.escape(os.environ['PUB']);t=re.sub(r'\\n\\[Peer\\][^\\[]*?PublicKey = '+pub+r'[^\\[]*','\\n',t);open(p,'w').write(t)"
 echo OK`;
-  await runScript(creds(server.id), script);
+  await withServerLock(server.id, () => runScript(creds(server.id), script, 60000));
 }
