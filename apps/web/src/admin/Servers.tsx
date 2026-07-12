@@ -55,11 +55,22 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
 
   async function reinstall() {
     setProvBusy('install');
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {
       const comps = server.protocols.length ? (server.protocols as string[]) : ['xray', 'amneziawg'];
-      const r = await api.provisionServer(server.id, comps);
-      await reload();
-      showToast(r.restored ? 'Переустановлено, ключи восстановлены' : 'Установка завершена');
+      await api.provisionServer(server.id, comps);
+      const started = Date.now();
+      for (;;) {
+        await sleep(5000);
+        if (Date.now() - started > 8 * 60 * 1000) throw new Error('Установка заняла слишком долго.');
+        const st = await api.provisionStatus(server.id);
+        if (st.state === 'done') {
+          await reload();
+          showToast(st.restored ? 'Переустановлено, ключи восстановлены' : 'Установка завершена');
+          return;
+        }
+        if (st.state === 'error') throw new Error(st.message);
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Ошибка установки');
     } finally {

@@ -71,7 +71,9 @@ export const httpApi: ApiClient = {
     req<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
   getServerProxy: (id: string) => req<{ proxy: ServerProxyConfig | null; host: string }>('GET', `/api/admin/servers/${id}/proxy`),
   provisionServer: (id: string, components: string[]) =>
-    req<{ ok: boolean; restored: boolean; proxy: ServerProxyConfig | null; server: Server }>('POST', `/api/admin/servers/${id}/provision`, { components }),
+    req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components }),
+  provisionStatus: (id: string) =>
+    req<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>('GET', `/api/admin/servers/${id}/provision-status`),
   uninstallServer: (id: string, purgeKeys?: boolean) => req<Ok>('POST', `/api/admin/servers/${id}/uninstall`, { purgeKeys: !!purgeKeys }),
   setServerDefault: (id) => req<Server[]>('POST', `/api/admin/servers/${id}/default`),
   setServerAutoIssue: (id, on) => req<Server>('POST', `/api/admin/servers/${id}/auto-issue`, { on }),

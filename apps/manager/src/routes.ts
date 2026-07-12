@@ -352,69 +352,69 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
 });
 
 // Полный автоматический провижининг сервера (xray + awg + прокси) с нуля по SSH.
-// Если для домена уже есть ключи — восстановление (старые конфиги живут).
-router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) => {
-  const s = repo.getServer(req.params.id!);
-  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
-  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
-  const b = req.body ?? {};
-  const comps: string[] = Array.isArray(b.components) ? b.components : ['xray', 'amneziawg'];
+// Статус установки в памяти (установка длится минуты — делаем асинхронно, edge рвёт долгие запросы).
+const provisionStatus = new Map<string, { state: 'running' | 'done' | 'error'; message: string; restored?: boolean; at: number }>();
+
+async function runProvision(serverId: string, comps: string[]): Promise<void> {
+  const s = repo.getServer(serverId);
+  if (!s) return;
   const want = {
-    xray: comps.includes('xray'),
-    awg: comps.includes('amneziawg'),
-    http: comps.includes('http'),
-    https: comps.includes('https'),
-    socks: comps.includes('socks5'),
+    xray: comps.includes('xray'), awg: comps.includes('amneziawg'),
+    http: comps.includes('http'), https: comps.includes('https'), socks: comps.includes('socks5'),
   };
   try {
-    // Восстановление по домену: если есть приватные ключи — переустанавливаем с ними.
     const prev = getServerKeys(s.host);
     const restoring = !!(prev?.xrayRealityPrivKey || prev?.awgServerPrivKey);
+    provisionStatus.set(serverId, { state: 'running', message: restoring ? 'Переустановка с восстановлением…' : 'Устанавливаем VPN…', at: Date.now() });
     const installed = want.xray || want.awg
       ? await sshInstallServer(s, {
-          xray: want.xray,
-          awg: want.awg,
-          // Параметры прежней установки — ТОЛЬКО при восстановлении; иначе свежая (SNI=vk.com).
+          xray: want.xray, awg: want.awg,
           sni: restoring ? prev?.xraySni : undefined,
           realityPriv: restoring ? prev?.xrayRealityPrivKey : undefined,
           shortId: restoring ? prev?.xrayShortId : undefined,
           awgPriv: restoring ? prev?.awgServerPrivKey : undefined,
         })
       : {};
-    // Сохраняем ВСЕ ключи (включая приватные) — для будущего восстановления по домену.
     saveServerKeys(s.host, {
-      xrayRealityPrivKey: installed.realityPriv,
-      xrayRealityPubKey: installed.realityPub,
-      xrayShortId: installed.shortId,
-      xraySni: installed.sni,
-      awgServerPrivKey: installed.awgPriv,
-      awgServerPubKey: installed.awgPub,
+      xrayRealityPrivKey: installed.realityPriv, xrayRealityPubKey: installed.realityPub,
+      xrayShortId: installed.shortId, xraySni: installed.sni,
+      awgServerPrivKey: installed.awgPriv, awgServerPubKey: installed.awgPub,
     });
-    // Прокси (если выбраны).
-    let proxy = null;
     if (want.http || want.https || want.socks) {
-      proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks });
+      provisionStatus.set(serverId, { state: 'running', message: 'Устанавливаем прокси…', at: Date.now() });
+      const proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks });
       saveServerProxy(s.host, proxy);
     }
-    // Восстановление устройств: если переустановили с прежними ключами — вернуть пиры.
     if (restoring) {
       const devs = repo.getServerDevicesForResync(s.id).map((d) => ({
-        name: d.name,
-        protocol: d.protocol,
-        uuid: d.uuid,
-        awgPub: d.publicKey,
-        clientIp: d.clientIp,
+        name: d.name, protocol: d.protocol, uuid: d.uuid, awgPub: d.publicKey, clientIp: d.clientIp,
         psk: d.presharedKeyEnc ? decryptSecret(d.presharedKeyEnc) : null,
       }));
       if (devs.length) await sshResyncDevices(s, devs);
     }
-    const protocols = [...comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p))];
+    const protocols = comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p));
     repo.updateServerFields(s.id, { protocols: JSON.stringify(protocols), agent: 'online', endpoint_ok: 1, last_sync_at: repo.nowIso() });
     repo.addLog(`${restoring ? 'Переустановлен' : 'Установлен'} сервер «${s.name}» (${protocols.join(', ')})`);
-    res.json({ ok: true, restored: restoring, proxy, server: repo.getServer(s.id) });
+    provisionStatus.set(serverId, { state: 'done', message: 'Установка завершена.', restored: restoring, at: Date.now() });
   } catch (e) {
-    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки.'));
+    provisionStatus.set(serverId, { state: 'error', message: e instanceof Error ? e.message : 'Ошибка установки.', at: Date.now() });
   }
+}
+
+// Если для домена уже есть ключи — восстановление (старые конфиги живут). Асинхронно.
+router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  if (provisionStatus.get(s.id)?.state === 'running') return res.json({ ok: true, running: true });
+  const comps: string[] = Array.isArray(req.body?.components) ? req.body.components : ['xray', 'amneziawg'];
+  provisionStatus.set(s.id, { state: 'running', message: 'Запуск установки…', at: Date.now() });
+  void runProvision(s.id, comps); // не ждём — статус опрашивается отдельно
+  res.json({ ok: true, running: true });
+});
+
+router.get('/api/admin/servers/:id/provision-status', requireAdmin, (req, res) => {
+  res.json(provisionStatus.get(req.params.id!) ?? { state: 'idle', message: '' });
 });
 
 // Полное удаление ПО с сервера (xray/awg/прокси). Пользователи и подписки в панели не трогаются.

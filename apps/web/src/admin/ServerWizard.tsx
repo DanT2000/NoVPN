@@ -137,13 +137,29 @@ export function ServerWizard() {
       }
     }, 2500);
     (async () => {
+      const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
       try {
         const srv = await addServer(buildInput());
-        const r = await api.provisionServer(srv.id, components());
-        setLog((prev) => [...prev, r.restored ? '✓ Переустановлено, ключи восстановлены' : '✓ Установка завершена']);
-        setPct(100);
-        await reload();
-        setStep(5);
+        await api.provisionServer(srv.id, components()); // запуск (асинхронно на сервере)
+        const started = Date.now();
+        let lastMsg = '';
+        for (;;) {
+          await sleep(5000);
+          if (Date.now() - started > 8 * 60 * 1000) throw new Error('Установка заняла слишком долго — проверьте сервер.');
+          const st = await api.provisionStatus(srv.id);
+          if (st.message && st.message !== lastMsg) {
+            lastMsg = st.message;
+            setLog((prev) => [...prev, st.message]);
+          }
+          if (st.state === 'done') {
+            setLog((prev) => [...prev, st.restored ? '✓ Ключи восстановлены' : '✓ Установка завершена']);
+            setPct(100);
+            await reload();
+            setStep(5);
+            return;
+          }
+          if (st.state === 'error') throw new Error(st.message);
+        }
       } catch (e) {
         setInstallErr(e instanceof Error ? e.message : 'Ошибка установки. Проверьте SSH-доступ и повторите.');
       } finally {

@@ -289,12 +289,16 @@ export const mockApi: ApiClient = {
     return { proxy: null, host: s.host };
   },
   async provisionServer(id: string, components: string[]) {
-    await wait(1200);
+    await wait(600);
     const s = state.servers.find((x) => x.id === id)!;
     s.protocols = components.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)) as Server['protocols'];
     s.agent = 'online';
     s.endpointOk = true;
-    return { ok: true, restored: false, proxy: null, server: clone(s) };
+    return { ok: true, running: false };
+  },
+  async provisionStatus(_id: string) {
+    await wait(150);
+    return { state: 'done' as const, message: 'Установка завершена.', restored: false };
   },
   async uninstallServer(id: string, _purgeKeys?: boolean): Promise<Ok> {
     await wait(500);

@@ -263,7 +263,7 @@ export async function sshCreateAwg(
   const script = `set -e
 CONF=/etc/amnezia/amneziawg/awg0.conf
 CPRIV=$(awg genkey); CPUB=$(printf '%s' "$CPRIV" | awg pubkey); PSK=$(awg genpsk)
-USED=$(grep -oE 'AllowedIPs = 10\\.8\\.1\\.[0-9]+' "$CONF" | grep -oE '[0-9]+$')
+USED=$(grep -oE 'AllowedIPs = 10\\.8\\.1\\.[0-9]+' "$CONF" | grep -oE '[0-9]+$' || true)
 N=2; while echo "$USED" | grep -qx "$N"; do N=$((N+1)); done
 CIP=10.8.1.$N
 printf '%s' "$PSK" | awg set awg0 peer "$CPUB" preshared-key /dev/stdin allowed-ips \${CIP}/32

@@ -133,7 +133,8 @@ export interface ApiClient {
   editServer(id: string, input: EditServerInput): Promise<Server>;
   installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
   getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
-  provisionServer(id: string, components: string[]): Promise<{ ok: boolean; restored: boolean; proxy: ServerProxyConfig | null; server: Server }>;
+  provisionServer(id: string, components: string[]): Promise<{ ok: boolean; running: boolean }>;
+  provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;
   uninstallServer(id: string, purgeKeys?: boolean): Promise<Ok>;
   setServerDefault(id: string): Promise<Server[]>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
