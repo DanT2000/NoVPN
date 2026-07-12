@@ -223,9 +223,25 @@ export async function sshResyncDevices(
       lines.push(`printf '%s\\t%s\\n' '${c.id}' '${nm}' >> /tmp/novpn-xray-clients`);
     }
     lines.push(
-      `python3 -c 'import json;p="/opt/amnezia/xray/server.json";c=json.load(open(p));cl=c["inbounds"][0]["settings"]["clients"];ex={x.get("id") for x in cl};` +
-        `[cl.append({"id":u,"flow":"xtls-rprx-vision","email":n}) for u,n in (l.rstrip("\\n").split("\\t") for l in open("/tmp/novpn-xray-clients")) if u not in ex];` +
-        `json.dump(c,open(p,"w"),indent=2)'`,
+      `python3 <<'PY'
+import json
+p="/opt/amnezia/xray/server.json"
+c=json.load(open(p))
+cl=c["inbounds"][0]["settings"]["clients"]
+ex={x.get("id") for x in cl}
+for l in open("/tmp/novpn-xray-clients"):
+    parts=l.rstrip("\\n").split("\\t")
+    u=parts[0]; n=parts[1] if len(parts)>1 else u
+    if u and u not in ex:
+        cl.append({"id":u,"flow":"xtls-rprx-vision","email":n}); ex.add(u)
+seen=set()
+for x in cl:
+    e=x.get("email") or x["id"]; base=e; i=1
+    while e in seen:
+        e=base+"-"+str(i); i+=1
+    x["email"]=e; seen.add(e)
+json.dump(c,open(p,"w"),indent=2)
+PY`,
       'docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null 2>&1 && docker restart amnezia-xray >/dev/null 2>&1 || true',
     );
   }
@@ -257,13 +273,28 @@ export async function sshCreateXray(server: Server, deviceName: string): Promise
   if (!pbk || !sid || !sni) throw new Error('В панели нет reality-ключей этого сервера. Переустановите/зарегистрируйте сервер.');
   const nm = san(deviceName);
   const email = `${nm}-${Math.floor(Math.random() * 1e9).toString(36)}`; // уникальный email клиента
-  // Сериализуем правки конфига на сервере (иначе гонка → битый server.json → exit 23).
+  // Сериализуем правки конфига (иначе гонка → битый server.json → exit 23).
+  // Плюс делаем email всех клиентов уникальными (xray требует уникальный email,
+  // иначе -test падает «User … already exists») — самоисцеление старых дублей.
   const out = await withServerLock(server.id, () => {
     const script = `set -e
 UUID=$(cat /proc/sys/kernel/random/uuid)
-# ждём готовности контейнера (мог перезапускаться после прошлой выдачи)
 for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
-python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));c['inbounds'][0]['settings']['clients'].append({'id':'$UUID','flow':'xtls-rprx-vision','email':'${email}'});json.dump(c,open(p,'w'),indent=2)"
+python3 - "$UUID" '${email}' <<'PY'
+import json,sys
+uuid,email=sys.argv[1],sys.argv[2]
+p='/opt/amnezia/xray/server.json'
+c=json.load(open(p))
+cl=c['inbounds'][0]['settings']['clients']
+cl.append({'id':uuid,'flow':'xtls-rprx-vision','email':email})
+seen=set()
+for x in cl:
+    e=x.get('email') or x['id']; base=e; i=1
+    while e in seen:
+        e=base+'-'+str(i); i+=1
+    x['email']=e; seen.add(e)
+json.dump(c,open(p,'w'),indent=2)
+PY
 docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null
 docker restart amnezia-xray >/dev/null
 echo "UUID=$UUID"`;
