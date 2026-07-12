@@ -5,7 +5,7 @@ import { useState } from 'react';
 import type { IssueDeviceResult, Protocol, Server, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
-import { Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader } from '../components/ui';
+import { CategoryPicker, Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader } from '../components/ui';
 import { Qr } from '../components/Qr';
 import { dateShort, daysLeft, gb, rel, DAY_MS } from '../lib/format';
 import { countActiveDevices, devStatusOf, serverAgentView, statusOf } from '../lib/status';
@@ -417,19 +417,12 @@ function UserCardInner({ user }: { user: User }) {
           <Field label="Имя">
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="Категория" hint="из списка или своя (напр. «Церковь»)">
-            <input
-              className="input"
-              list="user-categories-edit"
-              placeholder="Общие"
+          <Field label="Категория" hint="можно менять из списка или задать свою">
+            <CategoryPicker
               value={category}
-              onChange={(e) => changeCategory(e.target.value)}
+              onChange={changeCategory}
+              suggestions={[...CATEGORIES, ...(data?.users.map((u) => u.category ?? '') ?? [])]}
             />
-            <datalist id="user-categories-edit">
-              {Array.from(new Set([...CATEGORIES, ...(data?.users.map((u) => u.category ?? '').filter(Boolean) ?? [])])).map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
           </Field>
           <Field label="Комментарий">
             <input className="input" placeholder="Виден только вам" value={comment} onChange={(e) => setComment(e.target.value)} />

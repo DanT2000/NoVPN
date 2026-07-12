@@ -1,7 +1,66 @@
 // Мелкие переиспользуемые примитивы UI. Стили — из components.css / theme.css.
 
-import React from 'react';
+import React, { useState } from 'react';
 import type { StatusView } from '../lib/status';
+
+/** Выбор категории: свободно меняется из списка + опция «своя». */
+export function CategoryPicker({
+  value,
+  onChange,
+  suggestions,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  suggestions: string[];
+}) {
+  const known = Array.from(new Set(suggestions.filter(Boolean)));
+  const [custom, setCustom] = useState(value !== '' && !known.includes(value));
+
+  if (custom) {
+    return (
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <input
+          className="input"
+          style={{ flex: '1 1 160px' }}
+          placeholder="Своя категория (напр. Церковь)"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => {
+            setCustom(false);
+            onChange(known[0] ?? 'Общие');
+          }}
+        >
+          Из списка
+        </button>
+      </div>
+    );
+  }
+  return (
+    <select
+      className="select"
+      value={known.includes(value) ? value : (known[0] ?? '')}
+      onChange={(e) => {
+        if (e.target.value === '__custom__') {
+          setCustom(true);
+          onChange('');
+        } else {
+          onChange(e.target.value);
+        }
+      }}
+    >
+      {known.map((c) => (
+        <option key={c} value={c}>
+          {c}
+        </option>
+      ))}
+      <option value="__custom__">➕ Своя категория…</option>
+    </select>
+  );
+}
 
 export function Wordmark({ suffix }: { suffix?: string }) {
   return (
@@ -136,8 +195,8 @@ export function ScreenHeader({
   back?: () => void; eyebrow?: string; title: React.ReactNode; right?: React.ReactNode;
 }) {
   return (
-    <div className="row-between" style={{ marginBottom: 18, alignItems: 'flex-start' }}>
-      <div className="row" style={{ gap: 12, alignItems: 'center', minWidth: 0 }}>
+    <div className="row-between" style={{ marginBottom: 18, alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div className="row" style={{ gap: 12, alignItems: 'center', minWidth: 0, flex: '1 1 auto' }}>
         {back ? <BackButton onClick={back} /> : null}
         <div style={{ minWidth: 0 }}>
           {eyebrow ? <div className="eyebrow" style={{ marginBottom: 4 }}>{eyebrow}</div> : null}

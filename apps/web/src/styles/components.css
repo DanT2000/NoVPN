@@ -377,3 +377,22 @@
     grid-template-columns: 1fr;
   }
 }
+@media (max-width: 560px) {
+  /* На узких экранах строки не должны выезжать за край. */
+  .divide-row {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+  }
+  .row-between {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .input,
+  .textarea,
+  .select {
+    font-size: 16px; /* iOS не зумит поле при фокусе */
+  }
+  .btn {
+    min-height: 40px;
+  }
+}

@@ -130,6 +130,8 @@ export interface TelegramSettings {
   template: string;
   status: 'running' | 'stopped' | 'error';
   linkedUserIds: string[];
+  /** @username бота (узнаётся автоматически) — для ссылки-привязки. */
+  botUsername?: string | null;
 }
 
 export interface AppSettings {

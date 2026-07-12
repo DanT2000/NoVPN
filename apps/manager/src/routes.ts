@@ -1,7 +1,6 @@
 // Все HTTP-роуты. Пути совпадают с httpApi фронтенда.
 
 import net from 'node:net';
-import { ProxyAgent } from 'undici';
 import { Router } from 'express';
 import type {
   AppSettings,
@@ -16,14 +15,8 @@ import { agentService } from './services/agent.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
-
-// Выпуск конфига: по SSH (реальный сервер) или через mock-агент (dev).
-async function createXrayCfg(server: import('@novpn/shared').Server, name: string) {
-  return (await sshHasSshAccess(server.id)) ? sshCreateXray(server, name) : agentService.createXray(server, name);
-}
-async function createAwgCfg(server: import('@novpn/shared').Server, name: string) {
-  return (await sshHasSshAccess(server.id)) ? sshCreateAwg(server, name) : agentService.createAmneziaWG(server, name);
-}
+import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
+import { resolveTgProxyUrl, restartBot, tgApi } from './services/telegram.js';
 import * as repo from './repo.js';
 
 export const router = Router();
@@ -59,31 +52,6 @@ router.post('/api/public/check-code', (req, res) => {
   res.json({ user: toPublicUserView(u) });
 });
 
-async function issueForUser(user: User, name: string, serverId: string, protocol: 'xray' | 'amneziawg'): Promise<IssueDeviceResult> {
-  const server = repo.getServer(serverId);
-  if (!server) throw new Error('Сервер не найден.');
-  if (!user.allowedServers.includes(serverId)) throw new Error('Сервер недоступен для этого пользователя.');
-  if (!user.allowedProtocols.includes(protocol)) throw new Error('Протокол недоступен для этого пользователя.');
-  if (!server.protocols.includes(protocol)) throw new Error('Сервер не поддерживает этот протокол.');
-
-  if (protocol === 'xray') {
-    const r = await createXrayCfg(server, name);
-    const device = repo.insertDevice({ userId: user.id, name, serverId, protocol, uuid: r.uuid, publicKey: r.publicKey, link: r.link });
-    repo.addHistory(user.id, `Выпущен конфиг «${name}» (Xray, ${server.name})`);
-    return { device, link: r.link };
-  }
-  const r = await createAwgCfg(server, name);
-  const device = repo.insertDevice({
-    userId: user.id, name, serverId, protocol, publicKey: r.publicKey,
-    privateKeyEnc: encryptSecret(r.privateKey), presharedKeyEnc: encryptSecret(r.presharedKey),
-    clientIp: r.clientIp, conf: r.conf,
-  });
-  repo.addHistory(user.id, `Выпущен конфиг «${name}» (AmneziaWG, ${server.name})`);
-  return {
-    device, conf: r.conf, vpnKeyAvailable: false,
-    vpnKeyNote: 'Официальный ключ vpn:// пока недоступен через текущий стек. Используйте .conf в совместимых приложениях.',
-  };
-}
 
 // ── public: issue device ──
 router.post('/api/public/devices', async (req, res) => {
@@ -509,34 +477,11 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
   }
   next.status = next.enabled ? (next.tokenMasked ? 'running' : 'stopped') : 'stopped';
   repo.saveTelegramRaw(next);
+  restartBot(); // применяем новые настройки к боту (вкл/выкл, токен, прокси)
   // Ответ без секретных полей.
   const { tokenEnc: _t, proxyPassEnc: _p, ...safe } = next as TelegramSettings & { tokenEnc?: string; proxyPassEnc?: string };
   res.json(safe);
 });
-
-// URL прокси для запросов к Telegram (если в настройках включён прокси).
-// Прод-сервер в РФ обычно НЕ достаёт api.telegram.org напрямую → нужен прокси.
-function resolveTgProxyUrl(): string | null {
-  const tg = repo.getTelegram();
-  if (!tg?.proxyOn) return null;
-  const enc = encodeURIComponent;
-  if (tg.proxySource === 'server' && tg.proxyServerId) {
-    const srv = repo.getServer(tg.proxyServerId);
-    if (!srv) return null;
-    const p = getServerProxy(srv.host);
-    if (!p) return null;
-    if (p.httpsPort && p.httpsHost) return `https://${enc(p.user)}:${enc(p.pass)}@${p.httpsHost}:${p.httpsPort}`;
-    if (p.httpPort) return `http://${enc(p.user)}:${enc(p.pass)}@${srv.host}:${p.httpPort}`;
-    return null;
-  }
-  if (tg.proxyHost && tg.proxyPort && (tg.proxyType === 'http' || tg.proxyType === 'https')) {
-    const encPass = (tg as unknown as { proxyPassEnc?: string }).proxyPassEnc;
-    const pass = encPass ? decryptSecret(encPass) : '';
-    const authp = tg.proxyLogin ? `${enc(tg.proxyLogin)}:${enc(pass)}@` : '';
-    return `${tg.proxyType}://${authp}${tg.proxyHost}:${tg.proxyPort}`;
-  }
-  return null;
-}
 
 router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
   // Если новый токен не введён — проверяем СОХРАНЁННЫЙ (расшифровываем).
@@ -555,22 +500,20 @@ router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
     return res.json({ ok: false, message: 'Токен не задан или неверного формата (ожидается 123456:AA...).' });
   const proxyUrl = resolveTgProxyUrl();
   try {
-    const opts: RequestInit & { dispatcher?: ProxyAgent } = { signal: AbortSignal.timeout(15000) };
-    if (proxyUrl) opts.dispatcher = new ProxyAgent(proxyUrl);
-    const r = await fetch(`https://api.telegram.org/bot${token}/getMe`, opts);
-    const d = (await r.json()) as { ok: boolean; result?: { username?: string }; description?: string };
-    if (d.ok && d.result?.username)
-      return res.json({ ok: true, message: `Бот @${d.result.username} отвечает${proxyUrl ? ' (через прокси)' : ''}.` });
-    return res.json({ ok: false, message: `Telegram отклонил токен: ${d.description ?? 'неизвестная ошибка'}` });
+    const me = await tgApi<{ username?: string }>('getMe', {}, token);
+    if (me?.username) return res.json({ ok: true, message: `Бот @${me.username} отвечает${proxyUrl ? ' (через прокси)' : ''}.` });
+    return res.json({ ok: false, message: 'Telegram не вернул данные бота.' });
   } catch (e) {
-    const timedOut = e instanceof Error && /timeout|aborted/i.test(e.message);
+    const msg = e instanceof Error ? e.message : '';
+    const timedOut = /timeout|aborted|fetch failed/i.test(msg);
+    if (/unauthorized/i.test(msg)) return res.json({ ok: false, message: 'Telegram отклонил токен (Unauthorized). Проверьте токен.' });
     return res.json({
       ok: false,
       message: proxyUrl
         ? 'Не удалось связаться с Telegram через прокси. Проверьте, что прокси на сервере работает.'
         : timedOut
           ? 'Telegram недоступен напрямую с сервера (вероятно, заблокирован). Включите прокси для бота и повторите.'
-          : 'Не удалось связаться с Telegram API.',
+          : `Ошибка связи с Telegram: ${msg}`,
     });
   }
 });

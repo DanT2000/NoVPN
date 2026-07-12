@@ -3,6 +3,7 @@ import { useApp } from '../store/AppStore';
 import { Dot } from '../components/ui';
 import { dateShort, daysLeft, gb, plural } from '../lib/format';
 import { statusOf } from '../lib/status';
+import { openUrl } from '../lib/clipboard';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -41,6 +42,7 @@ export function Cabinet() {
     .filter(Boolean)
     .join(' · ');
   const protoNames = user.allowedProtocols.map((p) => PROTOCOL_LABELS[p]).join(' · ');
+  const botReady = !!(data.telegram?.enabled && data.telegram?.botUsername);
 
   const devSub = devices.length
     ? devices.slice(0, 2).map((d) => d.name).join(', ')
@@ -106,11 +108,17 @@ export function Cabinet() {
       <div className="grid-2">
         <Tile title="Мои устройства" sub={devSub} onClick={() => goPublic('devices')} />
         <Tile
-          title="Telegram"
-          sub={user.telegramLinked ? 'Привязан' : 'Не привязан'}
-          onClick={() =>
-            showToast(user.telegramLinked ? 'Telegram привязан' : 'Привязка Telegram — через бота, когда администратор его включит')
-          }
+          title="Telegram-бот"
+          sub={user.telegramLinked ? 'Привязан' : botReady ? 'Привязать' : 'Не подключён'}
+          onClick={() => {
+            if (user.telegramLinked) return showToast('Telegram уже привязан. Напишите боту /config для новой конфигурации.');
+            if (botReady) {
+              openUrl(`https://t.me/${data.telegram.botUsername}?start=${user.code}`);
+              showToast('Открываем бота — нажмите «Запустить», привязка произойдёт автоматически.');
+            } else {
+              showToast('Бот пока не настроен администратором.');
+            }
+          }}
         />
       </div>
 
