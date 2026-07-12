@@ -17,7 +17,8 @@
     "better-sqlite3": "^11.5.0",
     "express": "^4.21.1",
     "express-session": "^1.18.1",
-    "ssh2": "^1.16.0"
+    "ssh2": "^1.16.0",
+    "undici": "^6.21.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

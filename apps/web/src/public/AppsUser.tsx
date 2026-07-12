@@ -23,6 +23,13 @@ function normalizeUrl(u: string): string {
   const t = u.trim();
   return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 }
+/** Определяем магазин по ссылке — для понятной подписи кнопки. */
+function storeOf(url: string): string | null {
+  if (/play\.google\.com/i.test(url)) return 'Google Play';
+  if (/apps\.apple\.com|itunes\.apple/i.test(url)) return 'App Store';
+  if (/(microsoft\.com\/.*store|apps\.microsoft)/i.test(url)) return 'Microsoft Store';
+  return null;
+}
 
 export function AppsUser() {
   const { data, publicUser, goPublic } = useApp();
@@ -83,15 +90,20 @@ export function AppsUser() {
               </p>
             ) : null}
 
-            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               {entry.url ? (
-                <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
-                  Установить / скачать
-                </button>
+                (() => {
+                  const store = storeOf(entry.url);
+                  return (
+                    <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
+                      {store ? `Установить · ${store}` : 'Открыть / скачать'}
+                    </button>
+                  );
+                })()
               ) : null}
               {entry.file ? (
                 <button className="btn btn-secondary btn-sm" onClick={() => downloadUrl(isDataFile(entry.file) ? dataFileName(entry.file) : 'file', entry.file!)}>
-                  Скачать файл
+                  ⬇ Скачать файл{isDataFile(entry.file) ? ` (${dataFileName(entry.file)})` : ''}
                 </button>
               ) : null}
               {a.source ? (

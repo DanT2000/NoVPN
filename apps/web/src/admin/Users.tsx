@@ -63,12 +63,24 @@ export function Users() {
   const total = users.length;
   const title = `${total} ${plural(total, 'пользователь', 'пользователя', 'пользователей')}`;
 
-  const metrics = (u: User): string => {
+  const metricParts = (u: User) => {
     const active = countActiveDevices(u.id, devices);
-    const devLine = `${active}/${u.deviceLimit ?? '∞'} устр`;
-    const trafLine = `${gb(u.trafficUsedGb)}/${gb(u.trafficLimitGb)}`;
-    const expLine = u.expiresAt ? dateShort(u.expiresAt) : 'бессрочно';
-    return `${devLine} · ${trafLine} · ${expLine}`;
+    return {
+      dev: `${active}/${u.deviceLimit ?? '∞'}`,
+      traf: `${gb(u.trafficUsedGb)} / ${gb(u.trafficLimitGb)}`,
+      exp: u.expiresAt ? dateShort(u.expiresAt) : 'бессрочно',
+    };
+  };
+  // Ровные колонки: одинаковая ширина у каждого показателя во всех строках.
+  const Metrics = ({ u }: { u: User }) => {
+    const m = metricParts(u);
+    return (
+      <>
+        <span className="small mono muted" style={{ minWidth: 52, textAlign: 'right' }} title="устройства">{m.dev}</span>
+        <span className="small mono muted" style={{ minWidth: 116, textAlign: 'right' }} title="трафик">{m.traf}</span>
+        <span className="small mono muted" style={{ minWidth: 92, textAlign: 'right' }} title="срок">{m.exp}</span>
+      </>
+    );
   };
 
   return (
@@ -131,11 +143,11 @@ export function Users() {
                     </div>
                     {catTags ? <div className="small muted" style={{ marginTop: 2 }}>{catTags}</div> : null}
                     {isMobile ? (
-                      <div className="small mono muted" style={{ marginTop: 4 }}>{metrics(u)}</div>
+                      <div className="row" style={{ gap: 10, marginTop: 4 }}><Metrics u={u} /></div>
                     ) : null}
                   </div>
-                  <div className="row" style={{ gap: 16, flex: 'none' }}>
-                    {isMobile ? null : <span className="small mono muted">{metrics(u)}</span>}
+                  <div className="row" style={{ gap: 14, flex: 'none', alignItems: 'center' }}>
+                    {isMobile ? null : <Metrics u={u} />}
                     <Pill s={statusOf(u)} size="sm" />
                     <span
                       onClick={(e) => e.stopPropagation()}

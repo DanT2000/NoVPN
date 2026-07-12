@@ -107,14 +107,13 @@ export function Telegram() {
             </div>
           </Field>
 
-          <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>
-              Сохранить
-            </button>
-            <button className="btn btn-secondary" disabled={testing} onClick={() => void runTest()}>
-              {testing ? 'Проверяем…' : token.trim() ? 'Проверить введённый токен' : 'Проверить сохранённого бота'}
-            </button>
-          </div>
+          <button className="btn btn-secondary" disabled={testing} onClick={() => void runTest()}>
+            {testing ? 'Проверяем…' : token.trim() ? 'Проверить введённый токен' : 'Проверить сохранённого бота'}
+          </button>
+          <span className="small muted">
+            Сначала сохраните бота и прокси (кнопка внизу), затем проверяйте. Если сервер в РФ — Telegram обычно
+            недоступен напрямую, включите прокси для бота.
+          </span>
 
           {testResult ? (
             <div className={testResult.ok ? 'notice notice-green' : 'notice notice-red'}>
@@ -171,6 +170,18 @@ export function Telegram() {
                     </select>
                   )}
                   <span className="small muted">Адрес прокси возьмётся с этого сервера (порт по типу прокси).</span>
+                  {(() => {
+                    const srv = data.servers.find((s) => s.id === proxyServerId);
+                    const hasProxy = srv && (srv.protocols as string[]).some((p) => ['http', 'https', 'socks5'].includes(p));
+                    if (srv && !hasProxy)
+                      return (
+                        <div className="notice notice-amber small" style={{ marginTop: 6 }}>
+                          На «{srv.name}» ещё не установлены прокси. Откройте раздел «Серверы» → «Изменить» → «Установить прокси»
+                          (для бота обычно нужен HTTP или HTTPS), иначе бот не сможет ходить в Telegram.
+                        </div>
+                      );
+                    return null;
+                  })()}
                 </Field>
               ) : (
                 <div className="grid-2">
@@ -231,6 +242,10 @@ export function Telegram() {
             </div>
           )}
         </Panel>
+
+        <button className="btn btn-primary btn-lg btn-block" disabled={saving} onClick={() => void save()}>
+          {saving ? 'Сохраняем…' : 'Сохранить настройки Telegram'}
+        </button>
       </div>
     </>
   );

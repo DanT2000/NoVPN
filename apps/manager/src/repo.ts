@@ -112,6 +112,15 @@ export function listServerDeviceKeys(
     db.prepare('SELECT id, user_id, public_key, uuid, protocol FROM devices WHERE server_id = ? AND public_key IS NOT NULL').all(serverId) as any[]
   ).map((r) => ({ id: r.id, userId: r.user_id ?? null, publicKey: r.public_key ?? null, uuid: r.uuid ?? null, protocol: r.protocol }));
 }
+/** Активные устройства сервера с полями для повторного провижининга (после восстановления). */
+export function getServerDevicesForResync(
+  serverId: string,
+): Array<{ name: string; protocol: string; uuid: string | null; publicKey: string | null; clientIp: string | null; presharedKeyEnc: string | null }> {
+  return (
+    db.prepare('SELECT name, protocol, uuid, public_key, client_ip, preshared_key_enc FROM devices WHERE server_id = ? AND is_active = 1').all(serverId) as any[]
+  ).map((r) => ({ name: r.name, protocol: r.protocol, uuid: r.uuid ?? null, publicKey: r.public_key ?? null, clientIp: r.client_ip ?? null, presharedKeyEnc: r.preshared_key_enc ?? null }));
+}
+
 /** Пересчёт расхода трафика и последней активности пользователя из ВСЕХ его устройств. */
 export function recomputeUserUsage(userId: string): void {
   const row = db

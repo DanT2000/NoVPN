@@ -71,7 +71,7 @@ function CheckRow({
 }
 
 export function ServerWizard() {
-  const { goAdmin, addServer } = useApp();
+  const { goAdmin, addServer, reload } = useApp();
   const [step, setStep] = useState(1);
 
   // Шаг 1 — данные
@@ -96,6 +96,7 @@ export function ServerWizard() {
   // Шаг 4 — установка
   const [pct, setPct] = useState(0);
   const [log, setLog] = useState<string[]>([]);
+  const [installErr, setInstallErr] = useState<string | null>(null);
   const addedRef = useRef(false);
 
   const components = (): Component[] => {
@@ -118,33 +119,42 @@ export function ServerWizard() {
     country: country || null,
   });
 
-  // Симуляция установки на шаге 4.
+  // РЕАЛЬНАЯ установка на шаге 4: добавляем сервер и провижиним его по SSH.
   useEffect(() => {
-    if (step !== 4) return;
-    setPct(0);
-    setLog([]);
-    addedRef.current = false;
-    let i = 0;
-    let p = 0;
-    const inc = Math.ceil(100 / INSTALL_LOG.length);
-    const timer = window.setInterval(() => {
-      if (i < INSTALL_LOG.length) {
-        const line = INSTALL_LOG[i];
+    if (step !== 4 || addedRef.current) return;
+    addedRef.current = true;
+    setPct(4);
+    setLog(['Добавляем сервер…']);
+    setInstallErr(null);
+    // Косметический прогресс, пока идёт реальная установка (до нескольких минут).
+    const timer = window.setInterval(() => setPct((p) => Math.min(92, p + 2)), 1600);
+    let li = 0;
+    const logTimer = window.setInterval(() => {
+      if (li < INSTALL_LOG.length) {
+        const line = INSTALL_LOG[li];
         if (line) setLog((prev) => [...prev, line]);
-        i += 1;
+        li += 1;
       }
-      p = Math.min(100, p + inc);
-      setPct(p);
-      if (i >= INSTALL_LOG.length && p >= 100) {
-        window.clearInterval(timer);
+    }, 2500);
+    (async () => {
+      try {
+        const srv = await addServer(buildInput());
+        const r = await api.provisionServer(srv.id, components());
+        setLog((prev) => [...prev, r.restored ? '✓ Переустановлено, ключи восстановлены' : '✓ Установка завершена']);
         setPct(100);
-        if (!addedRef.current) {
-          addedRef.current = true;
-          void addServer(buildInput()).then(() => setStep(5));
-        }
+        await reload();
+        setStep(5);
+      } catch (e) {
+        setInstallErr(e instanceof Error ? e.message : 'Ошибка установки. Проверьте SSH-доступ и повторите.');
+      } finally {
+        window.clearInterval(timer);
+        window.clearInterval(logTimer);
       }
-    }, 380);
-    return () => window.clearInterval(timer);
+    })();
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(logTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -210,9 +220,12 @@ export function ServerWizard() {
           </Field>
           {isIpLike(host) ? (
             <div className="notice notice-amber small">
-              ⚠️ Рекомендуем указывать <b>домен</b>, а не IP. Подписки, выпущенные на IP-адрес,
-              привязаны к нему: при удалении сервера они станут недействительными. Домен можно
-              переназначить на другой сервер — подписки сохранятся.
+              ⚠️ Рекомендуем указывать <b>домен</b>, а не IP. С IP-адресом:
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                <li>подписки привязаны к IP — при смене сервера станут недействительными (нет восстановления по домену);</li>
+                <li>нельзя выпустить <b>HTTPS-прокси</b> (для него нужен домен и TLS-сертификат).</li>
+              </ul>
+              С доменом можно переназначить его на другой сервер — и старые конфиги продолжат работать.
             </div>
           ) : null}
           {host.trim() && !isValidHost(host) ? (
@@ -331,10 +344,13 @@ export function ServerWizard() {
       {step === 4 ? (
         <div className="stack" style={{ maxWidth: 560 }}>
           <div className="row-between" style={{ gap: 12 }}>
-            <span style={{ fontWeight: 700 }}>Установка…</span>
+            <span style={{ fontWeight: 700 }}>{installErr ? 'Ошибка установки' : 'Устанавливаем ПО…'}</span>
             <span className="mono" style={{ color: 'var(--text-muted)' }}>{pct}%</span>
           </div>
           <ProgressBar pct={pct} />
+          {!installErr ? (
+            <span className="small muted">Реальная установка на сервер по SSH — это может занять 1–3 минуты. Не закрывайте страницу.</span>
+          ) : null}
           <pre
             className="mono"
             style={{
@@ -345,6 +361,25 @@ export function ServerWizard() {
           >
             {log.map((line) => `→ ${line}`).join('\n')}
           </pre>
+          {installErr ? (
+            <>
+              <div className="notice notice-red small">{installErr}</div>
+              <div className="row" style={{ gap: 8 }}>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    addedRef.current = false;
+                    setInstallErr(null);
+                    setPct(0);
+                    setLog([]);
+                    setStep(3);
+                  }}
+                >
+                  Назад к настройке
+                </button>
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
 

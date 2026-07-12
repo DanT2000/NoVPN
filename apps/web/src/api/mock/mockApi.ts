@@ -288,6 +288,21 @@ export const mockApi: ApiClient = {
     const s = state.servers.find((x) => x.id === id)!;
     return { proxy: null, host: s.host };
   },
+  async provisionServer(id: string, components: string[]) {
+    await wait(1200);
+    const s = state.servers.find((x) => x.id === id)!;
+    s.protocols = components.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)) as Server['protocols'];
+    s.agent = 'online';
+    s.endpointOk = true;
+    return { ok: true, restored: false, proxy: null, server: clone(s) };
+  },
+  async uninstallServer(id: string): Promise<Ok> {
+    await wait(500);
+    const s = state.servers.find((x) => x.id === id)!;
+    s.agent = 'never';
+    s.endpointOk = false;
+    return { ok: true };
+  },
 
   async setServerDefault(id: string): Promise<Server[]> {
     await wait(250);

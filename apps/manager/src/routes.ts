@@ -1,6 +1,7 @@
 // Все HTTP-роуты. Пути совпадают с httpApi фронтенда.
 
 import net from 'node:net';
+import { ProxyAgent } from 'undici';
 import { Router } from 'express';
 import type {
   AppSettings,
@@ -12,8 +13,8 @@ import type {
 import { config } from './config.js';
 import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies } from './services/sshServer.js';
-import { saveServerKeys, saveServerProxy, getServerProxy } from './services/keyvault.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices } from './services/sshServer.js';
+import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 
 // Выпуск конфига: по SSH (реальный сервер) или через mock-агент (dev).
@@ -301,7 +302,8 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
     name: String(b.name ?? 'Сервер'), country: b.country ?? null, host: String(b.vpnHost || b.host || ''),
     protocols, agent: hasKeys ? 'online' : 'never', endpointOk: hasKeys,
     sshHost: b.host, sshPort: b.sshPort, sshUser: b.sshUser,
-    sshPassEnc: b.secret && b.authMethod !== 'key' ? encryptSecret(String(b.secret)) : null,
+    // Секрет (пароль ИЛИ приватный ключ) — тип определяется по содержимому при подключении.
+    sshPassEnc: b.secret ? encryptSecret(String(b.secret)) : null,
     enrollSecretEnc: encryptSecret(enrollToken),
   });
   if (hasKeys) {
@@ -328,8 +330,8 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   if (b.sshHost !== undefined) fields.ssh_host = b.sshHost;
   if (b.sshPort !== undefined) fields.ssh_port = Number(b.sshPort) || 22;
   if (b.sshUser !== undefined) fields.ssh_user = b.sshUser;
-  // Новый SSH-пароль задаём только если пришёл непустой secret (иначе не трогаем).
-  if (b.secret && b.authMethod !== 'key') fields.ssh_pass_enc = encryptSecret(String(b.secret));
+  // Новый секрет (пароль или ключ) — только если пришёл непустой (иначе не трогаем).
+  if (b.secret) fields.ssh_pass_enc = encryptSecret(String(b.secret));
   if (Array.isArray(b.components)) {
     const protocols = b.components.filter((p: string) => p === 'xray' || p === 'amneziawg' || p === 'http' || p === 'https' || p === 'socks5');
     fields.protocols = JSON.stringify(protocols);
@@ -347,6 +349,86 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   }
   repo.addLog(`Изменён сервер «${updated.name}»`);
   res.json(repo.getServer(s.id));
+});
+
+// Полный автоматический провижининг сервера (xray + awg + прокси) с нуля по SSH.
+// Если для домена уже есть ключи — восстановление (старые конфиги живут).
+router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  const b = req.body ?? {};
+  const comps: string[] = Array.isArray(b.components) ? b.components : ['xray', 'amneziawg'];
+  const want = {
+    xray: comps.includes('xray'),
+    awg: comps.includes('amneziawg'),
+    http: comps.includes('http'),
+    https: comps.includes('https'),
+    socks: comps.includes('socks5'),
+  };
+  try {
+    // Восстановление по домену: если есть приватные ключи — переустанавливаем с ними.
+    const prev = getServerKeys(s.host);
+    const restoring = !!(prev?.xrayRealityPrivKey || prev?.awgServerPrivKey);
+    const installed = want.xray || want.awg
+      ? await sshInstallServer(s, {
+          xray: want.xray,
+          awg: want.awg,
+          sni: prev?.xraySni,
+          realityPriv: prev?.xrayRealityPrivKey,
+          shortId: prev?.xrayShortId,
+          awgPriv: prev?.awgServerPrivKey,
+        })
+      : {};
+    // Сохраняем ВСЕ ключи (включая приватные) — для будущего восстановления по домену.
+    saveServerKeys(s.host, {
+      xrayRealityPrivKey: installed.realityPriv,
+      xrayRealityPubKey: installed.realityPub,
+      xrayShortId: installed.shortId,
+      xraySni: installed.sni,
+      awgServerPrivKey: installed.awgPriv,
+      awgServerPubKey: installed.awgPub,
+    });
+    // Прокси (если выбраны).
+    let proxy = null;
+    if (want.http || want.https || want.socks) {
+      proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks });
+      saveServerProxy(s.host, proxy);
+    }
+    // Восстановление устройств: если переустановили с прежними ключами — вернуть пиры.
+    if (restoring) {
+      const devs = repo.getServerDevicesForResync(s.id).map((d) => ({
+        name: d.name,
+        protocol: d.protocol,
+        uuid: d.uuid,
+        awgPub: d.publicKey,
+        clientIp: d.clientIp,
+        psk: d.presharedKeyEnc ? decryptSecret(d.presharedKeyEnc) : null,
+      }));
+      if (devs.length) await sshResyncDevices(s, devs);
+    }
+    const protocols = [...comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p))];
+    repo.updateServerFields(s.id, { protocols: JSON.stringify(protocols), agent: 'online', endpoint_ok: 1, last_sync_at: repo.nowIso() });
+    repo.addLog(`${restoring ? 'Переустановлен' : 'Установлен'} сервер «${s.name}» (${protocols.join(', ')})`);
+    res.json({ ok: true, restored: restoring, proxy, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки.'));
+  }
+});
+
+// Полное удаление ПО с сервера (xray/awg/прокси). Пользователи и подписки в панели не трогаются.
+router.post('/api/admin/servers/:id/uninstall', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  try {
+    await sshUninstallServer(s);
+    repo.updateServerFields(s.id, { agent: 'never', endpoint_ok: 0 });
+    repo.addLog(`Удалено ПО с сервера «${s.name}»`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка удаления.'));
+  }
 });
 
 // Реальная установка прокси-комплекта (HTTP/HTTPS/SOCKS) на сервер по SSH.
@@ -429,6 +511,30 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
   res.json(safe);
 });
 
+// URL прокси для запросов к Telegram (если в настройках включён прокси).
+// Прод-сервер в РФ обычно НЕ достаёт api.telegram.org напрямую → нужен прокси.
+function resolveTgProxyUrl(): string | null {
+  const tg = repo.getTelegram();
+  if (!tg?.proxyOn) return null;
+  const enc = encodeURIComponent;
+  if (tg.proxySource === 'server' && tg.proxyServerId) {
+    const srv = repo.getServer(tg.proxyServerId);
+    if (!srv) return null;
+    const p = getServerProxy(srv.host);
+    if (!p) return null;
+    if (p.httpsPort && p.httpsHost) return `https://${enc(p.user)}:${enc(p.pass)}@${p.httpsHost}:${p.httpsPort}`;
+    if (p.httpPort) return `http://${enc(p.user)}:${enc(p.pass)}@${srv.host}:${p.httpPort}`;
+    return null;
+  }
+  if (tg.proxyHost && tg.proxyPort && (tg.proxyType === 'http' || tg.proxyType === 'https')) {
+    const encPass = (tg as unknown as { proxyPassEnc?: string }).proxyPassEnc;
+    const pass = encPass ? decryptSecret(encPass) : '';
+    const authp = tg.proxyLogin ? `${enc(tg.proxyLogin)}:${enc(pass)}@` : '';
+    return `${tg.proxyType}://${authp}${tg.proxyHost}:${tg.proxyPort}`;
+  }
+  return null;
+}
+
 router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
   // Если новый токен не введён — проверяем СОХРАНЁННЫЙ (расшифровываем).
   let token = String(req.body?.token ?? '').trim();
@@ -444,14 +550,25 @@ router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
   }
   if (!/^\d+:[A-Za-z0-9_-]{30,}$/.test(token))
     return res.json({ ok: false, message: 'Токен не задан или неверного формата (ожидается 123456:AA...).' });
+  const proxyUrl = resolveTgProxyUrl();
   try {
-    // Реальная проверка через Telegram Bot API.
-    const r = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const opts: RequestInit & { dispatcher?: ProxyAgent } = { signal: AbortSignal.timeout(15000) };
+    if (proxyUrl) opts.dispatcher = new ProxyAgent(proxyUrl);
+    const r = await fetch(`https://api.telegram.org/bot${token}/getMe`, opts);
     const d = (await r.json()) as { ok: boolean; result?: { username?: string }; description?: string };
-    if (d.ok && d.result?.username) return res.json({ ok: true, message: `Бот @${d.result.username} отвечает.` });
+    if (d.ok && d.result?.username)
+      return res.json({ ok: true, message: `Бот @${d.result.username} отвечает${proxyUrl ? ' (через прокси)' : ''}.` });
     return res.json({ ok: false, message: `Telegram отклонил токен: ${d.description ?? 'неизвестная ошибка'}` });
-  } catch {
-    return res.json({ ok: false, message: 'Не удалось связаться с Telegram API (проверьте сеть/прокси).' });
+  } catch (e) {
+    const timedOut = e instanceof Error && /timeout|aborted/i.test(e.message);
+    return res.json({
+      ok: false,
+      message: proxyUrl
+        ? 'Не удалось связаться с Telegram через прокси. Проверьте, что прокси на сервере работает.'
+        : timedOut
+          ? 'Telegram недоступен напрямую с сервера (вероятно, заблокирован). Включите прокси для бота и повторите.'
+          : 'Не удалось связаться с Telegram API.',
+    });
   }
 });
 

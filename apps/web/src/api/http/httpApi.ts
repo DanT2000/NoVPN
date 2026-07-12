@@ -70,6 +70,9 @@ export const httpApi: ApiClient = {
   installServerProxies: (id: string, types: { http: boolean; https: boolean; socks: boolean }) =>
     req<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
   getServerProxy: (id: string) => req<{ proxy: ServerProxyConfig | null; host: string }>('GET', `/api/admin/servers/${id}/proxy`),
+  provisionServer: (id: string, components: string[]) =>
+    req<{ ok: boolean; restored: boolean; proxy: ServerProxyConfig | null; server: Server }>('POST', `/api/admin/servers/${id}/provision`, { components }),
+  uninstallServer: (id: string) => req<Ok>('POST', `/api/admin/servers/${id}/uninstall`),
   setServerDefault: (id) => req<Server[]>('POST', `/api/admin/servers/${id}/default`),
   setServerAutoIssue: (id, on) => req<Server>('POST', `/api/admin/servers/${id}/auto-issue`, { on }),
   deleteServer: (id) => req<Ok>('DELETE', `/api/admin/servers/${id}`),

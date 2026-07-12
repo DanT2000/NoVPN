@@ -12,10 +12,17 @@ function creds(serverId: string) {
   const s = getServerSsh(serverId);
   if (!s) throw new Error('Сервер не найден.');
   if (!s.passwordEnc) throw new Error('Для сервера не задан SSH-доступ — выпуск конфигов невозможен.');
-  return { host: s.host, port: s.port, username: s.user, password: decryptSecret(s.passwordEnc) };
+  const secret = decryptSecret(s.passwordEnc);
+  // Приватный ключ или пароль — определяем по содержимому.
+  const auth = /PRIVATE KEY/.test(secret) ? { privateKey: secret } : { password: secret };
+  return { host: s.host, port: s.port, username: s.user, ...auth };
 }
 
-function runScript(c: { host: string; port: number; username: string; password: string }, script: string): Promise<string> {
+function runScript(
+  c: { host: string; port: number; username: string; password?: string; privateKey?: string },
+  script: string,
+  timeoutMs = 30000,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     let out = '';
@@ -23,7 +30,7 @@ function runScript(c: { host: string; port: number; username: string; password: 
     const timer = setTimeout(() => {
       conn.end();
       reject(new Error('SSH: таймаут'));
-    }, 30000);
+    }, timeoutMs);
     conn.on('ready', () => {
       conn.exec('bash -s', (e, stream) => {
         if (e) {
@@ -45,12 +52,178 @@ function runScript(c: { host: string; port: number; username: string; password: 
       clearTimeout(timer);
       reject(e);
     });
-    conn.connect({ host: c.host, port: c.port, username: c.username, password: c.password, readyTimeout: 15000 });
+    conn.connect({ host: c.host, port: c.port, username: c.username, password: c.password, privateKey: c.privateKey, readyTimeout: 15000 });
   });
 }
 
 const san = (n: string) => (n.replace(/[^\w .-]/g, '').trim().slice(0, 40) || 'device');
 const grab = (out: string, k: string) => out.match(new RegExp('^' + k + '=(.+)$', 'm'))?.[1]?.trim();
+
+// ── Провижининг сервера с нуля (xray Reality + AmneziaWG) ──
+// Скрипт без bash-${…} (кроме инжектов сверху) — безопасно в JS-шаблоне.
+// Параметры обфускации AWG фиксированы → восстановление по домену требует только приватный ключ.
+function buildInstallScript(o: {
+  sni: string; realityPriv: string; shortId: string; awgPriv: string; xray: boolean; awg: boolean;
+}): string {
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  return `set -e
+SNI=${q(o.sni)}
+REALITY_PRIV=${q(o.realityPriv)}
+SHORT_ID=${q(o.shortId)}
+AWG_PRIV=${q(o.awgPriv)}
+WANT_XRAY=${o.xray ? '1' : '0'}
+WANT_AWG=${o.awg ? '1' : '0'}
+IFACE="$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1)"
+[ -z "$IFACE" ] && IFACE=eth0
+JC=4; JMIN=40; JMAX=70; S1=86; S2=97
+H1=1004746675; H2=928473625; H3=1719083348; H4=1339303396
+
+if [ "$WANT_XRAY" = "1" ]; then
+  echo "== xray =="
+  mkdir -p /opt/amnezia/xray
+  docker pull -q teddysun/xray >/dev/null 2>&1 || true
+  if [ -z "$REALITY_PRIV" ]; then
+    KP=$(docker run --rm teddysun/xray xray x25519)
+    REALITY_PRIV=$(echo "$KP" | grep -iE 'private' | grep -oE '[A-Za-z0-9_/+-]{40,}' | head -1)
+  fi
+  REALITY_PUB=$(docker run --rm teddysun/xray xray x25519 -i "$REALITY_PRIV" | grep -iE 'public' | grep -oE '[A-Za-z0-9_/+-]{40,}' | head -1)
+  [ -z "$SHORT_ID" ] && SHORT_ID=$(openssl rand -hex 8)
+  python3 - "$SNI" "$REALITY_PRIV" "$SHORT_ID" > /opt/amnezia/xray/server.json <<'PY'
+import json,sys
+sni,priv,sid=sys.argv[1],sys.argv[2],sys.argv[3]
+cfg={"log":{"loglevel":"warning"},
+ "inbounds":[{"listen":"0.0.0.0","port":443,"protocol":"vless","tag":"vless-reality",
+   "settings":{"clients":[],"decryption":"none"},
+   "streamSettings":{"network":"tcp","security":"reality",
+     "realitySettings":{"show":False,"dest":sni+":443","xver":0,
+       "serverNames":[sni],"privateKey":priv,"shortIds":[sid]}},
+   "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]}}],
+ "outbounds":[{"protocol":"freedom","tag":"direct"}]}
+print(json.dumps(cfg,indent=2))
+PY
+  docker rm -f amnezia-xray >/dev/null 2>&1 || true
+  docker run -d --name amnezia-xray --restart always -p 443:443 -v /opt/amnezia/xray:/opt/amnezia/xray teddysun/xray xray run -c /opt/amnezia/xray/server.json >/dev/null
+  sleep 3
+  docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null || { echo "XRAY_FAIL"; exit 1; }
+  echo "REALITY_PRIV=$REALITY_PRIV"; echo "REALITY_PUB=$REALITY_PUB"; echo "SHORT_ID=$SHORT_ID"; echo "SNI=$SNI"
+fi
+
+if [ "$WANT_AWG" = "1" ]; then
+  echo "== awg =="
+  if ! command -v awg >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    add-apt-repository -y ppa:amnezia/ppa >/tmp/ppa.log 2>&1 || true
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq amneziawg amneziawg-tools >/tmp/awg.log 2>&1 || apt-get install -y -qq amneziawg-tools amneziawg-dkms >>/tmp/awg.log 2>&1 || { echo "AWG_FAIL"; exit 1; }
+  fi
+  modprobe amneziawg 2>/dev/null || true
+  [ -z "$AWG_PRIV" ] && AWG_PRIV=$(awg genkey)
+  AWG_PUB=$(printf '%s' "$AWG_PRIV" | awg pubkey)
+  mkdir -p /etc/amnezia/amneziawg
+  cat > /etc/amnezia/amneziawg/awg0.conf <<CONF
+[Interface]
+PrivateKey = $AWG_PRIV
+Address = 10.8.1.1/24
+ListenPort = 51820
+Jc = $JC
+Jmin = $JMIN
+Jmax = $JMAX
+S1 = $S1
+S2 = $S2
+H1 = $H1
+H2 = $H2
+H3 = $H3
+H4 = $H4
+PostUp = iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE; iptables -A FORWARD -i awg0 -j ACCEPT; iptables -A FORWARD -o awg0 -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE; iptables -D FORWARD -i awg0 -j ACCEPT; iptables -D FORWARD -o awg0 -j ACCEPT
+CONF
+  chmod 600 /etc/amnezia/amneziawg/awg0.conf
+  sysctl -qw net.ipv4.ip_forward=1
+  grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+  awg-quick down awg0 2>/dev/null || true
+  awg-quick up awg0
+  systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true
+  ip link show awg0 >/dev/null || { echo "AWG0_FAIL"; exit 1; }
+  echo "AWG_PRIV=$AWG_PRIV"; echo "AWG_PUB=$AWG_PUB"
+fi
+echo INSTALL_DONE`;
+}
+
+function buildUninstallScript(): string {
+  return `set +e
+docker rm -f amnezia-xray 2>/dev/null
+awg-quick down awg0 2>/dev/null
+systemctl disable --now awg-quick@awg0 2>/dev/null
+apt-get purge -y amneziawg amneziawg-tools amneziawg-dkms >/dev/null 2>&1
+rm -rf /etc/amnezia /opt/amnezia
+systemctl disable --now 3proxy 2>/dev/null
+systemctl disable --now novpn-stunnel 2>/dev/null
+rm -f /usr/local/bin/3proxy /etc/systemd/system/3proxy.service /etc/systemd/system/novpn-stunnel.service
+rm -rf /etc/3proxy /etc/stunnel/novpn.conf /opt/3proxy-src /etc/letsencrypt
+systemctl daemon-reload 2>/dev/null
+echo UNINSTALL_DONE`;
+}
+
+/** Установить VPN-комплект (xray/awg). Если переданы ключи — восстановление по домену. */
+export async function sshInstallServer(
+  server: Server,
+  opts: { xray: boolean; awg: boolean; sni?: string; realityPriv?: string; shortId?: string; awgPriv?: string },
+): Promise<{ realityPriv?: string; realityPub?: string; shortId?: string; sni?: string; awgPriv?: string; awgPub?: string }> {
+  const script = buildInstallScript({
+    sni: opts.sni || 'vk.com',
+    realityPriv: opts.realityPriv || '',
+    shortId: opts.shortId || '',
+    awgPriv: opts.awgPriv || '',
+    xray: opts.xray,
+    awg: opts.awg,
+  });
+  const out = await runScript(creds(server.id), script, 600000);
+  if (!/INSTALL_DONE/.test(out)) throw new Error('Установка не завершилась: ' + out.slice(-300));
+  return {
+    realityPriv: grab(out, 'REALITY_PRIV'),
+    realityPub: grab(out, 'REALITY_PUB'),
+    shortId: grab(out, 'SHORT_ID'),
+    sni: grab(out, 'SNI'),
+    awgPriv: grab(out, 'AWG_PRIV'),
+    awgPub: grab(out, 'AWG_PUB'),
+  };
+}
+
+export async function sshUninstallServer(server: Server): Promise<void> {
+  await runScript(creds(server.id), buildUninstallScript(), 300000);
+}
+
+/** Повторно добавить существующие устройства на переустановленный сервер (восстановление). */
+export async function sshResyncDevices(
+  server: Server,
+  items: Array<{ name: string; protocol: string; uuid?: string | null; awgPub?: string | null; clientIp?: string | null; psk?: string | null }>,
+): Promise<void> {
+  const xray = items.filter((i) => i.protocol === 'xray' && i.uuid).map((i) => ({ id: i.uuid, name: san(i.name) }));
+  const awg = items.filter((i) => i.protocol === 'amneziawg' && i.awgPub && i.clientIp);
+  const lines: string[] = ['set +e'];
+  if (xray.length) {
+    const json = JSON.stringify(xray).replace(/'/g, "'\\''");
+    lines.push(
+      `python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));ex={x['id'] for x in c['inbounds'][0]['settings']['clients']};` +
+        `[c['inbounds'][0]['settings']['clients'].append({'id':d['id'],'flow':'xtls-rprx-vision','email':d['name']}) for d in json.loads('${json}') if d['id'] not in ex];` +
+        `json.dump(c,open(p,'w'),indent=2)"`,
+      'docker restart amnezia-xray >/dev/null 2>&1 || true',
+    );
+  }
+  for (const a of awg) {
+    const ip = (a.clientIp || '').split('/')[0];
+    if (a.psk) {
+      lines.push(`printf '%s' '${a.psk.replace(/'/g, "'\\''")}' | awg set awg0 peer '${a.awgPub}' preshared-key /dev/stdin allowed-ips ${ip}/32`);
+    } else {
+      lines.push(`awg set awg0 peer '${a.awgPub}' allowed-ips ${ip}/32`);
+    }
+    lines.push(`grep -q '${a.awgPub}' /etc/amnezia/amneziawg/awg0.conf || printf '\\n[Peer]\\nPublicKey = %s\\nAllowedIPs = %s/32\\n' '${a.awgPub}' '${ip}' >> /etc/amnezia/amneziawg/awg0.conf`);
+  }
+  lines.push('echo RESYNC_DONE');
+  await runScript(creds(server.id), lines.join('\n'), 120000);
+}
+
+// Сбор статистики AmneziaWG: rx/tx и время последнего рукопожатия по каждому пиру.
 
 export async function sshHasSshAccess(serverId: string): Promise<boolean> {
   const s = getServerSsh(serverId);

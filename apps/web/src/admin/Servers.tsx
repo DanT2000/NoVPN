@@ -90,6 +90,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
   const [vpnHost, setVpnHost] = useState(server.host);
   const [sshPort, setSshPort] = useState('22');
   const [sshUser, setSshUser] = useState('root');
+  const [sshAuth, setSshAuth] = useState<'password' | 'key'>('password');
   const [secret, setSecret] = useState('');
   const [protocols, setProtocols] = useState<Proto[]>(server.protocols as Proto[]);
   const [xPub, setXPub] = useState('');
@@ -113,7 +114,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         vpnHost: vpnHost.trim() || server.host,
         sshPort: parseInt(sshPort, 10) || 22,
         sshUser: sshUser.trim() || 'root',
-        authMethod: 'password',
+        authMethod: sshAuth,
         secret: secret.trim() || undefined,
         components: protocols,
         serverKeys,
@@ -145,8 +146,20 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         <Field label="Домен или IP (VPN-endpoint)"><input className="input mono" value={vpnHost} onChange={(e) => setVpnHost(e.target.value)} /></Field>
         <Field label="SSH-порт"><input className="input" inputMode="numeric" value={sshPort} onChange={(e) => setSshPort(e.target.value.replace(/\D/g, ''))} /></Field>
         <Field label="SSH-пользователь"><input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} /></Field>
-        <Field label="Новый SSH-пароль (пусто = не менять)"><input className="input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••" /></Field>
+        <Field label="Способ входа по SSH">
+          <div className="chip-row">
+            <Chip label="Пароль" size="sm" active={sshAuth === 'password'} onClick={() => setSshAuth('password')} />
+            <Chip label="Приватный ключ" size="sm" active={sshAuth === 'key'} onClick={() => setSshAuth('key')} />
+          </div>
+        </Field>
       </div>
+      <Field label={sshAuth === 'key' ? 'Новый приватный ключ (пусто = не менять)' : 'Новый SSH-пароль (пусто = не менять)'}>
+        {sshAuth === 'key' ? (
+          <textarea className="textarea mono" rows={4} value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
+        ) : (
+          <input className="input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••" />
+        )}
+      </Field>
 
       <div className="field">
         <span className="field-label">Протоколы (установленные на сервере)</span>
