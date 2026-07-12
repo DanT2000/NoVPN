@@ -14,7 +14,7 @@ import { config } from './config.js';
 import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices } from './services/sshServer.js';
-import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys } from './services/keyvault.js';
+import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 
 // Выпуск конфига: по SSH (реальный сервер) или через mock-агент (dev).
@@ -374,10 +374,11 @@ router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) =
       ? await sshInstallServer(s, {
           xray: want.xray,
           awg: want.awg,
-          sni: prev?.xraySni,
-          realityPriv: prev?.xrayRealityPrivKey,
-          shortId: prev?.xrayShortId,
-          awgPriv: prev?.awgServerPrivKey,
+          // Параметры прежней установки — ТОЛЬКО при восстановлении; иначе свежая (SNI=vk.com).
+          sni: restoring ? prev?.xraySni : undefined,
+          realityPriv: restoring ? prev?.xrayRealityPrivKey : undefined,
+          shortId: restoring ? prev?.xrayShortId : undefined,
+          awgPriv: restoring ? prev?.awgServerPrivKey : undefined,
         })
       : {};
     // Сохраняем ВСЕ ключи (включая приватные) — для будущего восстановления по домену.
@@ -423,8 +424,10 @@ router.post('/api/admin/servers/:id/uninstall', requireAdmin, async (req, res) =
   if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
   try {
     await sshUninstallServer(s);
-    repo.updateServerFields(s.id, { agent: 'never', endpoint_ok: 0 });
-    repo.addLog(`Удалено ПО с сервера «${s.name}»`);
+    // purgeKeys: полностью забыть ключи домена (иначе они хранятся для восстановления).
+    if (req.body?.purgeKeys) deleteServerKeys(s.host);
+    repo.updateServerFields(s.id, { agent: 'never', endpoint_ok: 0, protocols: '[]' });
+    repo.addLog(`Удалено ПО с сервера «${s.name}»${req.body?.purgeKeys ? ' (с ключами)' : ''}`);
     res.json({ ok: true });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка удаления.'));

@@ -134,7 +134,7 @@ export interface ApiClient {
   installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
   getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
   provisionServer(id: string, components: string[]): Promise<{ ok: boolean; restored: boolean; proxy: ServerProxyConfig | null; server: Server }>;
-  uninstallServer(id: string): Promise<Ok>;
+  uninstallServer(id: string, purgeKeys?: boolean): Promise<Ok>;
   setServerDefault(id: string): Promise<Server[]>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
   deleteServer(id: string): Promise<Ok>;

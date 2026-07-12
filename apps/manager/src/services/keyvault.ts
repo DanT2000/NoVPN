@@ -51,6 +51,11 @@ export function saveServerKeys(host: string, k: ServerKeys): void {
   });
 }
 
+/** Полностью удалить ключи домена (для «чистого» удаления сервера без восстановления). */
+export function deleteServerKeys(host: string): void {
+  db.prepare('DELETE FROM server_keys WHERE domain = ?').run(domainKey(host));
+}
+
 /** Есть ли сохранённые ключи для домена (для показа «восстановим по домену»). */
 export function hasServerKeys(host: string): boolean {
   const r = db.prepare('SELECT domain FROM server_keys WHERE domain = ?').get(domainKey(host));

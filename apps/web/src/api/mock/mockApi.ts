@@ -296,11 +296,12 @@ export const mockApi: ApiClient = {
     s.endpointOk = true;
     return { ok: true, restored: false, proxy: null, server: clone(s) };
   },
-  async uninstallServer(id: string): Promise<Ok> {
+  async uninstallServer(id: string, _purgeKeys?: boolean): Promise<Ok> {
     await wait(500);
     const s = state.servers.find((x) => x.id === id)!;
     s.agent = 'never';
     s.endpointOk = false;
+    s.protocols = [];
     return { ok: true };
   },
 

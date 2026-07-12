@@ -50,7 +50,45 @@ function ProxyBox({ proxy }: { proxy: ServerProxyConfig }) {
 }
 
 function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
-  const { editServer, showToast, reload } = useApp();
+  const { editServer, showToast, reload, showConfirm } = useApp();
+  const [provBusy, setProvBusy] = useState<string | null>(null);
+
+  async function reinstall() {
+    setProvBusy('install');
+    try {
+      const comps = server.protocols.length ? (server.protocols as string[]) : ['xray', 'amneziawg'];
+      const r = await api.provisionServer(server.id, comps);
+      await reload();
+      showToast(r.restored ? 'Переустановлено, ключи восстановлены' : 'Установка завершена');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Ошибка установки');
+    } finally {
+      setProvBusy(null);
+    }
+  }
+  function uninstall(purge: boolean) {
+    showConfirm({
+      title: purge ? 'Удалить ПО и ключи?' : 'Удалить ПО с сервера?',
+      text: purge
+        ? 'С сервера будут удалены xray/awg/прокси И забыты ключи домена — восстановление по домену станет невозможным. Пользователи и коды в панели остаются.'
+        : 'С сервера будет удалено ПО (xray/awg/прокси). Ключи домена сохранятся — можно переустановить с восстановлением. Пользователи и коды остаются.',
+      confirmLabel: 'Удалить',
+      danger: true,
+      onConfirm: async () => {
+        setProvBusy('uninstall');
+        try {
+          await api.uninstallServer(server.id, purge);
+          await reload();
+          showToast('ПО удалено с сервера');
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : 'Ошибка удаления');
+        } finally {
+          setProvBusy(null);
+        }
+      },
+    });
+  }
+
   const [pxHttp, setPxHttp] = useState(server.protocols.includes('http'));
   const [pxHttps, setPxHttps] = useState((server.protocols as string[]).includes('https'));
   const [pxSocks, setPxSocks] = useState(server.protocols.includes('socks5'));
@@ -205,6 +243,26 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
             Показать текущие
           </button>
         </div>
+      </div>
+
+      {/* Установка/переустановка ПО по SSH */}
+      <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+        <span className="field-label">Установка ПО на сервере (по SSH)</span>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary btn-sm" disabled={!!provBusy} onClick={() => void reinstall()}>
+            {provBusy === 'install' ? 'Устанавливаем… (до нескольких минут)' : 'Установить / переустановить ПО'}
+          </button>
+          <button className="btn btn-outline btn-sm" disabled={!!provBusy} onClick={() => uninstall(false)}>
+            Удалить ПО (ключи сохранить)
+          </button>
+          <button className="btn btn-danger-outline btn-sm" disabled={!!provBusy} onClick={() => uninstall(true)}>
+            Удалить ПО и ключи
+          </button>
+        </div>
+        <span className="small muted">
+          Ставит xray + AmneziaWG (+ отмеченные прокси) прямо на сервер. Если ключи домена сохранены — переустановка
+          восстанавливает их, и ранее выданные конфиги продолжают работать.
+        </span>
       </div>
 
       <div className="row" style={{ gap: 8 }}>

@@ -381,7 +381,8 @@ echo "PUSER=$PUSER"; echo "PPASS=$PPASS"
 echo "HTTP_PORT=${wantHttp ? '$HTTP_PORT' : ''}"
 echo "SOCKS_PORT=${wantSocks ? '$SOCKS_PORT' : ''}"
 echo "HTTPS_PORT=${wantHttps ? '$HTTPS_PORT' : ''}"`;
-  const out = await runScript(creds(server.id), script);
+  // Сборка 3proxy + apt/certbot могут занять несколько минут.
+  const out = await runScript(creds(server.id), script, 420000);
   const user = grab(out, 'PUSER');
   const pass = grab(out, 'PPASS');
   if (!user || !pass) throw new Error('Не удалось установить прокси на сервере.');
