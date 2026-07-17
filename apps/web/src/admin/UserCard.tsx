@@ -93,7 +93,7 @@ function UserCardInner({ user }: { user: User }) {
   const [dlCustom, setDlCustom] = useState(user.deviceLimit && ![1, 10].includes(user.deviceLimit) ? String(user.deviceLimit) : '3');
   const [trafMode, setTrafMode] = useState<TrafMode>(user.trafficLimitGb == null ? 'unlim' : 'custom');
   const [trafCustom, setTrafCustom] = useState(user.trafficLimitGb == null ? '' : String(user.trafficLimitGb));
-  const [resetPolicy, setResetPolicy] = useState<'never' | 'monthly'>(user.resetPolicy);
+  const resetPolicy = user.resetPolicy; // сброс трафика по расписанию убран из UI
 
   const [allowedServers, setAllowedServers] = useState<string[]>([...user.allowedServers]);
   const [defaultServerId, setDefaultServerId] = useState<string | null>(user.defaultServerId ?? user.allowedServers[0] ?? null);
@@ -515,13 +515,6 @@ function UserCardInner({ user }: { user: User }) {
                 style={{ maxWidth: 200, marginTop: 8 }}
               />
             )}
-          </div>
-          <div className="field">
-            <span className="field-label">Сброс трафика</span>
-            <div className="chip-row">
-              <Chip label="Никогда" active={resetPolicy === 'never'} onClick={() => setResetPolicy('never')} />
-              <Chip label="Ежемесячно" active={resetPolicy === 'monthly'} onClick={() => setResetPolicy('monthly')} />
-            </div>
           </div>
           <div className="field">
             <span className="field-label">Расход трафика</span>

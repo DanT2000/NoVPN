@@ -76,6 +76,9 @@ export function Wizard() {
 
   const back = () => {
     if (mode === 'view') return goPublic('devices');
+    // Шаг 4 — конфиг уже выпущен. Возврат в форму дал бы повторный выпуск и
+    // дубликат устройства, поэтому уводим к списку устройств.
+    if (step >= 4) return goPublic('devices');
     if (step <= 1) return goPublic('cabinet');
     setStep(step - 1);
   };
@@ -274,7 +277,17 @@ export function Wizard() {
 
           {cfgLink || cfgConf ? (
             <div className="card stack" style={{ gap: 12, alignItems: 'stretch' }}>
-              <Qr text={(cfgLink ?? cfgConf)!} caption="Отсканируйте в приложении" />
+              {/* QR — только для Xray-ссылки: её приложения читают сканированием.
+                  Сырой .conf AmneziaWG через QR не импортируется, поэтому для него
+                  QR не показываем — там основной способ «Скачать .conf». */}
+              {cfgLink ? (
+                <Qr text={cfgLink} caption="Отсканируйте в приложении" />
+              ) : (
+                <div className="notice small">
+                  Скачайте файл <b>.conf</b> и откройте его в приложении AmneziaWG или AmneziaVPN
+                  («Добавить из файла»). QR для AmneziaWG не используется — приложение его не читает.
+                </div>
+              )}
               <div className="field-label">{cfgLink ? 'Ссылка подключения' : 'Конфигурация AmneziaWG (.conf)'}</div>
               <pre className="mono" style={{ background: 'var(--bg-app)', border: '1px solid var(--border-input)', borderRadius: 'var(--r-ctrl)', padding: 12, margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', overflowX: 'auto', wordBreak: 'break-all', maxHeight: 220 }}>
                 {cfgLink ?? cfgConf}

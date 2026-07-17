@@ -17,7 +17,11 @@ export function Telegram() {
   const [proxyOn, setProxyOn] = useState(tg?.proxyOn ?? false);
   const [proxySource, setProxySource] = useState<'server' | 'manual'>(tg?.proxySource ?? 'manual');
   const [proxyServerId, setProxyServerId] = useState<string | null>(tg?.proxyServerId ?? null);
-  const [proxyType, setProxyType] = useState<ProxyType>(tg?.proxyType ?? 'http');
+  // socks5 больше не поддерживается (undici ProxyAgent его не умеет) — если был
+  // сохранён раньше, показываем как http, чтобы выбор был из рабочих вариантов.
+  const [proxyType, setProxyType] = useState<ProxyType>(
+    tg?.proxyType === 'https' ? 'https' : 'http',
+  );
   const [proxyHost, setProxyHost] = useState(tg?.proxyHost ?? '');
   const [proxyPort, setProxyPort] = useState(tg?.proxyPort ?? '');
   const [proxyLogin, setProxyLogin] = useState(tg?.proxyLogin ?? '');
@@ -100,13 +104,6 @@ export function Telegram() {
             />
           </Field>
 
-          <Field label="Режим">
-            <div className="chip-row">
-              <Chip label="Polling" active={mode === 'polling'} onClick={() => setMode('polling')} />
-              <Chip label="Webhook" active={mode === 'webhook'} onClick={() => setMode('webhook')} />
-            </div>
-          </Field>
-
           <button className="btn btn-secondary" disabled={testing} onClick={() => void runTest()}>
             {testing ? 'Проверяем…' : token.trim() ? 'Проверить введённый токен' : 'Проверить сохранённого бота'}
           </button>
@@ -133,13 +130,8 @@ export function Telegram() {
                 <div className="chip-row">
                   <Chip label="HTTP" active={proxyType === 'http'} onClick={() => setProxyType('http')} />
                   <Chip label="HTTPS" active={proxyType === 'https'} onClick={() => setProxyType('https')} />
-                  <Chip label="SOCKS5" active={proxyType === 'socks5'} onClick={() => setProxyType('socks5')} />
                 </div>
-                {proxyType === 'socks5' ? (
-                  <div className="notice notice-amber small" style={{ marginTop: 8 }}>
-                    SOCKS5 в России часто нестабилен и блокируется — для Telegram надёжнее HTTPS.
-                  </div>
-                ) : proxyType === 'https' ? (
+                {proxyType === 'https' ? (
                   <span className="small muted">HTTPS — трафик к прокси шифруется, предпочтительный вариант.</span>
                 ) : null}
               </Field>

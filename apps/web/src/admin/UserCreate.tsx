@@ -49,7 +49,7 @@ export function UserCreate() {
   const [expCustom, setExpCustom] = useState('');
   const [trafMode, setTrafMode] = useState<TrafMode>('unlim');
   const [trafCustom, setTrafCustom] = useState('');
-  const [resetPolicy, setResetPolicy] = useState<'never' | 'monthly'>('never');
+  const resetPolicy = 'never' as const; // сброс трафика по расписанию убран — не был реализован
 
   // Доступ
   const [allowedServers, setAllowedServers] = useState<string[]>(() => (firstServerId ? [firstServerId] : []));
@@ -234,13 +234,6 @@ export function UserCreate() {
           )}
         </div>
 
-        <div className="field">
-          <span className="field-label">Сброс трафика</span>
-          <div className="chip-row">
-            <Chip label="Никогда" active={resetPolicy === 'never'} onClick={() => setResetPolicy('never')} />
-            <Chip label="Ежемесячно" active={resetPolicy === 'monthly'} onClick={() => setResetPolicy('monthly')} />
-          </div>
-        </div>
       </Panel>
 
       <Panel title="Доступ">
