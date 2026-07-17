@@ -48,8 +48,20 @@ export function Cabinet() {
     ? devices.slice(0, 2).map((d) => d.name).join(', ')
     : 'пока нет';
 
+  // Человек вошёл по старому коду: код скоро отключат, надо взять личную ссылку.
+  const codeSunset = user.codeLoginUntil ? daysLeft(user.codeLoginUntil) : null;
+
   return (
     <div className="stack" style={{ gap: 16, paddingTop: 12 }}>
+      {codeSunset != null && codeSunset >= 0 ? (
+        <div className="notice notice-amber">
+          <b>Вход по коду скоро отключат.</b>{' '}
+          {codeSunset === 0 ? 'Сегодня последний день.' : `Осталось дней: ${codeSunset}.`} Попросите
+          у администратора личную ссылку — по ней вход открывается сразу, вводить код не нужно.
+          {botReady ? ' Ссылку можно получить и в Telegram-боте.' : ''}
+        </div>
+      ) : null}
+
       <div className="row-between">
         <div>
           <div className="eyebrow" style={{ marginBottom: 4 }}>Доступ</div>

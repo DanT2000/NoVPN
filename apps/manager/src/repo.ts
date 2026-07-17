@@ -32,6 +32,28 @@ export function getUserByCode(code: string): User | null {
   const r = db.prepare('SELECT * FROM users WHERE code = ? AND deleted_at IS NULL').get(code) as any;
   return r ? rowToUser(r) : null;
 }
+
+/** Пользователь по токену личной ссылки. Основной способ входа. */
+export function getUserByAccessToken(token: string): User | null {
+  const r = db.prepare('SELECT * FROM users WHERE access_token = ? AND deleted_at IS NULL').get(token) as any;
+  return r ? rowToUser(r) : null;
+}
+export function getAccessToken(userId: string): string | null {
+  const r = db.prepare('SELECT access_token FROM users WHERE id = ?').get(userId) as { access_token: string | null } | undefined;
+  return r?.access_token ?? null;
+}
+/** До какого момента пользователю разрешён вход по 6-значному коду.
+ *  NULL = вход по коду недоступен (так у всех, кого завели после перехода на ссылки). */
+export function getCodeLoginUntil(userId: string): string | null {
+  const r = db.prepare('SELECT code_login_until FROM users WHERE id = ?').get(userId) as { code_login_until: string | null } | undefined;
+  return r?.code_login_until ?? null;
+}
+/** Выдать пользователю новую личную ссылку (старая сразу перестаёт работать). */
+export function resetAccessToken(userId: string): string {
+  const token = crypto.randomBytes(18).toString('base64url');
+  db.prepare('UPDATE users SET access_token = ?, updated_at = ? WHERE id = ?').run(token, nowIso(), userId);
+  return token;
+}
 export function codeExists(code: string, exceptId?: string): boolean {
   const r = db.prepare('SELECT id FROM users WHERE code = ? AND deleted_at IS NULL').get(code) as any;
   return !!r && r.id !== exceptId;
@@ -64,14 +86,19 @@ export function insertUser(u: NewUserRow): User {
   const now = nowIso();
   db.prepare(
     `INSERT INTO users(id,name,comment,category,tags,code,device_limit,expires_at,traffic_limit_gb,traffic_used_gb,
-      reset_policy,allowed_servers,default_server_id,allowed_protocols,is_active,telegram,created_at,updated_at)
+      reset_policy,allowed_servers,default_server_id,allowed_protocols,is_active,telegram,created_at,updated_at,
+      access_token,code_login_until)
      VALUES(@id,@name,@comment,@category,@tags,@code,@device_limit,@expires_at,@traffic_limit_gb,0,
-      @reset_policy,@allowed_servers,@default_server_id,@allowed_protocols,1,NULL,@now,@now)`,
+      @reset_policy,@allowed_servers,@default_server_id,@allowed_protocols,1,NULL,@now,@now,
+      @access_token,NULL)`,
   ).run({
     id, name: u.name, comment: u.comment, category: u.category, tags: JSON.stringify(u.tags), code: u.code,
     device_limit: u.deviceLimit, expires_at: u.expiresAt, traffic_limit_gb: u.trafficLimitGb,
     reset_policy: u.resetPolicy, allowed_servers: JSON.stringify(u.allowedServers),
     default_server_id: u.defaultServerId, allowed_protocols: JSON.stringify(u.allowedProtocols), now,
+    // Личная ссылка выдаётся сразу. code_login_until = NULL: новым вход по коду
+    // не положен, у них есть ссылка.
+    access_token: crypto.randomBytes(18).toString('base64url'),
   });
   return getUser(id)!;
 }
@@ -358,7 +385,7 @@ export function toPublicUserView(u: User): PublicUserView {
     id: u.id, name: u.name, code: u.code, deviceLimit: u.deviceLimit, expiresAt: u.expiresAt,
     trafficLimitGb: u.trafficLimitGb, trafficUsedGb: u.trafficUsedGb, allowedServers: u.allowedServers,
     defaultServerId: u.defaultServerId, allowedProtocols: u.allowedProtocols, isActive: u.isActive,
-    telegramLinked: !!u.telegram,
+    telegramLinked: !!u.telegram, codeLoginUntil: u.codeLoginUntil,
   };
 }
 

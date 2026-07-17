@@ -61,6 +61,8 @@ interface AppContextValue {
   /** Данные публичной части: справочники + СВОИ устройства (после входа по коду). */
   publicData: PublicBootstrapData | null;
   publicUser: PublicUserView | null;
+  /** Сообщение, если вход по личной ссылке не удался. */
+  linkNotice: string | null;
   adminAuthed: boolean;
   nav: NavState;
   isMobile: boolean;
@@ -93,6 +95,8 @@ interface AppContextValue {
   extendUser(id: string, days: number): Promise<User>;
   setUserActive(id: string, active: boolean): Promise<User>;
   reissueCode(id: string): Promise<User>;
+  /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
+  reissueLink(id: string): Promise<User>;
   setUserCode(id: string, code: string): Promise<{ ok: boolean; message?: string; user?: User }>;
   deleteUser(id: string): Promise<void>;
 
@@ -127,6 +131,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [data, setData] = useState<BootstrapData | null>(null);
   const [publicData, setPublicData] = useState<PublicBootstrapData | null>(null);
   const [publicUser, setPublicUser] = useState<PublicUserView | null>(null);
+  /** Ссылка не сработала (протухла/отозвана) — показываем это на входе. */
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [isMobile, setIsMobile] = useState(
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 860px)').matches : false,
@@ -169,12 +175,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       setLoadError(null);
       try {
+        // Вход по личной ссылке /k/<токен>: логинимся ДО загрузки данных,
+        // чтобы сразу получить свои устройства. Токен из адреса убираем —
+        // незачем оставлять его в истории браузера и в заголовке вкладки.
+        const m = /^\/k\/([A-Za-z0-9_-]+)/.exec(window.location.pathname);
+        let linkError: string | null = null;
+        if (m) {
+          try {
+            const res = await api.tokenLogin(m[1]!);
+            if ('error' in res) linkError = res.error.message;
+          } catch (e) {
+            linkError = e instanceof Error ? e.message : 'Не удалось войти по ссылке.';
+          }
+          window.history.replaceState(null, '', '/');
+        }
+
         // Стартуем всегда с публичных данных: они безопасны и нужны всем.
         // Если в куке есть админская сессия — дотягиваем полные.
         const pd = await api.getPublicData();
         if (!alive) return;
         setPublicData(pd);
         setPublicUser(pd.user);
+        if (m && pd.user) setNav({ area: 'public', route: 'cabinet', params: {} });
+        if (linkError) setLinkNotice(linkError);
         try {
           const full = await api.getInitialData();
           if (!alive) return;
@@ -333,6 +356,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [upsertUser],
   );
+  const reissueLink = useCallback(
+    async (id: string) => {
+      const u = await api.reissueLink(id);
+      upsertUser(u);
+      return u;
+    },
+    [upsertUser],
+  );
   const setUserCode = useCallback(
     async (id: string, code: string) => {
       const res = await api.setUserCode(id, code);
@@ -419,20 +450,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AppContextValue>(
     () => ({
-      loading, loadError, data, publicData, publicUser, adminAuthed, nav, isMobile,
+      loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin,
       setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice,
       adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setUserCode, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer,
       saveTelegram, saveApps, saveSettings,
     }),
     [
-      loading, loadError, data, publicData, publicUser, adminAuthed, nav, isMobile,
+      loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setUserCode, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],
   );

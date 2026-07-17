@@ -20,6 +20,8 @@ export function rowToUser(r: any): User {
     category: r.category ?? null,
     tags: j<string[]>(r.tags, []),
     code: r.code,
+    accessToken: r.access_token ?? null,
+    codeLoginUntil: r.code_login_until ?? null,
     deviceLimit: r.device_limit ?? null,
     expiresAt: r.expires_at ?? null,
     trafficLimitGb: r.traffic_limit_gb ?? null,

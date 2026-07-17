@@ -19,6 +19,7 @@ import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteS
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
 import { resolveTgProxyUrl, restartBot, tgApi } from './services/telegram.js';
+import * as guard from './services/loginGuard.js';
 import * as repo from './repo.js';
 
 export const router = Router();
@@ -32,6 +33,12 @@ const toPublicUserView = repo.toPublicUserView;
 function ownsDevice(req: Request, d: { userId: string | null }): boolean {
   if (req.session?.admin) return true;
   return !!d.userId && d.userId === req.session?.userId;
+}
+
+/** Адрес клиента. За edge-прокси реальный адрес приходит в X-Forwarded-For,
+ *  express разбирает его сам (trust proxy включён в app.ts). */
+function clientIp(req: Request): string {
+  return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
 // ── health ──
@@ -48,18 +55,55 @@ router.get('/api/public/bootstrap', (req, res) => {
   res.json(repo.buildPublicBootstrap(req.session?.userId));
 });
 
+/** Общие проверки доступа, одинаковые для входа по коду и по ссылке. */
+function accessError(u: User): { type: string; message: string } | null {
+  if (!u.isActive) return { type: 'disabled', message: 'Доступ отключён. Обратитесь к администратору.' };
+  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return { type: 'expired', message: 'Срок действия доступа истёк.' };
+  if (u.trafficLimitGb != null && u.trafficUsedGb >= u.trafficLimitGb)
+    return { type: 'traffic', message: 'Лимит трафика исчерпан. Обратитесь к администратору.' };
+  return null;
+}
+
 // ── public: check code ──
+// Старый способ входа. Работает только у тех, кому он был разрешён при переходе
+// на ссылки, и только до code_login_until. Защищён от перебора: 6 цифр — это
+// миллион вариантов, без лимита попыток рабочий код находится за час.
 router.post('/api/public/check-code', (req, res) => {
+  const ip = clientIp(req);
+  const gate = guard.checkAllowed(ip);
+  if (!gate.allowed) return res.status(429).json(err('rate_limited', gate.message!));
+
   const code = String(req.body?.code ?? '');
   const u = repo.getUserByCode(code);
-  if (!u) return res.json(err('not_found', 'Код не найден. Проверьте правильность ввода.'));
-  if (!u.isActive) return res.json(err('disabled', 'Доступ отключён. Обратитесь к администратору.'));
-  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.json(err('expired', 'Срок действия доступа истёк.'));
-  if (u.trafficLimitGb != null && u.trafficUsedGb >= u.trafficLimitGb)
-    return res.json(err('traffic', 'Лимит трафика исчерпан. Обратитесь к администратору.'));
+  if (!u) {
+    const v = guard.noteFailure(ip);
+    return res.json(err(v.allowed ? 'not_found' : 'rate_limited', v.allowed ? 'Код не найден. Проверьте правильность ввода.' : v.message!));
+  }
+  // Вход по коду разрешён не всем и не навсегда.
+  const until = repo.getCodeLoginUntil(u.id);
+  if (!until || new Date(until) < new Date()) {
+    guard.noteFailure(ip);
+    return res.json(err('disabled', 'Вход по коду больше не работает. Откройте личную ссылку, которую вам отправил администратор.'));
+  }
+  const bad = accessError(u);
+  if (bad) return res.json(err(bad.type, bad.message));
   if (u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
     return res.json(err('devices', 'Лимит устройств по этому коду исчерпан.'));
+
+  guard.noteSuccess(ip);
   // Код принят — это и есть вход. Дальше личность берётся из сессии, а не из тела запроса.
+  req.session.userId = u.id;
+  res.json({ user: toPublicUserView(u), codeLoginUntil: until });
+});
+
+// ── public: вход по личной ссылке ──
+// Основной способ: токен длинный, перебирать бессмысленно, набирать руками не надо.
+router.post('/api/public/token-login', (req, res) => {
+  const token = String(req.body?.token ?? '');
+  const u = token ? repo.getUserByAccessToken(token) : null;
+  if (!u) return res.json(err('not_found', 'Ссылка недействительна. Попросите у администратора новую.'));
+  const bad = accessError(u);
+  if (bad) return res.json(err(bad.type, bad.message));
   req.session.userId = u.id;
   res.json({ user: toPublicUserView(u) });
 });
@@ -199,6 +243,17 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.allowedProtocols !== undefined)
     fields.allowed_protocols = JSON.stringify((b.allowedProtocols as string[]).filter((p) => p === 'xray' || p === 'amneziawg'));
   res.json(repo.updateUserFields(u.id, fields));
+});
+
+// Перевыпуск личной ссылки: старая сразу перестаёт работать.
+// Нужен, если ссылка утекла или человек просит новую.
+router.post('/api/admin/users/:id/reissue-link', requireAdmin, (req, res) => {
+  const u = repo.getUser(req.params.id!);
+  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+  repo.resetAccessToken(u.id);
+  repo.addLog(`Перевыпущена личная ссылка «${u.name}»`);
+  repo.addHistory(u.id, 'Перевыпущена личная ссылка');
+  res.json(repo.getUser(u.id));
 });
 
 router.post('/api/admin/users/:id/extend', requireAdmin, (req, res) => {

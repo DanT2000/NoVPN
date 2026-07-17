@@ -116,6 +116,8 @@ export interface ApiClient {
 
   // ── public ──
   checkCode(code: string): Promise<CheckCodeResult>;
+  /** Вход по личной ссылке /k/<токен>. */
+  tokenLogin(token: string): Promise<CheckCodeResult>;
   publicLogout(): Promise<Ok>;
   issueDevice(req: IssueDeviceRequest): Promise<IssueDeviceResult>;
   reissueDevice(deviceId: string): Promise<IssueDeviceResult>;
@@ -132,6 +134,8 @@ export interface ApiClient {
   extendUser(id: string, days: number): Promise<User>;
   setUserActive(id: string, active: boolean): Promise<User>;
   reissueCode(id: string): Promise<User>;
+  /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
+  reissueLink(id: string): Promise<User>;
   setUserCode(id: string, code: string): Promise<CodeResult>;
   deleteUser(id: string): Promise<Ok>;
 

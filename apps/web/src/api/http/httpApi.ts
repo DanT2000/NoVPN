@@ -50,6 +50,7 @@ export const httpApi: ApiClient = {
   getPublicData: () => req<PublicBootstrapData>('GET', '/api/public/bootstrap'),
 
   checkCode: (code) => req<CheckCodeResult>('POST', '/api/public/check-code', { code }),
+  tokenLogin: (token) => req<CheckCodeResult>('POST', '/api/public/token-login', { token }),
   publicLogout: () => req<Ok>('POST', '/api/public/logout'),
   issueDevice: (r: IssueDeviceRequest) => req<IssueDeviceResult>('POST', '/api/public/devices', r),
   reissueDevice: (id) => req<IssueDeviceResult>('POST', `/api/public/devices/${id}/reissue`),
@@ -64,6 +65,7 @@ export const httpApi: ApiClient = {
   extendUser: (id, days) => req<User>('POST', `/api/admin/users/${id}/extend`, { days }),
   setUserActive: (id, active) => req<User>('POST', `/api/admin/users/${id}/active`, { active }),
   reissueCode: (id) => req<User>('POST', `/api/admin/users/${id}/reissue-code`),
+  reissueLink: (id) => req<User>('POST', `/api/admin/users/${id}/reissue-link`),
   setUserCode: (id, code) => req<CodeResult>('POST', `/api/admin/users/${id}/code`, { code }),
   deleteUser: (id) => req<Ok>('DELETE', `/api/admin/users/${id}`),
 

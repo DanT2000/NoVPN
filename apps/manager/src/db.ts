@@ -2,6 +2,7 @@
 // (поля legacy_id, uuid, public_key сохраняют старые идентификаторы).
 
 import Database from 'better-sqlite3';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
@@ -179,11 +180,38 @@ for (const stmt of [
   'ALTER TABLE apps ADD COLUMN download_url TEXT',
   'ALTER TABLE server_keys ADD COLUMN proxy_enc TEXT',
   'ALTER TABLE server_keys ADD COLUMN awg_params TEXT',
+  // Личная ссылка входа: длинный токен вместо набираемого руками кода.
+  'ALTER TABLE users ADD COLUMN access_token TEXT',
+  // До какого момента этому пользователю разрешён вход по 6-значному коду.
+  // NULL = нельзя вовсе (так у всех, кого завели после перехода на ссылки).
+  'ALTER TABLE users ADD COLUMN code_login_until TEXT',
 ]) {
   try {
     db.exec(stmt);
   } catch {
     /* колонка уже есть */
+  }
+}
+
+try {
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_token ON users(access_token)');
+} catch {
+  /* индекс уже есть */
+}
+
+// Разовая миграция существующих пользователей: выдать личную ссылку каждому и
+// разрешить старый вход по коду ещё на 30 дней — чтобы никто не потерял доступ
+// в момент выкатки. Новые пользователи заводятся сразу без входа по коду.
+{
+  const rows = db.prepare('SELECT id FROM users WHERE access_token IS NULL').all() as Array<{ id: string }>;
+  if (rows.length) {
+    const until = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+    const upd = db.prepare('UPDATE users SET access_token = ?, code_login_until = ? WHERE id = ?');
+    const tx = db.transaction((list: Array<{ id: string }>) => {
+      for (const r of list) upd.run(crypto.randomBytes(18).toString('base64url'), until, r.id);
+    });
+    tx(rows);
+    console.log(`[migrate] выдал личные ссылки: ${rows.length}; вход по коду для них действует до ${until.slice(0, 10)}`);
   }
 }
 

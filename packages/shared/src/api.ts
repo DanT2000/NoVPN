@@ -38,6 +38,9 @@ export interface PublicUserView {
   allowedProtocols: Array<'xray' | 'amneziawg'>;
   isActive: boolean;
   telegramLinked: boolean;
+  /** До какого момента работает вход по коду. null = вход по коду недоступен,
+   *  человек пользуется личной ссылкой. Нужно, чтобы предупредить о переходе. */
+  codeLoginUntil: string | null;
 }
 
 /** Ответ GET /api/public/bootstrap — данные публичной части сайта.

@@ -75,7 +75,7 @@ type TrafMode = 'unlim' | 'custom';
 function UserCardInner({ user }: { user: User }) {
   const {
     data, isMobile, goAdmin, showToast, showConfirm,
-    updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
+    updateUser, extendUser, setUserActive, reissueCode, reissueLink, setUserCode, deleteUser,
     reissueDevice, revokeDevice, issueDevice,
   } = useApp();
 
@@ -103,6 +103,27 @@ function UserCardInner({ user }: { user: User }) {
   // ── Код ──
   const [manualCode, setManualCode] = useState('');
   const [codeError, setCodeError] = useState<string | null>(null);
+
+  // ── Личная ссылка ──
+  // Домен берём из настроек, а если не задан — из адресной строки, чтобы
+  // ссылка была рабочей сразу, без похода в настройки.
+  const accessLink = user.accessToken
+    ? `${(data?.settings.domain || window.location.origin).replace(/\/$/, '')}/k/${user.accessToken}`
+    : 'ссылка не выдана';
+  const codeLoginActive = !!user.codeLoginUntil && new Date(user.codeLoginUntil) > new Date();
+  const codeLoginLine = codeLoginActive
+    ? `Код доступа — старый способ, работает до ${dateShort(user.codeLoginUntil!)}`
+    : 'Код доступа — вход по нему отключён, остаётся только для Telegram-бота';
+  const reissueLinkFor = () =>
+    showConfirm({
+      title: 'Выдать новую ссылку?',
+      text: `Старая ссылка «${user.name}» сразу перестанет работать. Новую нужно будет отправить человеку заново.`,
+      confirmLabel: 'Выдать новую',
+      onConfirm: async () => {
+        await reissueLink(user.id);
+        showToast('Ссылка перевыпущена');
+      },
+    });
 
   // ── Срок ──
   const [extendDays, setExtendDays] = useState('');
@@ -328,24 +349,50 @@ function UserCardInner({ user }: { user: User }) {
 
       {/* Код + Срок в две колонки */}
       <div className="grid-2">
-        <Panel title="Код доступа">
-          <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span className="mono" style={{ fontSize: 26, fontWeight: 700, letterSpacing: '0.06em' }}>
-              {user.code}
-            </span>
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={async () => {
-                await copyText(user.code);
-                showToast('Код скопирован');
-              }}
-            >
-              Копировать
-            </button>
-            <button className="btn btn-outline btn-sm" onClick={reissue}>
-              Перевыпустить
-            </button>
+        <Panel title="Доступ">
+          {/* Личная ссылка — основной способ. Её отправляют человеку, вводить
+              ничего не надо, а длинный токен не подобрать. */}
+          <Field label="Личная ссылка — отправьте её человеку">
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <input className="input mono" readOnly value={accessLink} style={{ flex: '1 1 260px', fontSize: 12 }} />
+              <button
+                className="btn btn-primary btn-sm"
+                disabled={!user.accessToken}
+                onClick={async () => {
+                  showToast((await copyText(accessLink)) ? 'Ссылка скопирована' : 'Не удалось скопировать');
+                }}
+              >
+                Копировать
+              </button>
+              <button className="btn btn-outline btn-sm" onClick={reissueLinkFor}>
+                Новая ссылка
+              </button>
+            </div>
+          </Field>
+          <div className="body small muted" style={{ marginTop: -4 }}>
+            «Новая ссылка» мгновенно ломает старую — на случай, если утекла.
           </div>
+
+          {/* Код — устаревший способ. Живёт только у тех, кто получил его раньше. */}
+          <Field label={codeLoginLine}>
+            <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '0.06em', opacity: codeLoginActive ? 1 : 0.45 }}>
+                {user.code}
+              </span>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  await copyText(user.code);
+                  showToast('Код скопирован');
+                }}
+              >
+                Копировать
+              </button>
+              <button className="btn btn-outline btn-sm" onClick={reissue}>
+                Перевыпустить
+              </button>
+            </div>
+          </Field>
           <Field label="Задать код вручную">
             <div className="row" style={{ gap: 8 }}>
               <input

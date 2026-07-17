@@ -45,8 +45,15 @@ export interface User {
   comment: string;
   category: string | null;
   tags: string[];
-  /** Шестизначный пользовательский код. */
+  /** Шестизначный пользовательский код. Устаревший способ входа: работает
+   *  только у тех, кому он был разрешён при переходе на ссылки, и только до
+   *  codeLoginUntil. Остаётся как идентификатор в Telegram-боте. */
   code: string;
+  /** Токен личной ссылки: vpn.appswire.ru/k/<accessToken>. Основной способ входа. */
+  accessToken: string | null;
+  /** До какого момента этому пользователю разрешён вход по коду.
+   *  null = нельзя (так у всех, кого завели после перехода на ссылки). */
+  codeLoginUntil: string | null;
   deviceLimit: number | null;
   expiresAt: string | null;
   trafficLimitGb: number | null;

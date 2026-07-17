@@ -69,7 +69,7 @@ function toPublic(u: User): PublicUserView {
     trafficLimitGb: u.trafficLimitGb, trafficUsedGb: u.trafficUsedGb, allowedServers: u.allowedServers,
     defaultServerId: u.defaultServerId,
     allowedProtocols: u.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
-    isActive: u.isActive, telegramLinked: !!u.telegram,
+    isActive: u.isActive, telegramLinked: !!u.telegram, codeLoginUntil: u.codeLoginUntil,
   };
 }
 
@@ -125,6 +125,15 @@ export const mockApi: ApiClient = {
   async publicLogout(): Promise<Ok> {
     mockUserId = null;
     return { ok: true };
+  },
+
+  async tokenLogin(token: string): Promise<CheckCodeResult> {
+    await wait(200);
+    const u = state.users.find((x) => x.accessToken === token);
+    if (!u) return { error: { type: 'not_found', message: 'Ссылка недействительна. Попросите у администратора новую.' } };
+    if (!u.isActive) return { error: { type: 'disabled', message: 'Доступ отключён. Обратитесь к администратору.' } };
+    mockUserId = u.id;
+    return { user: toPublic(u) };
   },
 
   async checkCode(code: string): Promise<CheckCodeResult> {
@@ -199,6 +208,8 @@ export const mockApi: ApiClient = {
       allowedServers: input.allowedServers, defaultServerId: input.defaultServerId,
       allowedProtocols: input.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
       isActive: true, telegram: null, createdAt: nowIso(), lastActivityAt: null,
+      // Новым — только личная ссылка: вход по коду для них не открывается.
+      accessToken: 'tok-' + Math.random().toString(36).slice(2, 14), codeLoginUntil: null,
     };
     state.users.push(u);
     log(`Создан пользователь «${u.name}»`);
@@ -226,6 +237,14 @@ export const mockApi: ApiClient = {
     const u = state.users.find((x) => x.id === id)!;
     u.isActive = active;
     if (!active) state.devices.filter((d) => d.userId === id).forEach((d) => (d.isActive = false));
+    return clone(u);
+  },
+
+  async reissueLink(id: string): Promise<User> {
+    await wait(250);
+    const u = state.users.find((x) => x.id === id)!;
+    u.accessToken = 'tok-' + Math.random().toString(36).slice(2, 14);
+    log(`Перевыпущена личная ссылка «${u.name}»`);
     return clone(u);
   },
 
