@@ -20,7 +20,6 @@ import type {
 import type {
   AddServerInput,
   ApiClient,
-  CodeResult,
   CreateUserInput,
   EditServerInput,
   Ok,
@@ -119,6 +118,10 @@ export const mockApi: ApiClient = {
       })),
       apps: clone(state.apps),
       telegram: { enabled: state.telegram.enabled, botUsername: state.telegram.botUsername ?? null },
+      botLink:
+        u && state.telegram.enabled && state.telegram.botUsername
+          ? `https://t.me/${state.telegram.botUsername}?start=${u.accessToken ?? ''}`
+          : null,
     };
   },
 
@@ -256,6 +259,12 @@ export const mockApi: ApiClient = {
     log(`Перевыпущена личная ссылка «${u.name}»`);
     return clone(u);
   },
+  async setCodeLogin(id: string, enabled: boolean): Promise<User> {
+    await wait(150);
+    const u = state.users.find((x) => x.id === id)!;
+    u.codeLoginUntil = enabled ? '2999-01-01T00:00:00.000Z' : null;
+    return clone(u);
+  },
 
   async reissueCode(id: string): Promise<User> {
     await wait(300);
@@ -269,15 +278,6 @@ export const mockApi: ApiClient = {
     return clone(u);
   },
 
-  async setUserCode(id: string, code: string): Promise<CodeResult> {
-    await wait(300);
-    if (!/^\d{6}$/.test(code)) return { error: { type: 'validation', message: 'Код — 6 цифр.' } };
-    if (state.users.some((x) => x.code === code && x.id !== id))
-      return { error: { type: 'validation', message: 'Такой код уже используется.' } };
-    const u = state.users.find((x) => x.id === id)!;
-    u.code = code;
-    return { user: clone(u) };
-  },
 
   async deleteUser(id: string): Promise<Ok> {
     await wait(300);

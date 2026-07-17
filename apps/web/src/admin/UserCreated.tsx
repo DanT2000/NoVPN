@@ -46,6 +46,8 @@ function UserCreatedInner({ user }: { user: User }) {
   const protoLabels = user.allowedProtocols.map((p) => PROTOCOL_LABELS[p]).join(', ');
   // Личная ссылка — то, что отправляют человеку. Он переходит и сразу в кабинете.
   const accessLink = user.accessToken ? `${domain.replace(/\/$/, '')}/k/${user.accessToken}` : '';
+  // Код показываем только если админ включил вход по нему.
+  const codeLoginOn = !!user.codeLoginUntil && new Date(user.codeLoginUntil) > new Date();
 
   return (
     <div className="stack">
@@ -74,18 +76,19 @@ function UserCreatedInner({ user }: { user: User }) {
         </div>
         <div className="body small muted" style={{ marginTop: 8 }}>
           Человек переходит по ссылке — открывается его кабинет, вводить ничего не нужно.
-          Код ниже — запасной способ входа, на случай если ссылка потеряется.
         </div>
       </div>
 
-      <div className="card" style={{ textAlign: 'center', padding: 18 }}>
-        <div className="eyebrow" style={{ marginBottom: 6 }}>
-          Код доступа (запасной)
+      {codeLoginOn ? (
+        <div className="card" style={{ textAlign: 'center', padding: 18 }}>
+          <div className="eyebrow" style={{ marginBottom: 6 }}>
+            Код доступа (запасной вход)
+          </div>
+          <div className="mono" style={{ fontSize: 34, fontWeight: 700, letterSpacing: '0.08em' }}>
+            {user.code}
+          </div>
         </div>
-        <div className="mono" style={{ fontSize: 34, fontWeight: 700, letterSpacing: '0.08em' }}>
-          {user.code}
-        </div>
-      </div>
+      ) : null}
 
       <div className="card">
         <div className="divide-row">
@@ -114,12 +117,12 @@ function UserCreatedInner({ user }: { user: User }) {
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 10 }}>
         <button
           className="btn btn-primary"
+          disabled={!accessLink}
           onClick={async () => {
-            await copyText(user.code);
-            showToast('Код скопирован');
+            showToast((await copyText(accessLink)) ? 'Ссылка скопирована' : 'Не удалось скопировать');
           }}
         >
-          Скопировать код
+          Скопировать ссылку
         </button>
         <button
           className="btn btn-secondary"

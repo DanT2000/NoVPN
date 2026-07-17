@@ -204,7 +204,7 @@ export function Telegram() {
 
         {/* Шаблон */}
         <Panel title="Шаблон сообщений">
-          <Field label="Текст" hint="переменные: {code} {url} {expires}">
+          <Field label="Текст" hint="переменные: {link} — личная ссылка, {code} — код, {url} — сайт, {expires} — срок">
             <textarea className="textarea" value={template} onChange={(e) => setTemplate(e.target.value)} />
           </Field>
         </Panel>

@@ -53,6 +53,9 @@ export interface PublicBootstrapData {
   servers: PublicServerView[];
   apps: AppClient[];
   telegram: { enabled: boolean; botUsername: string | null };
+  /** Готовая ссылка «Привязать Telegram» для вошедшего пользователя (deep-link
+   *  с его токеном). null, если бот не настроен или нет входа. */
+  botLink: string | null;
 }
 
 /** POST /api/public/devices — выпуск конфига (одно устройство = один конфиг). */

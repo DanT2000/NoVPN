@@ -5,7 +5,7 @@ import { useState } from 'react';
 import type { IssueDeviceResult, Protocol, Server, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
-import { CategoryPicker, Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader } from '../components/ui';
+import { CategoryPicker, Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader, Toggle } from '../components/ui';
 import { Qr } from '../components/Qr';
 import { dateShort, daysLeft, gb, rel, DAY_MS } from '../lib/format';
 import { countActiveDevices, devStatusOf, serverAgentView, statusOf } from '../lib/status';
@@ -75,7 +75,7 @@ type TrafMode = 'unlim' | 'custom';
 function UserCardInner({ user }: { user: User }) {
   const {
     data, isMobile, goAdmin, showToast, showConfirm,
-    updateUser, extendUser, setUserActive, reissueCode, reissueLink, setUserCode, deleteUser,
+    updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
     reissueDevice, revokeDevice, issueDevice,
   } = useApp();
 
@@ -100,10 +100,6 @@ function UserCardInner({ user }: { user: User }) {
   const [protocols, setProtocols] = useState<Protocol[]>([...user.allowedProtocols]);
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // ── Код ──
-  const [manualCode, setManualCode] = useState('');
-  const [codeError, setCodeError] = useState<string | null>(null);
-
   // ── Личная ссылка ──
   // Домен берём из настроек, а если не задан — из адресной строки, чтобы
   // ссылка была рабочей сразу, без похода в настройки.
@@ -111,9 +107,6 @@ function UserCardInner({ user }: { user: User }) {
     ? `${(data?.settings.domain || window.location.origin).replace(/\/$/, '')}/k/${user.accessToken}`
     : 'ссылка не выдана';
   const codeLoginActive = !!user.codeLoginUntil && new Date(user.codeLoginUntil) > new Date();
-  const codeLoginLine = codeLoginActive
-    ? `Код доступа — старый способ, работает до ${dateShort(user.codeLoginUntil!)}`
-    : 'Код доступа — вход по нему отключён, остаётся только для Telegram-бота';
   const reissueLinkFor = () =>
     showConfirm({
       title: 'Выдать новую ссылку?',
@@ -124,6 +117,14 @@ function UserCardInner({ user }: { user: User }) {
         showToast('Ссылка перевыпущена');
       },
     });
+  const toggleCodeLogin = async (on: boolean) => {
+    try {
+      await setCodeLogin(user.id, on);
+      showToast(on ? 'Вход по коду включён' : 'Вход по коду выключен');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось изменить');
+    }
+  };
 
   // ── Срок ──
   const [extendDays, setExtendDays] = useState('');
@@ -258,16 +259,6 @@ function UserCardInner({ user }: { user: User }) {
       },
     });
   }
-  async function saveCode() {
-    const res = await setUserCode(user.id, manualCode);
-    if (!res.ok) {
-      setCodeError(res.message ?? 'Не удалось сохранить код.');
-      return;
-    }
-    setCodeError(null);
-    setManualCode('');
-    showToast('Код сохранён');
-  }
   async function doExtend(days: number) {
     await extendUser(user.id, days);
     showToast(`Продлено на ${days} дн`);
@@ -349,7 +340,7 @@ function UserCardInner({ user }: { user: User }) {
 
       {/* Код + Срок в две колонки */}
       <div className="grid-2">
-        <Panel title="Доступ">
+        <Panel title="Способ входа">
           {/* Личная ссылка — основной способ. Её отправляют человеку, вводить
               ничего не надо, а длинный токен не подобрать. */}
           <Field label="Личная ссылка — отправьте её человеку">
@@ -373,46 +364,35 @@ function UserCardInner({ user }: { user: User }) {
             «Новая ссылка» мгновенно ломает старую — на случай, если утекла.
           </div>
 
-          {/* Код — устаревший способ. Живёт только у тех, кто получил его раньше. */}
-          <Field label={codeLoginLine}>
-            <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '0.06em', opacity: codeLoginActive ? 1 : 0.45 }}>
+          {/* Вход по коду — запасной способ, по умолчанию выключен. */}
+          <div style={{ height: 1, background: 'var(--border)', margin: '14px 0' }} />
+          <label className="row" style={{ gap: 10, alignItems: 'center', cursor: 'pointer', justifyContent: 'space-between' }}>
+            <span>
+              <span style={{ fontWeight: 600 }}>Вход по коду доступа</span>
+              <span className="body small muted" style={{ display: 'block', marginTop: 2 }}>
+                Запасной 6-значный код для входа на сайте.
+              </span>
+            </span>
+            <Toggle on={codeLoginActive} onChange={(v) => void toggleCodeLogin(v)} ariaLabel="Вход по коду" />
+          </label>
+          {codeLoginActive ? (
+            <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+              <span className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '0.06em' }}>
                 {user.code}
               </span>
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={async () => {
-                  await copyText(user.code);
-                  showToast('Код скопирован');
+                  showToast((await copyText(user.code)) ? 'Код скопирован' : 'Не удалось скопировать');
                 }}
               >
-                Копировать
+                Копировать код
               </button>
               <button className="btn btn-outline btn-sm" onClick={reissue}>
-                Перевыпустить
+                Новый код
               </button>
             </div>
-          </Field>
-          <Field label="Задать код вручную">
-            <div className="row" style={{ gap: 8 }}>
-              <input
-                className="input mono"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="6 цифр"
-                value={manualCode}
-                onChange={(e) => {
-                  setManualCode(digits(e.target.value));
-                  setCodeError(null);
-                }}
-                style={{ maxWidth: 160 }}
-              />
-              <button className="btn btn-primary btn-sm" onClick={() => void saveCode()}>
-                Сохранить
-              </button>
-            </div>
-          </Field>
-          {codeError && <div className="notice notice-red">{codeError}</div>}
+          ) : null}
         </Panel>
 
         <Panel title="Срок действия">

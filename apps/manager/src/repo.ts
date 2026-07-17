@@ -79,7 +79,12 @@ export interface NewUserRow {
   allowedServers: string[];
   defaultServerId: string | null;
   allowedProtocols: Array<'xray' | 'amneziawg'>;
+  /** Разрешить вход по коду. По умолчанию нет — основной способ это личная ссылка. */
+  codeLoginEnabled?: boolean;
 }
+
+// «Бессрочно включено» для входа по коду. Сравнение в check-code — до этой даты.
+export const CODE_LOGIN_FOREVER = '2999-01-01T00:00:00.000Z';
 
 export function insertUser(u: NewUserRow): User {
   const id = newId('u');
@@ -90,17 +95,26 @@ export function insertUser(u: NewUserRow): User {
       access_token,code_login_until)
      VALUES(@id,@name,@comment,@category,@tags,@code,@device_limit,@expires_at,@traffic_limit_gb,0,
       @reset_policy,@allowed_servers,@default_server_id,@allowed_protocols,1,NULL,@now,@now,
-      @access_token,NULL)`,
+      @access_token,@code_login_until)`,
   ).run({
     id, name: u.name, comment: u.comment, category: u.category, tags: JSON.stringify(u.tags), code: u.code,
     device_limit: u.deviceLimit, expires_at: u.expiresAt, traffic_limit_gb: u.trafficLimitGb,
     reset_policy: u.resetPolicy, allowed_servers: JSON.stringify(u.allowedServers),
     default_server_id: u.defaultServerId, allowed_protocols: JSON.stringify(u.allowedProtocols), now,
-    // Личная ссылка выдаётся сразу. code_login_until = NULL: новым вход по коду
-    // не положен, у них есть ссылка.
+    // Личная ссылка выдаётся сразу. Вход по коду — только если админ включил.
     access_token: crypto.randomBytes(18).toString('base64url'),
+    code_login_until: u.codeLoginEnabled ? CODE_LOGIN_FOREVER : null,
   });
   return getUser(id)!;
+}
+
+/** Включить/выключить вход по коду для пользователя. */
+export function setCodeLogin(userId: string, enabled: boolean): void {
+  db.prepare('UPDATE users SET code_login_until = ?, updated_at = ? WHERE id = ?').run(
+    enabled ? CODE_LOGIN_FOREVER : null,
+    nowIso(),
+    userId,
+  );
 }
 
 export function updateUserFields(id: string, fields: Record<string, unknown>): User | null {
@@ -430,6 +444,10 @@ export function listDevicesOfUser(userId: string): Device[] {
 export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
   const tg = getTelegramSafe();
   const user = userId ? getUser(userId) : null;
+  // Deep-link привязки: /start <токен пользователя>. Токен длинный, не подбирается.
+  const token = user ? getAccessToken(user.id) : null;
+  const botLink =
+    tg.enabled && tg.botUsername && token ? `https://t.me/${tg.botUsername}?start=${token}` : null;
   return {
     user: user && user.isActive ? toPublicUserView(user) : null,
     devices: user ? listDevicesOfUser(user.id) : [],
@@ -445,5 +463,6 @@ export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
     })),
     apps: listApps(),
     telegram: { enabled: tg.enabled, botUsername: tg.botUsername ?? null },
+    botLink,
   };
 }

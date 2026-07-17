@@ -25,8 +25,8 @@ export function Settings() {
   const [defaultServerId, setDefaultServerId] = useState<string | null>(s?.defaultServerId ?? null);
   const [defaultProtocols, setDefaultProtocols] = useState<UserProtocol[]>(s?.defaultProtocols ?? []);
   const [messageTemplate, setMessageTemplate] = useState(s?.messageTemplate ?? '');
-  const [codeAttempts, setCodeAttempts] = useState(s?.codeAttempts ?? 0);
-  const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 0);
+  const [codeAttempts, setCodeAttempts] = useState(s?.codeAttempts ?? 5);
+  const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 15);
   const [saving, setSaving] = useState(false);
 
   // Бэкап базы

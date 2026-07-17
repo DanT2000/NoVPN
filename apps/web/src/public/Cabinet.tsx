@@ -123,9 +123,16 @@ export function Cabinet() {
           title="Telegram-бот"
           sub={user.telegramLinked ? 'Привязан' : botReady ? 'Привязать' : 'Не подключён'}
           onClick={() => {
-            if (user.telegramLinked) return showToast('Telegram уже привязан. Напишите боту /config для новой конфигурации.');
-            if (botReady) {
-              openUrl(`https://t.me/${data.telegram.botUsername}?start=${user.code}`);
+            const botUrl = data.telegram.botUsername ? `https://t.me/${data.telegram.botUsername}` : null;
+            if (user.telegramLinked) {
+              // Уже привязан — просто открываем бота, там меню с конфигами.
+              if (botUrl) openUrl(botUrl);
+              else showToast('Telegram уже привязан.');
+              return;
+            }
+            if (botReady && data.botLink) {
+              // Привязка по личному токену (deep-link), а не по коду — код скоро отключат.
+              openUrl(data.botLink);
               showToast('Открываем бота — нажмите «Запустить», привязка произойдёт автоматически.');
             } else {
               showToast('Бот пока не настроен администратором.');

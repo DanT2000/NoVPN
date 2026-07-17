@@ -137,9 +137,12 @@ export function Users() {
                   {...rowProps(() => goAdmin('user-card', { userId: u.id }))}
                 >
                   <div style={{ minWidth: 0 }}>
-                    <div className="row" style={{ gap: 8 }}>
+                    <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                       <span style={{ fontWeight: 600 }}>{u.name}</span>
-                      <span className="mono small muted">{u.code}</span>
+                      {/* Код — только если у пользователя включён вход по нему. */}
+                      {u.codeLoginUntil && new Date(u.codeLoginUntil) > new Date() ? (
+                        <span className="mono small muted" title="Включён вход по коду">🔑 {u.code}</span>
+                      ) : null}
                     </div>
                     {catTags ? <div className="small muted" style={{ marginTop: 2 }}>{catTags}</div> : null}
                     {isMobile ? (

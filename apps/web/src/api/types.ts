@@ -29,7 +29,11 @@ export interface CreateUserInput {
   allowedServers: string[];
   defaultServerId: string | null;
   allowedProtocols: Array<'xray' | 'amneziawg' | 'http' | 'https' | 'socks5'>;
+  /** Код доступа. Пустая строка — сервер сгенерирует сам (код это внутренний
+   *  идентификатор, вводить его человеку не нужно). */
   code: string;
+  /** Разрешить запасной вход по коду. По умолчанию нет — основной способ ссылка. */
+  codeLoginEnabled?: boolean;
 }
 
 export type UpdateUserPatch = Partial<
@@ -140,7 +144,8 @@ export interface ApiClient {
   reissueCode(id: string): Promise<User>;
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
-  setUserCode(id: string, code: string): Promise<CodeResult>;
+  /** Включить/выключить запасной вход по коду. */
+  setCodeLogin(id: string, enabled: boolean): Promise<User>;
   deleteUser(id: string): Promise<Ok>;
 
   // ── admin: servers ──

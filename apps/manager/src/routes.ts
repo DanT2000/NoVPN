@@ -218,9 +218,16 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
   const b = req.body ?? {};
   const name = String(b.name ?? '').trim();
   if (!name) return res.status(400).json(err('validation', 'Укажите имя пользователя.'));
-  let code = String(b.code ?? '');
-  if (!/^\d{6}$/.test(code)) return res.status(400).json(err('validation', 'Код должен состоять из 6 цифр.'));
-  if (repo.codeExists(code)) return res.status(400).json(err('validation', 'Такой код уже используется — выберите другой.'));
+  // Код — внутренний идентификатор (и метка для Telegram-бота). Основной способ
+  // входа это личная ссылка, поэтому код можно не задавать: сгенерируем сами.
+  // Вручную заданный код принимаем, если он валиден и свободен.
+  let code = String(b.code ?? '').trim();
+  if (code) {
+    if (!/^\d{6}$/.test(code)) return res.status(400).json(err('validation', 'Код должен состоять из 6 цифр.'));
+    if (repo.codeExists(code)) return res.status(400).json(err('validation', 'Такой код уже используется — выберите другой.'));
+  } else {
+    code = repo.genUniqueCode();
+  }
   const allowedServers: string[] = Array.isArray(b.allowedServers) ? b.allowedServers : [];
   if (allowedServers.length === 0) return res.status(400).json(err('validation', 'Выберите хотя бы один сервер.'));
   const allowedProtocols = (Array.isArray(b.allowedProtocols) ? b.allowedProtocols : []).filter((p: string) => p === 'xray' || p === 'amneziawg');
@@ -231,10 +238,21 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
     code, deviceLimit: b.deviceLimit ?? null, expiresAt: b.expiresAt ?? null, trafficLimitGb: b.trafficLimitGb ?? null,
     resetPolicy: b.resetPolicy === 'monthly' ? 'monthly' : 'never', allowedServers,
     defaultServerId: b.defaultServerId ?? null, allowedProtocols,
+    codeLoginEnabled: b.codeLoginEnabled === true,
   });
   repo.addLog(`Создан пользователь «${u.name}»`);
   repo.addHistory(u.id, 'Пользователь создан');
   res.json(u);
+});
+
+// Включить/выключить вход по коду для пользователя.
+router.post('/api/admin/users/:id/code-login', requireAdmin, (req, res) => {
+  const u = repo.getUser(req.params.id!);
+  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+  const enabled = req.body?.enabled === true;
+  repo.setCodeLogin(u.id, enabled);
+  repo.addLog(`${enabled ? 'Включён' : 'Отключён'} вход по коду «${u.name}»`);
+  res.json(repo.getUser(u.id));
 });
 
 router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {

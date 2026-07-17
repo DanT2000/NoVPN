@@ -1,5 +1,6 @@
 // Telegram-бот: работает через прокси (прод в РФ не достаёт api.telegram.org напрямую).
-// Умеет: привязка по 6-значному коду (/start <code> или просто код) и выдача конфига (/config).
+// Умеет: привязка по токену личной ссылки (/start <token>, deep-link из кабинета)
+// или по 6-значному коду, пока он жив; и выдача конфига (/config).
 
 import { ProxyAgent } from 'undici';
 import * as repo from '../repo.js';
@@ -181,41 +182,39 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
   const text = (msg.text as string).trim();
   const handle = handleOf(msg.from ?? {}, chatId);
 
-  // Команды меню/конфига для уже привязанных.
-  if (/^\/(menu|config|start$)/i.test(text) || /меню|получить конфиг/i.test(text)) {
+  // Команды меню/конфига для уже привязанных. «/start <payload>» с полезной
+  // нагрузкой — это привязка, её пропускаем ниже, поэтому исключаем.
+  const isStartWithPayload = /^\/start\s+\S/.test(text);
+  if ((/^\/(menu|config|start$)/i.test(text) || /меню|получить конфиг/i.test(text)) && !isStartWithPayload) {
     const linked = findUser(handle);
-    if (linked && !text.match(/\/start\s+\d{6}/)) {
+    if (linked) {
       if (/config|получить конфиг/i.test(text)) return startGetConfig(chatId, linked);
       return showMenu(chatId, linked);
     }
   }
 
-  // Привязка по коду.
-  let code = '';
+  // Привязка. Основной способ — переход из кабинета по кнопке: там deep-link
+  // /start <токен>. Токен длинный и не подбирается. Короткий код тоже принимаем,
+  // пока он ещё жив у мигрированных пользователей.
+  let payload = '';
   if (text.startsWith('/start')) {
-    code = text.replace('/start', '').trim();
-    if (!code) {
+    payload = text.replace('/start', '').trim();
+    if (!payload) {
       const linked = findUser(handle);
       if (linked) return showMenu(chatId, linked);
-      await send(chatId, 'Привет! Отправьте ваш 6-значный код доступа, чтобы привязать Telegram.');
+      await send(chatId, 'Привет! Чтобы привязать Telegram, откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
       return;
     }
-  } else if (/^\d{6}$/.test(text)) {
-    code = text;
   } else {
-    const linked = findUser(handle);
-    if (linked) return showMenu(chatId, linked);
-    await send(chatId, 'Отправьте ваш 6-значный код доступа для привязки.');
-    return;
+    payload = text.trim();
   }
 
-  if (!/^\d{6}$/.test(code)) {
-    await send(chatId, 'Код должен состоять из 6 цифр. Попробуйте ещё раз.');
-    return;
-  }
-  const user = repo.getUserByCode(code);
+  // Токен личной ссылки (длинный) или 6-значный код (пока жив).
+  const user = /^\d{6}$/.test(payload) ? repo.getUserByCode(payload) : repo.getUserByAccessToken(payload);
   if (!user) {
-    await send(chatId, 'Код не найден. Проверьте код и отправьте снова.');
+    const linked = findUser(handle);
+    if (linked) return showMenu(chatId, linked);
+    await send(chatId, 'Не удалось привязать. Откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
     return;
   }
   repo.updateUserFields(user.id, { telegram: handle });
@@ -235,7 +234,7 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
   }
   const user = findUser(handle);
   if (!user) {
-    await send(chatId, 'Сначала привяжите Telegram — отправьте ваш 6-значный код доступа.');
+    await send(chatId, 'Сначала привяжите Telegram: откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
     return;
   }
   if (data === 'menu') return showMenu(chatId, user);

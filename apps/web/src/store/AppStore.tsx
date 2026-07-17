@@ -97,7 +97,8 @@ interface AppContextValue {
   reissueCode(id: string): Promise<User>;
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
-  setUserCode(id: string, code: string): Promise<{ ok: boolean; message?: string; user?: User }>;
+  /** Включить/выключить запасной вход по коду. */
+  setCodeLogin(id: string, enabled: boolean): Promise<User>;
   deleteUser(id: string): Promise<void>;
 
   // server ops
@@ -364,14 +365,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [upsertUser],
   );
-  const setUserCode = useCallback(
-    async (id: string, code: string) => {
-      const res = await api.setUserCode(id, code);
-      if ('user' in res) {
-        upsertUser(res.user);
-        return { ok: true, user: res.user };
-      }
-      return { ok: false, message: res.error.message };
+  const setCodeLogin = useCallback(
+    async (id: string, enabled: boolean) => {
+      const u = await api.setCodeLogin(id, enabled);
+      upsertUser(u);
+      return u;
     },
     [upsertUser],
   );
@@ -455,7 +453,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice,
       adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setUserCode, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer,
       saveTelegram, saveApps, saveSettings,
     }),
@@ -463,7 +461,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setUserCode, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],
   );

@@ -18,7 +18,6 @@ import type {
 import type {
   AddServerInput,
   ApiClient,
-  CodeResult,
   CreateUserInput,
   EditServerInput,
   Ok,
@@ -83,7 +82,7 @@ export const httpApi: ApiClient = {
   setUserActive: (id, active) => req<User>('POST', `/api/admin/users/${id}/active`, { active }),
   reissueCode: (id) => req<User>('POST', `/api/admin/users/${id}/reissue-code`),
   reissueLink: (id) => req<User>('POST', `/api/admin/users/${id}/reissue-link`),
-  setUserCode: (id, code) => req<CodeResult>('POST', `/api/admin/users/${id}/code`, { code }),
+  setCodeLogin: (id, enabled) => req<User>('POST', `/api/admin/users/${id}/code-login`, { enabled }),
   deleteUser: (id) => req<Ok>('DELETE', `/api/admin/users/${id}`),
 
   testServerConnection: (input: AddServerInput) =>

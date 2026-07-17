@@ -7,7 +7,6 @@ import type { CreateUserInput } from '../api/types';
 import { CategoryPicker, Chip, Dot, Field, Panel, ScreenHeader } from '../components/ui';
 import { DAY_MS } from '../lib/format';
 import { serverAgentView } from '../lib/status';
-import { genCode, isValidCode } from '../lib/gen';
 
 const CATEGORIES = ['Общие', 'Семья', 'Друзья', 'Работа', 'Админ'] as const;
 
@@ -34,7 +33,6 @@ export function UserCreate() {
   const defaultProtos: Protocol[] = (data?.settings.defaultProtocols ?? ['xray', 'amneziawg']).filter(
     (p) => p === 'xray' || p === 'amneziawg',
   ) as Protocol[];
-  const existingCodes = data?.users.map((u) => u.code) ?? [];
 
   // Основное
   const [name, setName] = useState('');
@@ -56,10 +54,10 @@ export function UserCreate() {
   const [defaultServerId, setDefaultServerId] = useState<string | null>(() => firstServerId ?? null);
   const [protocols, setProtocols] = useState<Protocol[]>(defaultProtos.length ? defaultProtos : ['xray', 'amneziawg']);
 
-  // Код доступа
-  const [codeMode, setCodeMode] = useState<'auto' | 'manual'>('auto');
-  const [autoCode, setAutoCode] = useState(() => genCode(existingCodes));
-  const [manualCode, setManualCode] = useState('');
+  // Вход по коду — опционально. Основной способ доступа это личная ссылка,
+  // код по умолчанию выключен. Сам код панель генерирует сама (нужен как
+  // внутренний идентификатор), задавать его вручную незачем.
+  const [codeLoginEnabled, setCodeLoginEnabled] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -97,19 +95,10 @@ export function UserCreate() {
   ];
 
   async function submit() {
-    const code = codeMode === 'auto' ? autoCode : manualCode;
     const effProtocols = isAdmin ? protocols : protocols.filter((p) => p === 'xray' || p === 'amneziawg');
 
     if (!name.trim()) {
       setError('Укажите имя пользователя.');
-      return;
-    }
-    if (!isValidCode(code)) {
-      setError('Код должен состоять из 6 цифр.');
-      return;
-    }
-    if (existingCodes.includes(code)) {
-      setError('Такой код уже используется — выберите другой.');
       return;
     }
     if (allowedServers.length === 0) {
@@ -143,7 +132,9 @@ export function UserCreate() {
       allowedServers,
       defaultServerId,
       allowedProtocols: effProtocols,
-      code,
+      // Код генерирует сервер — пустая строка. Вход по коду по умолчанию выключен.
+      code: '',
+      codeLoginEnabled,
     };
 
     setSubmitting(true);
@@ -236,7 +227,7 @@ export function UserCreate() {
 
       </Panel>
 
-      <Panel title="Доступ">
+      <Panel title="Серверы и протоколы">
         <div className="field">
           <span className="field-label">Разрешённые серверы</span>
           {servers.length === 0 ? (
@@ -308,31 +299,26 @@ export function UserCreate() {
         </div>
       </Panel>
 
-      <Panel title="Код доступа">
-        <div className="chip-row">
-          <Chip label="Автоматически" active={codeMode === 'auto'} onClick={() => setCodeMode('auto')} />
-          <Chip label="Задать вручную" active={codeMode === 'manual'} onClick={() => setCodeMode('manual')} />
+      <Panel title="Способ входа">
+        <div className="body small muted" style={{ marginBottom: 10 }}>
+          Основной способ — личная ссылка. Она выдаётся автоматически, и после создания
+          её можно скопировать и отправить человеку. Вводить код не нужно.
         </div>
-        {codeMode === 'auto' ? (
-          <div className="row" style={{ gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span className="mono" style={{ fontSize: 28, fontWeight: 700, letterSpacing: '0.08em' }}>
-              {autoCode}
-            </span>
-            <button className="btn btn-outline btn-sm" onClick={() => setAutoCode(genCode(existingCodes))}>
-              Сгенерировать заново
-            </button>
-          </div>
-        ) : (
+        <label className="row" style={{ gap: 10, alignItems: 'flex-start', cursor: 'pointer' }}>
           <input
-            className="input mono"
-            inputMode="numeric"
-            maxLength={6}
-            placeholder="6 цифр"
-            value={manualCode}
-            onChange={(e) => setManualCode(digits(e.target.value))}
-            style={{ maxWidth: 200 }}
+            type="checkbox"
+            checked={codeLoginEnabled}
+            onChange={(e) => setCodeLoginEnabled(e.target.checked)}
+            style={{ marginTop: 3 }}
           />
-        )}
+          <span>
+            <span style={{ fontWeight: 600 }}>Разрешить вход по коду доступа</span>
+            <span className="body small muted" style={{ display: 'block', marginTop: 2 }}>
+              Запасной способ: 6-значный код для входа на сайте. По умолчанию выключен —
+              код короткий и подбирается, ссылка надёжнее.
+            </span>
+          </span>
+        </label>
       </Panel>
 
       {error && <div className="notice notice-red">{error}</div>}

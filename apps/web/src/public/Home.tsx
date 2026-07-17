@@ -34,9 +34,9 @@ export function Home() {
     <div style={{ minHeight: 'calc(100vh - 96px)', display: 'flex', flexDirection: 'column' }}>
       {/* центрируем блок ввода по вертикали (как на входе в админку) */}
       <div style={{ margin: 'auto 0', width: '100%' }}>
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 10px' }}>Доступ по коду</h1>
+        <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 10px' }}>Вход в личный кабинет</h1>
         <p style={{ fontSize: 14, lineHeight: 1.55, color: 'var(--text-muted)', margin: '0 0 20px' }}>
-          Введите шестизначный код из сообщения администратора — конфигурация выдаётся автоматически.
+          Обычно вход — по личной ссылке из сообщения администратора. Если у вас код доступа — введите его ниже.
         </p>
 
         {/* Ссылка не сработала: человек пришёл по /k/<токен>, но токен уже

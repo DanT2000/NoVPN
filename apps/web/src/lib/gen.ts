@@ -4,15 +4,6 @@
 import type { User } from '@novpn/shared';
 import { dateLong } from './format';
 
-/** Шестизначный код, не входящий в existing. */
-export function genCode(existing?: string[]): string {
-  let c: string;
-  do {
-    c = String(Math.floor(100000 + Math.random() * 900000));
-  } while (existing && existing.includes(c));
-  return c;
-}
-
 export function genUuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
     const r = (Math.random() * 16) | 0;
@@ -35,8 +26,4 @@ export function buildMessage(
     .replaceAll('{code}', user.code)
     .replaceAll('{url}', base)
     .replaceAll('{expires}', expires);
-}
-
-export function isValidCode(code: string): boolean {
-  return /^\d{6}$/.test(code);
 }

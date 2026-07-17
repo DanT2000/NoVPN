@@ -33,7 +33,7 @@ const DEFAULT_TELEGRAM: TelegramSettings = {
   proxyLogin: '',
   proxyPassSet: false,
   template:
-    'Ваш доступ NoVPN:\n\nКод: {code}\nСайт: {url}\nДействует до: {expires}\n\nВведите код на сайте и следуйте инструкции.',
+    'Ваш доступ NoVPN:\n\n{link}\n\nПерейдите по ссылке — откроется личный кабинет, вводить ничего не нужно.\n\nДействует до: {expires}',
   status: 'stopped',
   linkedUserIds: [],
 };
