@@ -265,6 +265,31 @@ export async function sshHasSshAccess(serverId: string): Promise<boolean> {
   return !!s?.passwordEnc;
 }
 
+/** Реальный аудит сервера ДО добавления (креды из формы, сервера в БД ещё нет). */
+export async function sshProbe(c: { host: string; port: number; user: string; secret: string }): Promise<Record<string, string>> {
+  const auth = /PRIVATE KEY/.test(c.secret) ? { privateKey: c.secret } : { password: c.secret };
+  const script = `set +e
+. /etc/os-release 2>/dev/null
+echo "OS=$PRETTY_NAME"
+echo "RAM=$(free -m | awk '/Mem:/{print $2}')"
+command -v docker >/dev/null 2>&1 && echo "DOCKER=yes" || echo "DOCKER=no"
+[ -f /opt/amnezia/xray/server.json ] && echo "XRAY=yes" || echo "XRAY=no"
+(command -v awg >/dev/null 2>&1 || ls /etc/amnezia/amneziawg/*.conf >/dev/null 2>&1) && echo "AWG=yes" || echo "AWG=no"
+VPNC=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -iE 'amnezia|xray|wg|marzban|x-ui' | tr '\\n' ',' | sed 's/,$//')
+echo "VPNC=$VPNC"
+for p in 443 51820 80; do
+  if ss -tuln 2>/dev/null | grep -qE "[:.]$p " ; then echo "P$p=busy"; else echo "P$p=free"; fi
+done
+echo PROBE_DONE`;
+  const out = await runScript({ host: c.host, port: c.port, username: c.user, ...auth }, script, 25000);
+  const res: Record<string, string> = {};
+  for (const line of out.split('\n')) {
+    const m = line.trim().match(/^([A-Z0-9_]+)=(.*)$/);
+    if (m && m[1]) res[m[1]] = (m[2] ?? '').trim();
+  }
+  return res;
+}
+
 export async function sshCreateXray(server: Server, deviceName: string): Promise<{ uuid: string; link: string; publicKey: string }> {
   const keys = getServerKeys(server.host);
   const pbk = keys?.xrayRealityPubKey;

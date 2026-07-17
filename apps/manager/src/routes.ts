@@ -12,7 +12,7 @@ import type {
 import { config } from './config.js';
 import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
@@ -252,10 +252,43 @@ router.post('/api/admin/servers/test-ssh', requireAdmin, async (req, res) => {
       note: reachable ? 'порт открыт, хост доступен' : 'не удалось подключиться — проверьте адрес/порт/файрвол',
     },
   ];
-  if (reachable) {
-    audit.push({ name: 'Аудит ПО (ОС, Docker, протоколы)', ok: false, note: 'выполнит агент после установки по SSH' });
+  if (!reachable) return res.json({ ok: false, audit });
+
+  const secret = String(b.secret ?? '');
+  if (!secret) {
+    audit.push({ name: 'Вход по SSH', ok: false, note: 'укажите пароль или приватный ключ — без них панель не сможет управлять сервером' });
+    return res.json({ ok: false, audit });
   }
-  res.json({ ok: reachable, audit });
+  // Реальный аудит: заходим по SSH и смотрим, что на сервере.
+  try {
+    const p = await sshProbe({ host, port, user: String(b.sshUser || 'root'), secret });
+    audit.push({ name: 'Вход по SSH', ok: true, note: `${p.OS || 'ОС определена'}${p.RAM ? `, RAM ${p.RAM} МБ` : ''}` });
+    audit.push({ name: 'Docker', ok: p.DOCKER === 'yes', note: p.DOCKER === 'yes' ? 'установлен' : 'нет — будет установлен при провижининге' });
+
+    const found: string[] = [];
+    if (p.XRAY === 'yes') found.push('Xray');
+    if (p.AWG === 'yes') found.push('AmneziaWG (на хосте)');
+    if (p.VPNC) found.push(`контейнеры: ${p.VPNC}`);
+    if (found.length) {
+      audit.push({
+        name: '⚠️ На сервере уже есть VPN',
+        ok: false,
+        note: `Обнаружено — ${found.join('; ')}. Установка поставит наш стек рядом; ранее выданные ЭТИМ сервером конфиги панель не знает и не обслуживает. Если старый VPN не нужен — сначала удалите его.`,
+      });
+    } else {
+      audit.push({ name: 'Существующий VPN', ok: true, note: 'не обнаружен — установка будет чистой' });
+    }
+    const portsOk = p.P443 !== 'busy' && p.P51820 !== 'busy';
+    audit.push({
+      name: 'Порты 443/tcp и 51820/udp',
+      ok: portsOk,
+      note: portsOk ? 'свободны' : `заняты: ${[p.P443 === 'busy' ? '443' : '', p.P51820 === 'busy' ? '51820' : ''].filter(Boolean).join(', ')} — установка их займёт под себя`,
+    });
+    return res.json({ ok: true, audit });
+  } catch (e) {
+    audit.push({ name: 'Вход по SSH', ok: false, note: `не удалось войти: ${e instanceof Error ? e.message : 'ошибка'} — проверьте логин/пароль (или ключ)` });
+    return res.json({ ok: false, audit });
+  }
 });
 
 router.post('/api/admin/servers', requireAdmin, (req, res) => {

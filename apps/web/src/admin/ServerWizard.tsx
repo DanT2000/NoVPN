@@ -114,6 +114,7 @@ export function ServerWizard() {
     sshPort: Number(sshPort) || 22,
     sshUser: sshUser.trim() || 'root',
     authMethod,
+    secret: secret.trim() || undefined, // пароль/ключ — БЕЗ него панель не сможет управлять сервером
     vpnHost: host.trim(), // домен/IP один раз — он же и публичный VPN-endpoint
     components: components(),
     country: country || null,

@@ -54,6 +54,8 @@ export interface AddServerInput {
   sshPort: number;
   sshUser: string;
   authMethod: 'key' | 'password';
+  /** Пароль ИЛИ приватный ключ — без него панель не сможет управлять сервером. */
+  secret?: string;
   vpnHost?: string;
   components: Array<'xray' | 'amneziawg' | 'http' | 'https' | 'socks5'>;
   country?: string | null;
