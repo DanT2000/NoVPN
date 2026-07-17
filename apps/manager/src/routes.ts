@@ -315,11 +315,17 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
     enrollSecretEnc: encryptSecret(enrollToken),
   });
   if (hasKeys) {
+    // Принимаем и ПРИВАТНЫЕ ключи + параметры обфускации — это регистрация уже
+    // установленного сервера (или восстановление панели): с ними ранее выданные
+    // конфиги продолжают работать, а переустановка на том же домене их вернёт.
     saveServerKeys(s.host, {
       xrayRealityPubKey: b.serverKeys.xrayRealityPubKey,
+      xrayRealityPrivKey: b.serverKeys.xrayRealityPrivKey,
       xrayShortId: b.serverKeys.xrayShortId,
       xraySni: b.serverKeys.xraySni,
       awgServerPubKey: b.serverKeys.awgServerPubKey,
+      awgServerPrivKey: b.serverKeys.awgServerPrivKey,
+      awgParams: b.serverKeys.awgParams ? JSON.stringify(b.serverKeys.awgParams) : undefined,
     });
   }
   repo.addLog(`Добавлен сервер «${s.name}»`);
