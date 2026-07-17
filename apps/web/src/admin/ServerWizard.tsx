@@ -163,6 +163,9 @@ export function ServerWizard() {
     }
   };
 
+  // Найденный на сервере чужой VPN — показываем отдельным заметным блоком.
+  const existingVpn = audit?.audit.find((i) => i.name.startsWith('⚠️')) ?? null;
+
   const back = step <= 3
     ? () => (step === 1 ? goAdmin('servers') : setStep((s) => s - 1))
     : undefined;
@@ -278,19 +281,35 @@ export function ServerWizard() {
 
           {audit ? (
             <div className="card stack" style={{ gap: 12 }}>
-              {audit.audit.map((item, idx) => (
-                <div key={`${item.name}-${idx}`} className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
-                  <span
-                    style={{ flex: 'none', width: 16, fontWeight: 700, color: item.ok ? 'var(--green-fg)' : 'var(--amber-fg)' }}
-                  >
-                    {item.ok ? '✓' : '·'}
-                  </span>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
-                    <div className="small muted">{item.note}</div>
+              {audit.audit
+                .filter((i) => !i.name.startsWith('⚠️'))
+                .map((item, idx) => (
+                  <div key={`${item.name}-${idx}`} className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+                    <span
+                      style={{ flex: 'none', width: 16, fontWeight: 700, color: item.ok ? 'var(--green-fg)' : 'var(--amber-fg)' }}
+                    >
+                      {item.ok ? '✓' : '·'}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</div>
+                      <div className="small muted">{item.note}</div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+            </div>
+          ) : null}
+
+          {existingVpn ? (
+            <div className="notice notice-amber" style={{ display: 'grid', gap: 8 }}>
+              <div style={{ fontWeight: 700 }}>На этом сервере уже установлен VPN</div>
+              <div className="small">{existingVpn.note}</div>
+              <div className="small" style={{ marginTop: 2 }}>
+                <b>Что делать:</b>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>
+                  <li><b>Оставить как есть</b> — просто продолжайте. Мы поставим свой VPN на свои порты рядом. Ваш старый VPN и его конфиги продолжат работать сами по себе, но панель ими управлять не будет.</li>
+                  <li><b>Оставить только наш</b> — удалите старый VPN на сервере сами <i>перед</i> установкой. Тогда сервер будет полностью под панелью.</li>
+                </ul>
+              </div>
             </div>
           ) : null}
 
@@ -305,6 +324,12 @@ export function ServerWizard() {
       {/* Шаг 3 — Компоненты */}
       {step === 3 ? (
         <div className="stack" style={{ maxWidth: 560 }}>
+          {existingVpn ? (
+            <div className="notice notice-amber small">
+              Напоминание: на сервере уже есть свой VPN. Мы ставим наш <b>рядом</b> и старый <b>не удаляем</b>.
+              Если он не нужен — удалите его на сервере сами до установки.
+            </div>
+          ) : null}
           <p className="body" style={{ margin: 0 }}>Что установить на сервер:</p>
           <CheckRow
             checked={compXray}
