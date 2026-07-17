@@ -2,6 +2,7 @@
 
 import net from 'node:net';
 import { Router } from 'express';
+import type { Request } from 'express';
 import type {
   AppSettings,
   IssueDeviceResult,
@@ -10,7 +11,7 @@ import type {
   User,
 } from '@novpn/shared';
 import { config } from './config.js';
-import { requireAdmin } from './middleware/auth.js';
+import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
@@ -24,20 +25,28 @@ export const router = Router();
 
 const err = (type: string, message: string) => ({ error: { type, message } });
 
-function toPublicUserView(u: User): PublicUserView {
-  return {
-    id: u.id, name: u.name, code: u.code, deviceLimit: u.deviceLimit, expiresAt: u.expiresAt,
-    trafficLimitGb: u.trafficLimitGb, trafficUsedGb: u.trafficUsedGb, allowedServers: u.allowedServers,
-    defaultServerId: u.defaultServerId, allowedProtocols: u.allowedProtocols, isActive: u.isActive,
-    telegramLinked: !!u.telegram,
-  };
+const toPublicUserView = repo.toPublicUserView;
+
+/** Устройство принадлежит вошедшему пользователю? Админу разрешено всё —
+ *  он управляет устройствами из панели. */
+function ownsDevice(req: Request, d: { userId: string | null }): boolean {
+  if (req.session?.admin) return true;
+  return !!d.userId && d.userId === req.session?.userId;
 }
 
 // ── health ──
 router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 
 // ── bootstrap ──
-router.get('/api/bootstrap', (_req, res) => res.json(repo.buildBootstrap()));
+// ТОЛЬКО для админа: содержит коды доступа всех пользователей и конфиги всех
+// устройств. Публичная часть сайта пользуется /api/public/bootstrap.
+router.get('/api/bootstrap', requireAdmin, (_req, res) => res.json(repo.buildBootstrap()));
+
+// Данные публичной части. Без входа по коду — только справочники;
+// со входом — плюс свои устройства. Чужое не отдаётся никогда.
+router.get('/api/public/bootstrap', (req, res) => {
+  res.json(repo.buildPublicBootstrap(req.session?.userId));
+});
 
 // ── public: check code ──
 router.post('/api/public/check-code', (req, res) => {
@@ -50,15 +59,26 @@ router.post('/api/public/check-code', (req, res) => {
     return res.json(err('traffic', 'Лимит трафика исчерпан. Обратитесь к администратору.'));
   if (u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
     return res.json(err('devices', 'Лимит устройств по этому коду исчерпан.'));
+  // Код принят — это и есть вход. Дальше личность берётся из сессии, а не из тела запроса.
+  req.session.userId = u.id;
   res.json({ user: toPublicUserView(u) });
+});
+
+router.post('/api/public/logout', (req, res) => {
+  delete req.session.userId;
+  res.json({ ok: true });
 });
 
 
 // ── public: issue device ──
-router.post('/api/public/devices', async (req, res) => {
+router.post('/api/public/devices', requireUserOrAdmin, async (req, res) => {
   try {
-    const { userId, name, serverId, protocol } = req.body ?? {};
-    const u = repo.getUser(String(userId));
+    const { name, serverId, protocol } = req.body ?? {};
+    // Личность — из сессии; userId из тела принимается только от админа,
+    // который выпускает конфиг за пользователя из панели. Иначе любой мог бы
+    // выпустить конфиг за другого, просто подставив чужой id.
+    const targetId = req.session.admin && req.body?.userId ? String(req.body.userId) : String(req.session.userId);
+    const u = repo.getUser(targetId);
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
     if (!u.isActive) return res.status(403).json(err('disabled', 'Доступ отключён.'));
     if (u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
@@ -71,10 +91,11 @@ router.post('/api/public/devices', async (req, res) => {
   }
 });
 
-router.post('/api/public/devices/:id/reissue', async (req, res) => {
+router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, res) => {
   try {
     const d = repo.getDevice(req.params.id!);
     if (!d || !d.userId) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
+    if (!ownsDevice(req, d)) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
     const u = repo.getUser(d.userId);
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
     if (d.protocol !== 'xray' && d.protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Протокол не поддерживается.'));
@@ -99,9 +120,10 @@ router.post('/api/public/devices/:id/reissue', async (req, res) => {
   }
 });
 
-router.post('/api/public/devices/:id/revoke', async (req, res) => {
+router.post('/api/public/devices/:id/revoke', requireUserOrAdmin, async (req, res) => {
   const d = repo.getDevice(req.params.id!);
   if (!d) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
+  if (!ownsDevice(req, d)) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
   // Реальный отзыв на сервере (если сервер управляется по SSH).
   try {
     const row = repo.getDeviceRow(d.id);
@@ -117,7 +139,9 @@ router.post('/api/public/devices/:id/revoke', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/api/public/devices/:id', (req, res) => {
+router.delete('/api/public/devices/:id', requireUserOrAdmin, (req, res) => {
+  const d = repo.getDevice(req.params.id!);
+  if (!d || !ownsDevice(req, d)) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
   repo.deleteDevice(req.params.id!);
   res.json({ ok: true });
 });

@@ -9,6 +9,7 @@ import type {
   Device,
   IssueDeviceRequest,
   IssueDeviceResult,
+  PublicBootstrapData,
   Server,
   TelegramSettings,
   TestServerConnectionResult,
@@ -108,10 +109,14 @@ export type CodeResult = { user: User } | { error: { type: string; message: stri
 
 export interface ApiClient {
   // ── bootstrap ──
+  /** Полные данные панели. Требует сессии админа (иначе 401). */
   getInitialData(): Promise<BootstrapData>;
+  /** Данные публичной части: справочники + свои устройства по сессии. */
+  getPublicData(): Promise<PublicBootstrapData>;
 
   // ── public ──
   checkCode(code: string): Promise<CheckCodeResult>;
+  publicLogout(): Promise<Ok>;
   issueDevice(req: IssueDeviceRequest): Promise<IssueDeviceResult>;
   reissueDevice(deviceId: string): Promise<IssueDeviceResult>;
   revokeDevice(deviceId: string): Promise<Ok>;
@@ -119,6 +124,7 @@ export interface ApiClient {
 
   // ── admin: auth ──
   adminLogin(login: string, password: string): Promise<{ ok: boolean }>;
+  adminLogout(): Promise<Ok>;
 
   // ── admin: users ──
   createUser(input: CreateUserInput): Promise<User>;

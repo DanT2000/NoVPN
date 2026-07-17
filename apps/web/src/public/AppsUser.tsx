@@ -32,7 +32,7 @@ function storeOf(url: string): string | null {
 }
 
 export function AppsUser() {
-  const { data, publicUser, goPublic } = useApp();
+  const { publicData: data, publicUser, goPublic } = useApp();
   const [platform, setPlatform] = useState<AppPlatform>(detectPlatform());
   if (!data) return null;
 

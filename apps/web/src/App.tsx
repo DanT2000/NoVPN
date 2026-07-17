@@ -4,9 +4,13 @@ import { PublicShell } from './public/PublicShell';
 import { AdminShell } from './admin/AdminShell';
 
 export function App() {
-  const { loading, loadError, data, reload, nav } = useApp();
+  const { loading, loadError, data, publicData, reload, nav } = useApp();
 
-  if (loading && !data) {
+  // Публичная часть живёт на publicData, админка — на data. Ждём то,
+  // что нужно текущей области.
+  const ready = nav.area === 'admin' ? !!data : !!publicData;
+
+  if (loading && !ready) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Loading text="Загрузка…" />
@@ -14,7 +18,7 @@ export function App() {
     );
   }
 
-  if (loadError && !data) {
+  if (loadError && !ready) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
         <div className="stack center" style={{ maxWidth: 360 }}>
@@ -27,7 +31,7 @@ export function App() {
     );
   }
 
-  if (!data) return null;
-
-  return nav.area === 'admin' ? <AdminShell /> : <PublicShell />;
+  // В админку пускаем и без data — AdminShell сам покажет экран входа.
+  if (nav.area === 'admin') return <AdminShell />;
+  return publicData ? <PublicShell /> : null;
 }

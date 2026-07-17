@@ -187,7 +187,8 @@ export interface ProxyAccess {
   createdAt: string;
 }
 
-/** Ответ /api/bootstrap — всё, что нужно приложению при старте. */
+/** Ответ /api/bootstrap — всё, что нужно ПАНЕЛИ АДМИНА при старте. Только для админа:
+ *  содержит коды доступа всех пользователей и конфиги всех устройств. */
 export interface BootstrapData {
   users: User[];
   devices: Device[];
@@ -199,3 +200,17 @@ export interface BootstrapData {
   jobErrors: JobError[];
   history: Record<string, LogEntry[]>;
 }
+
+/** Сервер глазами обычного пользователя: куда подключаться, без внутренней телеметрии. */
+export interface PublicServerView {
+  id: string;
+  name: string;
+  country: string | null;
+  host: string;
+  protocols: Protocol[];
+  isDefault: boolean;
+  recommended: boolean;
+  /** Сервер доступен для выпуска конфига. */
+  online: boolean;
+}
+

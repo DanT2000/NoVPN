@@ -8,6 +8,7 @@ import type {
   CheckCodeResult,
   IssueDeviceRequest,
   IssueDeviceResult,
+  PublicBootstrapData,
   Server,
   TelegramSettings,
   TestServerConnectionResult,
@@ -46,14 +47,17 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 export const httpApi: ApiClient = {
   getInitialData: () => req<BootstrapData>('GET', '/api/bootstrap'),
+  getPublicData: () => req<PublicBootstrapData>('GET', '/api/public/bootstrap'),
 
   checkCode: (code) => req<CheckCodeResult>('POST', '/api/public/check-code', { code }),
+  publicLogout: () => req<Ok>('POST', '/api/public/logout'),
   issueDevice: (r: IssueDeviceRequest) => req<IssueDeviceResult>('POST', '/api/public/devices', r),
   reissueDevice: (id) => req<IssueDeviceResult>('POST', `/api/public/devices/${id}/reissue`),
   revokeDevice: (id) => req<Ok>('POST', `/api/public/devices/${id}/revoke`),
   deleteDevice: (id) => req<Ok>('DELETE', `/api/public/devices/${id}`),
 
   adminLogin: (login, password) => req<{ ok: boolean }>('POST', '/api/admin/login', { login, password }),
+  adminLogout: () => req<Ok>('POST', '/api/admin/logout'),
 
   createUser: (input: CreateUserInput) => req<User>('POST', '/api/admin/users', input),
   updateUser: (id, patch: UpdateUserPatch) => req<User>('PATCH', `/api/admin/users/${id}`, patch),

@@ -6,7 +6,7 @@ import { dateShort, gb, rel } from '../lib/format';
 import { devStatusOf } from '../lib/status';
 
 export function Devices() {
-  const { publicUser: user, data, goPublic, showConfirm, showToast, reissueDevice, revokeDevice, deleteDevice } = useApp();
+  const { publicUser: user, publicData: data, goPublic, showConfirm, showToast, reissueDevice, revokeDevice, deleteDevice } = useApp();
   if (!user || !data) return null;
 
   const devices = data.devices.filter((d) => d.userId === user.id);

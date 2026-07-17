@@ -8,6 +8,7 @@ import type {
   BootstrapData,
   Device,
   IssueDeviceResult,
+  PublicBootstrapData,
   PublicUserView,
   Server,
   TelegramSettings,
@@ -55,13 +56,17 @@ export interface ConfirmOptions {
 interface AppContextValue {
   loading: boolean;
   loadError: string | null;
+  /** Полные данные панели. Есть только у вошедшего админа. */
   data: BootstrapData | null;
+  /** Данные публичной части: справочники + СВОИ устройства (после входа по коду). */
+  publicData: PublicBootstrapData | null;
   publicUser: PublicUserView | null;
   adminAuthed: boolean;
   nav: NavState;
   isMobile: boolean;
 
   reload(): Promise<void>;
+  reloadPublic(): Promise<void>;
   showToast(text: string): void;
   showConfirm(opts: ConfirmOptions): void;
 
@@ -120,6 +125,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [data, setData] = useState<BootstrapData | null>(null);
+  const [publicData, setPublicData] = useState<PublicBootstrapData | null>(null);
   const [publicUser, setPublicUser] = useState<PublicUserView | null>(null);
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [isMobile, setIsMobile] = useState(
@@ -136,6 +142,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const toastTimer = useRef<number | null>(null);
   const [confirm, setConfirm] = useState<ConfirmOptions | null>(null);
 
+  // Полные данные панели — только для админа (сервер вернёт 401 остальным).
   const reload = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -148,9 +155,44 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Публичные данные: справочники всем, устройства — только свои, по сессии.
+  const reloadPublic = useCallback(async () => {
+    const pd = await api.getPublicData();
+    setPublicData(pd);
+    // Сессия живёт в куке, поэтому после F5 пользователь остаётся вошедшим.
+    setPublicUser(pd.user);
+  }, []);
+
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    let alive = true;
+    void (async () => {
+      setLoading(true);
+      setLoadError(null);
+      try {
+        // Стартуем всегда с публичных данных: они безопасны и нужны всем.
+        // Если в куке есть админская сессия — дотягиваем полные.
+        const pd = await api.getPublicData();
+        if (!alive) return;
+        setPublicData(pd);
+        setPublicUser(pd.user);
+        try {
+          const full = await api.getInitialData();
+          if (!alive) return;
+          setData(full);
+          setAdminAuthed(true);
+        } catch {
+          /* не админ — это норма, публичная часть уже загружена */
+        }
+      } catch (e) {
+        if (alive) setLoadError(e instanceof Error ? e.message : 'Не удалось загрузить данные');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 860px)');
@@ -187,49 +229,65 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const logoutPublic = useCallback(() => {
     setPublicUser(null);
+    // Гасим и серверную сессию, иначе устройства остались бы доступны по куке.
+    void api.publicLogout().catch(() => {});
+    setPublicData((prev: PublicBootstrapData | null) => (prev ? { ...prev, user: null, devices: [] } : prev));
     goPublic('home');
   }, [goPublic]);
 
   // ── device ops ──
+  // Устройства живут в двух кэшах: полном (панель админа) и публичном (кабинет).
+  // Патчим оба — какой из них заполнен, зависит от того, кто вошёл.
+  const patchDevices = useCallback((fn: (list: Device[]) => Device[]) => {
+    setData((prev) => (prev ? { ...prev, devices: fn(prev.devices) } : prev));
+    setPublicData((prev) => (prev ? { ...prev, devices: fn(prev.devices) } : prev));
+  }, []);
+
   const issueDevice: AppContextValue['issueDevice'] = useCallback(
     async (input) => {
       const res = await api.issueDevice(input);
-      patchData((d) => ({ ...d, devices: [...d.devices, res.device] }));
+      patchDevices((list) => [...list, res.device]);
       return res;
     },
-    [patchData],
+    [patchDevices],
   );
   const reissueDevice = useCallback(
     async (deviceId: string) => {
       const res = await api.reissueDevice(deviceId);
-      patchData((d) => ({ ...d, devices: d.devices.map((x) => (x.id === deviceId ? res.device : x)) }));
+      patchDevices((list) => list.map((x) => (x.id === deviceId ? res.device : x)));
       return res;
     },
-    [patchData],
+    [patchDevices],
   );
   const revokeDevice = useCallback(
     async (deviceId: string) => {
       await api.revokeDevice(deviceId);
-      patchData((d) => ({ ...d, devices: d.devices.map((x) => (x.id === deviceId ? { ...x, isActive: false } : x)) }));
+      patchDevices((list) => list.map((x) => (x.id === deviceId ? { ...x, isActive: false } : x)));
     },
-    [patchData],
+    [patchDevices],
   );
   const deleteDevice = useCallback(
     async (deviceId: string) => {
       await api.deleteDevice(deviceId);
-      patchData((d) => ({ ...d, devices: d.devices.filter((x) => x.id !== deviceId) }));
+      patchDevices((list) => list.filter((x) => x.id !== deviceId));
     },
-    [patchData],
+    [patchDevices],
   );
 
   // ── admin auth ──
   const adminLogin = useCallback(async (login: string, password: string) => {
     const { ok } = await api.adminLogin(login, password);
-    if (ok) setAdminAuthed(true);
+    if (ok) {
+      setAdminAuthed(true);
+      // Полные данные панели доступны только теперь — до входа сервер их не отдавал.
+      await reload();
+    }
     return ok;
-  }, []);
+  }, [reload]);
   const adminLogout = useCallback(() => {
     setAdminAuthed(false);
+    setData(null);
+    void api.adminLogout().catch(() => {});
     setNav({ area: 'admin', route: 'login', params: {} });
   }, []);
 
@@ -361,8 +419,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AppContextValue>(
     () => ({
-      loading, loadError, data, publicUser, adminAuthed, nav, isMobile,
-      reload, showToast, showConfirm, goPublic, goAdmin,
+      loading, loadError, data, publicData, publicUser, adminAuthed, nav, isMobile,
+      reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin,
       setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice,
       adminLogin, adminLogout,
@@ -371,8 +429,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       saveTelegram, saveApps, saveSettings,
     }),
     [
-      loading, loadError, data, publicUser, adminAuthed, nav, isMobile,
-      reload, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
+      loading, loadError, data, publicData, publicUser, adminAuthed, nav, isMobile,
+      reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, setUserCode, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,

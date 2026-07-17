@@ -8,6 +8,8 @@ import type {
   Device,
   JobError,
   LogEntry,
+  PublicBootstrapData,
+  PublicUserView,
   Server,
   TelegramSettings,
   User,
@@ -350,6 +352,18 @@ export function allHistory(): Record<string, LogEntry[]> {
 }
 
 // ── bootstrap ──
+/** Урезанное представление пользователя для публичной части. */
+export function toPublicUserView(u: User): PublicUserView {
+  return {
+    id: u.id, name: u.name, code: u.code, deviceLimit: u.deviceLimit, expiresAt: u.expiresAt,
+    trafficLimitGb: u.trafficLimitGb, trafficUsedGb: u.trafficUsedGb, allowedServers: u.allowedServers,
+    defaultServerId: u.defaultServerId, allowedProtocols: u.allowedProtocols, isActive: u.isActive,
+    telegramLinked: !!u.telegram,
+  };
+}
+
+/** Полные данные для панели админа. Содержат коды доступа и конфиги ВСЕХ —
+ *  отдавать только по requireAdmin. */
 export function buildBootstrap(): BootstrapData {
   return {
     users: listUsers(),
@@ -361,5 +375,33 @@ export function buildBootstrap(): BootstrapData {
     adminLog: listLog(),
     jobErrors: listJobErrors(),
     history: allHistory(),
+  };
+}
+
+/** Устройства одного пользователя (с конфигами — это его собственные). */
+export function listDevicesOfUser(userId: string): Device[] {
+  return (db.prepare('SELECT * FROM devices WHERE user_id = ? ORDER BY created_at DESC').all(userId) as any[]).map(rowToDevice);
+}
+
+/** Данные публичной части. Без userId — только справочники (серверы, приложения):
+ *  ни кодов, ни конфигов, ни чужих устройств. */
+export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
+  const tg = getTelegramSafe();
+  const user = userId ? getUser(userId) : null;
+  return {
+    user: user && user.isActive ? toPublicUserView(user) : null,
+    devices: user ? listDevicesOfUser(user.id) : [],
+    servers: listServers().map((s) => ({
+      id: s.id,
+      name: s.name,
+      country: s.country,
+      host: s.host,
+      protocols: s.protocols,
+      isDefault: s.isDefault,
+      recommended: s.recommended,
+      online: s.agent === 'online' && s.endpointOk,
+    })),
+    apps: listApps(),
+    telegram: { enabled: tg.enabled, botUsername: tg.botUsername ?? null },
   };
 }

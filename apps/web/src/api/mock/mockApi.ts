@@ -9,6 +9,7 @@ import type {
   Device,
   IssueDeviceRequest,
   IssueDeviceResult,
+  PublicBootstrapData,
   PublicUserView,
   Server,
   TelegramSettings,
@@ -90,14 +91,40 @@ function issueConfig(device: Device, server: Server): IssueDeviceResult {
   };
 }
 
+// Сессия мока: кто вошёл по коду. Повторяет поведение сервера, чтобы
+// разработка на моке не расходилась с продом.
+let mockUserId: string | null = null;
+let mockAdmin = false;
+
 export const mockApi: ApiClient = {
   async getInitialData(): Promise<BootstrapData> {
     await wait(180);
+    if (!mockAdmin) throw new Error('Требуется вход администратора.');
     return {
       users: clone(state.users), devices: clone(state.devices), servers: clone(state.servers),
       apps: clone(state.apps), telegram: clone(state.telegram), settings: clone(state.settings),
       adminLog: clone(state.adminLog), jobErrors: clone(state.jobErrors), history: clone(state.history),
     };
+  },
+
+  async getPublicData(): Promise<PublicBootstrapData> {
+    await wait(120);
+    const u = mockUserId ? state.users.find((x) => x.id === mockUserId) ?? null : null;
+    return {
+      user: u && u.isActive ? toPublic(u) : null,
+      devices: u ? clone(state.devices.filter((d) => d.userId === u.id)) : [],
+      servers: clone(state.servers).map((s) => ({
+        id: s.id, name: s.name, country: s.country, host: s.host, protocols: s.protocols,
+        isDefault: s.isDefault, recommended: s.recommended, online: s.agent === 'online' && s.endpointOk,
+      })),
+      apps: clone(state.apps),
+      telegram: { enabled: state.telegram.enabled, botUsername: state.telegram.botUsername ?? null },
+    };
+  },
+
+  async publicLogout(): Promise<Ok> {
+    mockUserId = null;
+    return { ok: true };
   },
 
   async checkCode(code: string): Promise<CheckCodeResult> {
@@ -114,6 +141,7 @@ export const mockApi: ApiClient = {
       if (used >= u.deviceLimit)
         return { error: { type: 'devices', message: 'Лимит устройств по этому коду исчерпан.' } };
     }
+    mockUserId = u.id;
     return { user: toPublic(u) };
   },
 
@@ -152,7 +180,14 @@ export const mockApi: ApiClient = {
 
   async adminLogin(login: string, password: string): Promise<{ ok: boolean }> {
     await wait(400);
-    return { ok: login === 'admin' && password === 'admin' };
+    const ok = login === 'admin' && password === 'admin';
+    if (ok) mockAdmin = true;
+    return { ok };
+  },
+
+  async adminLogout(): Promise<Ok> {
+    mockAdmin = false;
+    return { ok: true };
   },
 
   async createUser(input: CreateUserInput): Promise<User> {

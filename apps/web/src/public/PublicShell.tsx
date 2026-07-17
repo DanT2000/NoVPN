@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useApp } from '../store/AppStore';
 import type { PublicRoute } from '../store/AppStore';
 import { Wordmark } from '../components/ui';
@@ -13,9 +14,12 @@ export function PublicShell() {
 
   // Кабинет/устройства/мастер требуют введённого кода.
   const needsUser = route !== 'home' && route !== 'apps';
-  if (needsUser && !publicUser) {
-    goPublic('home');
-  }
+  // Редирект — эффектом, а не во время рендера: setState в теле компонента
+  // вызывает предупреждение React и лишний прогон.
+  useEffect(() => {
+    if (needsUser && !publicUser) goPublic('home');
+  }, [needsUser, publicUser, goPublic]);
+  if (needsUser && !publicUser) return null;
 
   return (
     <div style={{ background: 'var(--bg-app)', minHeight: '100vh' }}>

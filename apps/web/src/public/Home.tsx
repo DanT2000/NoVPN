@@ -4,7 +4,7 @@ import { api } from '../api';
 import { CodeInput } from '../components/CodeInput';
 
 export function Home() {
-  const { setPublicUser, goPublic } = useApp();
+  const { setPublicUser, goPublic, reloadPublic } = useApp();
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -20,6 +20,8 @@ export function Home() {
         return;
       }
       setPublicUser(res.user);
+      // Код принят — сервер открыл сессию; забираем свои устройства.
+      await reloadPublic();
       goPublic('cabinet');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ошибка проверки кода.');

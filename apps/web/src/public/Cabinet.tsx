@@ -29,7 +29,7 @@ function Tile({ title, sub, onClick, chevron }: { title: string; sub: string; on
 }
 
 export function Cabinet() {
-  const { publicUser: user, data, goPublic, logoutPublic, showToast } = useApp();
+  const { publicUser: user, publicData: data, goPublic, logoutPublic, showToast } = useApp();
   if (!user || !data) return null;
 
   const devices = data.devices.filter((d) => d.userId === user.id);

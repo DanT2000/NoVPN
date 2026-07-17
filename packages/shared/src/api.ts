@@ -1,7 +1,7 @@
 // Контракты API. Один источник истины для фронтенда (api-клиент)
 // и backend (роуты). Соответствуют будущим endpoint'ам.
 
-import type { BootstrapData, Device, User } from './types.js';
+import type { AppClient, BootstrapData, Device, PublicServerView, User } from './types.js';
 import type { Protocol } from './enums.js';
 
 export interface ApiError {
@@ -38,6 +38,18 @@ export interface PublicUserView {
   allowedProtocols: Array<'xray' | 'amneziawg'>;
   isActive: boolean;
   telegramLinked: boolean;
+}
+
+/** Ответ GET /api/public/bootstrap — данные публичной части сайта.
+ *  `user` и `devices` непусты только когда в сессии есть вход по коду,
+ *  и содержат ТОЛЬКО данные этого пользователя: чужие коды и конфиги
+ *  наружу не отдаются никогда. */
+export interface PublicBootstrapData {
+  user: PublicUserView | null;
+  devices: Device[];
+  servers: PublicServerView[];
+  apps: AppClient[];
+  telegram: { enabled: boolean; botUsername: string | null };
 }
 
 /** POST /api/public/devices — выпуск конфига (одно устройство = один конфиг). */

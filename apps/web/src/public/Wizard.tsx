@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AppClient, IssueDeviceResult, Server } from '@novpn/shared';
+import type { AppClient, IssueDeviceResult, PublicServerView } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Dot, EmptyState, ProgressBar } from '../components/ui';
 import { Qr } from '../components/Qr';
@@ -30,7 +30,7 @@ function appKind(a: AppClient): 'xray' | 'amnezia-app' | 'amneziawg' {
 }
 
 export function Wizard() {
-  const { publicUser: user, data, nav, goPublic, showToast, issueDevice } = useApp();
+  const { publicUser: user, publicData: data, nav, goPublic, showToast, issueDevice } = useApp();
   const mode = nav.params.wizardMode ?? 'issue';
   const viewDeviceId = nav.params.deviceId;
 
@@ -60,7 +60,7 @@ export function Wizard() {
   }
 
   const allowedServers = data.servers.filter((s) => user.allowedServers.includes(s.id));
-  const chosenServer: Server | undefined =
+  const chosenServer: PublicServerView | undefined =
     (mode === 'view' && viewDevice ? data.servers.find((s) => s.id === viewDevice.serverId) : undefined) ??
     data.servers.find((s) => s.id === serverId);
 
@@ -167,7 +167,7 @@ export function Wizard() {
           <p className="body small" style={{ margin: 0 }}>Выберите сервер подключения.</p>
           <div className="stack" style={{ gap: 8 }}>
             {allowedServers.map((s) => {
-              const online = s.agent === 'online';
+              const online = s.online;
               const selected = serverId === s.id;
               return (
                 <button
