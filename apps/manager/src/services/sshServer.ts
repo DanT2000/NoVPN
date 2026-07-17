@@ -420,19 +420,31 @@ echo "H1=$(p H1)"; echo "H2=$(p H2)"; echo "H3=$(p H3)"; echo "H4=$(p H4)"`;
   const psk = grab(out, 'PSK');
   const cip = grab(out, 'CIP');
   if (!cpriv || !cpub || !psk || !cip) throw new Error('Не удалось создать AmneziaWG-пира на сервере.');
+
+  // Параметры обфускации ОБЯЗАНЫ совпадать с серверными: они уникальны для
+  // каждого сервера. Раньше при сбое парсинга сюда молча подставлялись
+  // захардкоженные значения — конфиг выглядел рабочим, но не подключался.
+  // Лучше честная ошибка, чем «выдал, а оно не работает».
+  const obf: Record<string, string> = {};
+  for (const k of ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4']) {
+    const v = grab(out, k);
+    if (!v) throw new Error(`Не удалось прочитать параметр обфускации ${k} с сервера — конфиг не выдан, чтобы не отдать неработающий. Проверьте awg0.conf на сервере.`);
+    obf[k] = v;
+  }
+
   const conf = `[Interface]
 PrivateKey = ${cpriv}
 Address = ${cip}/32
 DNS = 1.1.1.1
-Jc = ${grab(out, 'Jc') ?? 4}
-Jmin = ${grab(out, 'Jmin') ?? 40}
-Jmax = ${grab(out, 'Jmax') ?? 70}
-S1 = ${grab(out, 'S1') ?? 86}
-S2 = ${grab(out, 'S2') ?? 97}
-H1 = ${grab(out, 'H1') ?? 1004746675}
-H2 = ${grab(out, 'H2') ?? 928473625}
-H3 = ${grab(out, 'H3') ?? 1719083348}
-H4 = ${grab(out, 'H4') ?? 1339303396}
+Jc = ${obf.Jc}
+Jmin = ${obf.Jmin}
+Jmax = ${obf.Jmax}
+S1 = ${obf.S1}
+S2 = ${obf.S2}
+H1 = ${obf.H1}
+H2 = ${obf.H2}
+H3 = ${obf.H3}
+H4 = ${obf.H4}
 
 [Peer]
 PublicKey = ${srvPub}

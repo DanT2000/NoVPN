@@ -144,6 +144,17 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
     if (d.protocol !== 'xray' && d.protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Протокол не поддерживается.'));
     const server = repo.getServer(d.serverId)!;
+
+    // СНАЧАЛА отзываем старый доступ на сервере. Иначе перевыпуск лишь забывает
+    // старый ключ в панели, а на сервере он продолжает работать — навсегда и уже
+    // без возможности отозвать (панель его перезатёрла). Именно ради этого
+    // перевыпуск обычно и жмут: ключ утёк.
+    const oldRow = repo.getDeviceRow(d.id);
+    if (oldRow && (await sshHasSshAccess(server.id))) {
+      if (oldRow.protocol === 'xray' && oldRow.uuid) await sshRevokeXray(server, oldRow.uuid);
+      else if (oldRow.protocol === 'amneziawg' && oldRow.public_key) await sshRevokeAwg(server, oldRow.public_key);
+    }
+
     let out: IssueDeviceResult;
     if (d.protocol === 'xray') {
       const r = await createXrayCfg(server, d.name);

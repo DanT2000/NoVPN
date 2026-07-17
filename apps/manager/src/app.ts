@@ -8,10 +8,16 @@ import { agentRouter } from './routes/agent.js';
 
 export function createApp() {
   const app = express();
-  // За edge-прокси (openresty), который терминирует TLS. trust proxy + cookie
-  // secure:'auto' — чтобы session-cookie всегда ставился и получал флаг Secure,
-  // когда прокси сообщает https (иначе secure:true не ставит cookie за прокси).
-  app.set('trust proxy', true);
+  // За edge-прокси (openresty → traefik), который терминирует TLS. trust proxy +
+  // cookie secure:'auto' — чтобы session-cookie всегда ставился и получал флаг
+  // Secure, когда прокси сообщает https (иначе secure:true не ставит cookie за прокси).
+  //
+  // ЧИСЛО, А НЕ true: `trust proxy: true` доверяет ЛЮБОМУ X-Forwarded-For, и тогда
+  // req.ip — это то, что прислал клиент. Любой лимит по IP при этом обходится
+  // подстановкой нового адреса в заголовок на каждый запрос. Число = сколько
+  // прокси перед нами (openresty + traefik = 2): Express возьмёт адрес, который
+  // подставил наш прокси, а не тот, что придумал клиент.
+  app.set('trust proxy', config.trustProxyHops);
   // Сохраняем «сырое» тело для проверки подписи агента.
   // Лимит 64mb: логотип/файлы клиентов админ загружает как data URL (хранятся в БД).
   app.use(

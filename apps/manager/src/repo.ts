@@ -150,6 +150,21 @@ export function getServerDevicesForResync(
   ).map((r) => ({ name: r.name, protocol: r.protocol, uuid: r.uuid ?? null, publicKey: r.public_key ?? null, clientIp: r.client_ip ?? null, presharedKeyEnc: r.preshared_key_enc ?? null }));
 }
 
+/** Накопленный трафик устройства и последнее сырое показание счётчиков сервера.
+ *  received_bytes/sent_bytes — накопленное за всё время, rx_raw/tx_raw — что
+ *  показывал сервер в прошлый замер (для вычисления прироста). */
+export function getDeviceCounters(id: string): { rxTotal: number; txTotal: number; rxRaw: number; txRaw: number } {
+  const r = db.prepare('SELECT received_bytes, sent_bytes, rx_raw, tx_raw FROM devices WHERE id = ?').get(id) as
+    | { received_bytes: number | null; sent_bytes: number | null; rx_raw: number | null; tx_raw: number | null }
+    | undefined;
+  return {
+    rxTotal: r?.received_bytes ?? 0,
+    txTotal: r?.sent_bytes ?? 0,
+    rxRaw: r?.rx_raw ?? 0,
+    txRaw: r?.tx_raw ?? 0,
+  };
+}
+
 /** Пересчёт расхода трафика и последней активности пользователя из ВСЕХ его устройств. */
 export function recomputeUserUsage(userId: string): void {
   const row = db

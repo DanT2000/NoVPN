@@ -31,12 +31,25 @@ export async function syncAllServers(): Promise<void> {
       for (const d of devices) {
         const p = byKey.get(d.publicKey!);
         if (!p) continue;
-        const total = p.rx + p.tx;
-        serverBytes += total;
+
+        // Счётчики ядра обнуляются при перезапуске интерфейса (awg-quick down/up,
+        // ребут сервера). Раньше сырое значение писалось поверх накопленного, и
+        // потреблённый трафик пользователя обнулялся вместе с ним — то есть
+        // квоту можно было сбросить перезапуском. Поэтому копим сами: считаем
+        // прирост с прошлого замера, а падение счётчика трактуем как сброс.
+        const prev = repo.getDeviceCounters(d.id);
+        const rxDelta = p.rx >= prev.rxRaw ? p.rx - prev.rxRaw : p.rx;
+        const txDelta = p.tx >= prev.txRaw ? p.tx - prev.txRaw : p.tx;
+        const rxTotal = prev.rxTotal + rxDelta;
+        const txTotal = prev.txTotal + txDelta;
+        serverBytes += rxTotal + txTotal;
+
         const fields: Record<string, unknown> = {
-          received_bytes: p.rx,
-          sent_bytes: p.tx,
-          traffic_gb: total / 1e9,
+          received_bytes: rxTotal,
+          sent_bytes: txTotal,
+          rx_raw: p.rx,
+          tx_raw: p.tx,
+          traffic_gb: (rxTotal + txTotal) / 1e9,
         };
         if (p.handshake > 0) fields.last_seen_at = new Date(p.handshake * 1000).toISOString();
         repo.updateDeviceFields(d.id, fields);

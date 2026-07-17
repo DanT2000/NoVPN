@@ -29,6 +29,11 @@ export const config = {
   sessionSecret: env('SESSION_SECRET', 'dev-insecure-session-secret-change-me'),
   encryptionKey: env('ENCRYPTION_KEY', ''),
 
+  // Сколько доверенных прокси стоит перед панелью (openresty + traefik = 2).
+  // От этого зависит, какой адрес Express считает адресом клиента, а значит —
+  // работает ли лимит попыток входа. Значение 0 = обращаются напрямую.
+  trustProxyHops: int('TRUST_PROXY_HOPS', 2),
+
   databasePath: env('DATABASE_PATH', path.join(__dirname, '../data/database.sqlite')),
   contentDir: env('CONTENT_DIR', path.join(__dirname, '../content')),
   // Каталог собранного фронтенда (в проде копируется в образ).

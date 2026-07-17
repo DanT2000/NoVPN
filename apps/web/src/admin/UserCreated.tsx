@@ -44,21 +44,45 @@ function UserCreatedInner({ user }: { user: User }) {
     .filter((n): n is string => Boolean(n))
     .join(' · ');
   const protoLabels = user.allowedProtocols.map((p) => PROTOCOL_LABELS[p]).join(', ');
+  // Личная ссылка — то, что отправляют человеку. Он переходит и сразу в кабинете.
+  const accessLink = user.accessToken ? `${domain.replace(/\/$/, '')}/k/${user.accessToken}` : '';
 
   return (
     <div className="stack">
       <div className="notice notice-green">
         <div style={{ fontWeight: 700, fontSize: 15 }}>Пользователь «{user.name}» создан</div>
         <div className="small" style={{ marginTop: 4 }}>
-          Отправьте код или готовое сообщение.
+          Отправьте ему личную ссылку или готовое сообщение ниже.
         </div>
       </div>
 
-      <div className="card" style={{ textAlign: 'center', padding: 24 }}>
+      <div className="card" style={{ padding: 20 }}>
         <div className="eyebrow" style={{ marginBottom: 8 }}>
-          Код доступа
+          Личная ссылка — отправьте её человеку
         </div>
-        <div className="mono" style={{ fontSize: 42, fontWeight: 700, letterSpacing: '0.08em' }}>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input className="input mono" readOnly value={accessLink || 'ссылка не выдана'} style={{ flex: '1 1 240px', fontSize: 12 }} />
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={!accessLink}
+            onClick={async () => {
+              showToast((await copyText(accessLink)) ? 'Ссылка скопирована' : 'Не удалось скопировать');
+            }}
+          >
+            Копировать ссылку
+          </button>
+        </div>
+        <div className="body small muted" style={{ marginTop: 8 }}>
+          Человек переходит по ссылке — открывается его кабинет, вводить ничего не нужно.
+          Код ниже — запасной способ входа, на случай если ссылка потеряется.
+        </div>
+      </div>
+
+      <div className="card" style={{ textAlign: 'center', padding: 18 }}>
+        <div className="eyebrow" style={{ marginBottom: 6 }}>
+          Код доступа (запасной)
+        </div>
+        <div className="mono" style={{ fontSize: 34, fontWeight: 700, letterSpacing: '0.08em' }}>
           {user.code}
         </div>
       </div>

@@ -21,9 +21,20 @@ export function genUuid(): string {
 }
 
 /** Подстановка {code} {url} {expires} в шаблон сообщения. */
-export function buildMessage(template: string, user: Pick<User, 'code' | 'expiresAt'>, url: string): string {
+export function buildMessage(
+  template: string,
+  user: Pick<User, 'code' | 'expiresAt' | 'accessToken'>,
+  url: string,
+): string {
   const expires = user.expiresAt ? dateLong(user.expiresAt) : 'бессрочно';
-  return template.replaceAll('{code}', user.code).replaceAll('{url}', url).replaceAll('{expires}', expires);
+  const base = url.replace(/\/$/, '');
+  // Личная ссылка: человек переходит и сразу в кабинете, вводить ничего не надо.
+  const link = user.accessToken ? `${base}/k/${user.accessToken}` : base;
+  return template
+    .replaceAll('{link}', link)
+    .replaceAll('{code}', user.code)
+    .replaceAll('{url}', base)
+    .replaceAll('{expires}', expires);
 }
 
 export function isValidCode(code: string): boolean {

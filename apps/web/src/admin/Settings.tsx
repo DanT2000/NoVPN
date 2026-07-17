@@ -128,7 +128,7 @@ export function Settings() {
 
         {/* Шаблон */}
         <Panel title="Шаблон сообщения пользователю">
-          <Field label="Текст" hint="переменные: {code} {url} {expires}">
+          <Field label="Текст" hint="переменные: {link} — личная ссылка, {code} — код, {url} — адрес сайта, {expires} — срок">
             <textarea className="textarea" value={messageTemplate} onChange={(e) => setMessageTemplate(e.target.value)} />
           </Field>
         </Panel>

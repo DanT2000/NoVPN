@@ -472,7 +472,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider value={value}>
       {children}
       <ToastHost toast={toast} />
-      <ConfirmHost confirm={confirm} onClose={() => setConfirm(null)} />
+      <ConfirmHost confirm={confirm} onClose={() => setConfirm(null)} onError={showToast} />
     </AppContext.Provider>
   );
 }
@@ -494,13 +494,26 @@ function ToastHost({ toast }: { toast: string | null }) {
   );
 }
 
-function ConfirmHost({ confirm, onClose }: { confirm: ConfirmOptions | null; onClose: () => void }) {
+function ConfirmHost({
+  confirm,
+  onClose,
+  onError,
+}: {
+  confirm: ConfirmOptions | null;
+  onClose: () => void;
+  onError: (text: string) => void;
+}) {
   const [busy, setBusy] = useState(false);
   if (!confirm) return null;
   const run = async () => {
     setBusy(true);
     try {
       await confirm.onConfirm();
+    } catch (e) {
+      // Без catch любая ошибка API молча терялась, а окно закрывалось так же,
+      // как при успехе: человек был уверен, что устройство отключено или конфиг
+      // перевыпущен, хотя ничего не произошло. Действие не выполнено — скажем это.
+      onError(e instanceof Error ? e.message : 'Не удалось выполнить действие');
     } finally {
       setBusy(false);
       onClose();

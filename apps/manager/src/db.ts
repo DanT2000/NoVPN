@@ -185,6 +185,11 @@ for (const stmt of [
   // До какого момента этому пользователю разрешён вход по 6-значному коду.
   // NULL = нельзя вовсе (так у всех, кого завели после перехода на ссылки).
   'ALTER TABLE users ADD COLUMN code_login_until TEXT',
+  // Последнее СЫРОЕ показание счётчиков с сервера. Нужно, чтобы считать прирост:
+  // счётчики ядра обнуляются при перезапуске интерфейса, и без этого
+  // потреблённый трафик пользователя обнулялся вместе с ними.
+  'ALTER TABLE devices ADD COLUMN rx_raw INTEGER DEFAULT 0',
+  'ALTER TABLE devices ADD COLUMN tx_raw INTEGER DEFAULT 0',
 ]) {
   try {
     db.exec(stmt);
@@ -197,6 +202,40 @@ try {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_token ON users(access_token)');
 } catch {
   /* индекс уже есть */
+}
+
+// До перехода на накопительный учёт received_bytes/sent_bytes хранили СЫРОЕ
+// показание счётчика сервера. Переносим его в rx_raw/tx_raw как «уже учтённое»,
+// иначе первая же синхронизация посчитает весь прошлый трафик приростом и
+// удвоит его всем.
+{
+  const n = db.prepare('SELECT COUNT(*) AS n FROM devices WHERE rx_raw = 0 AND received_bytes > 0').get() as { n: number };
+  if (n.n) {
+    db.prepare('UPDATE devices SET rx_raw = received_bytes, tx_raw = sent_bytes WHERE rx_raw = 0 AND received_bytes > 0').run();
+    console.log(`[migrate] перенёс показания счётчиков у устройств: ${n.n}`);
+  }
+}
+
+// Шаблон сообщения со старой формулировкой «введите код на сайте» заменяем на
+// новый — со ссылкой. Трогаем только если админ не редактировал его сам
+// (значение всё ещё равно старому дефолту).
+{
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = 'settings'").get() as { value: string } | undefined;
+  if (row) {
+    try {
+      const s = JSON.parse(row.value);
+      const OLD =
+        'Ваш доступ NoVPN:\n\nКод: {code}\nСайт: {url}\nДействует до: {expires}\n\nВведите код на сайте — конфигурация выдаётся автоматически.';
+      if (s && s.messageTemplate === OLD) {
+        s.messageTemplate =
+          'Ваш доступ NoVPN:\n\n{link}\n\nПерейдите по ссылке — откроется личный кабинет, вводить ничего не нужно. Там подключите устройство и получите конфигурацию.\n\nДействует до: {expires}';
+        db.prepare('UPDATE app_settings SET value = ? WHERE key = ?').run(JSON.stringify(s), 'settings');
+        console.log('[migrate] обновлён шаблон сообщения на вариант со ссылкой');
+      }
+    } catch {
+      /* нечитаемое значение — не трогаем */
+    }
+  }
 }
 
 // Разовая миграция существующих пользователей: выдать личную ссылку каждому и

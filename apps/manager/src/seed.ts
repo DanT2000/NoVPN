@@ -12,7 +12,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultServerId: null,
   defaultProtocols: ['xray', 'amneziawg'],
   messageTemplate:
-    'Ваш доступ NoVPN:\n\nКод: {code}\nСайт: {url}\nДействует до: {expires}\n\nВведите код на сайте — конфигурация выдаётся автоматически.',
+    'Ваш доступ NoVPN:\n\n{link}\n\nПерейдите по ссылке — откроется личный кабинет, вводить ничего не нужно. Там подключите устройство и получите конфигурацию.\n\nДействует до: {expires}',
   activeThresholdDays: 7,
   ipRetentionDays: 30,
   logsRetentionDays: 90,
