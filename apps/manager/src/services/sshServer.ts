@@ -162,17 +162,23 @@ fi
 echo INSTALL_DONE`;
 }
 
+// Удаляем ТОЛЬКО то, что ставили сами. Чужой Amnezia/VPN на сервере не трогаем:
+// раньше `rm -rf /opt/amnezia` сносил чужую установку вместе с нашей.
 function buildUninstallScript(): string {
   return `set +e
+# наш xray-контейнер и его конфиг
 docker rm -f amnezia-xray 2>/dev/null
+rm -rf /opt/amnezia/xray
+# наш awg0 на хосте (чужие awg/wg интерфейсы и контейнеры не трогаем)
 awg-quick down awg0 2>/dev/null
 systemctl disable --now awg-quick@awg0 2>/dev/null
-apt-get purge -y amneziawg amneziawg-tools amneziawg-dkms >/dev/null 2>&1
-rm -rf /etc/amnezia /opt/amnezia
+rm -f /etc/amnezia/amneziawg/awg0.conf
+rmdir --ignore-fail-on-non-empty /etc/amnezia/amneziawg /etc/amnezia /opt/amnezia 2>/dev/null
+# наши прокси
 systemctl disable --now 3proxy 2>/dev/null
 systemctl disable --now novpn-stunnel 2>/dev/null
 rm -f /usr/local/bin/3proxy /etc/systemd/system/3proxy.service /etc/systemd/system/novpn-stunnel.service
-rm -rf /etc/3proxy /etc/stunnel/novpn.conf /opt/3proxy-src /etc/letsencrypt
+rm -rf /etc/3proxy /etc/stunnel/novpn.conf /opt/3proxy-src
 systemctl daemon-reload 2>/dev/null
 echo UNINSTALL_DONE`;
 }

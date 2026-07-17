@@ -22,17 +22,6 @@ function isValidHost(h: string): boolean {
 
 const STEP_LABELS = ['1. Данные', '2. Проверка', '3. Компоненты', '4. Установка', '5. Готово'];
 
-const INSTALL_LOG = [
-  'Подключение по SSH…',
-  'Проверка окружения: Ubuntu 24.04, Docker 27.1',
-  'Загрузка образа xray-core…',
-  'Генерация ключей Reality…',
-  'Загрузка образа amneziawg…',
-  'Генерация серверных ключей AWG…',
-  'Настройка firewall (ufw)…',
-  'Запуск агента novpn-agent…',
-  'Регистрация агента в Manager… OK',
-];
 
 function CheckRow({
   checked, title, sub, onToggle,
@@ -127,16 +116,8 @@ export function ServerWizard() {
     setPct(4);
     setLog(['Добавляем сервер…']);
     setInstallErr(null);
-    // Косметический прогресс, пока идёт реальная установка (до нескольких минут).
+    // Прогресс-бар — индикатор ожидания; строки лога приходят РЕАЛЬНЫЕ от сервера.
     const timer = window.setInterval(() => setPct((p) => Math.min(92, p + 2)), 1600);
-    let li = 0;
-    const logTimer = window.setInterval(() => {
-      if (li < INSTALL_LOG.length) {
-        const line = INSTALL_LOG[li];
-        if (line) setLog((prev) => [...prev, line]);
-        li += 1;
-      }
-    }, 2500);
     (async () => {
       const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
       try {
@@ -165,12 +146,10 @@ export function ServerWizard() {
         setInstallErr(e instanceof Error ? e.message : 'Ошибка установки. Проверьте SSH-доступ и повторите.');
       } finally {
         window.clearInterval(timer);
-        window.clearInterval(logTimer);
       }
     })();
     return () => {
       window.clearInterval(timer);
-      window.clearInterval(logTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);

@@ -3,15 +3,22 @@
 import type { IssueDeviceResult, Server, User } from '@novpn/shared';
 import * as repo from '../repo.js';
 import { encryptSecret } from '../lib/crypto.js';
-import { agentService } from './agent.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg } from './sshServer.js';
 
-// Выпуск конфига: по SSH (реальный сервер) или через mock-агент (dev).
+const NO_SSH =
+  'Для сервера не задан SSH-доступ — панель не может выпустить рабочий конфиг. ' +
+  'Откройте «Серверы» → «Изменить» и укажите пароль или приватный ключ.';
+
+// Выпуск конфига — ТОЛЬКО по SSH на реальном сервере.
+// Раньше при отсутствии SSH возвращался mock-конфиг: он выглядел настоящим, но не работал.
+// Лучше честная ошибка, чем нерабочий конфиг на руках у пользователя.
 export async function createXrayCfg(server: Server, name: string) {
-  return (await sshHasSshAccess(server.id)) ? sshCreateXray(server, name) : agentService.createXray(server, name);
+  if (!(await sshHasSshAccess(server.id))) throw new Error(NO_SSH);
+  return sshCreateXray(server, name);
 }
 export async function createAwgCfg(server: Server, name: string) {
-  return (await sshHasSshAccess(server.id)) ? sshCreateAwg(server, name) : agentService.createAmneziaWG(server, name);
+  if (!(await sshHasSshAccess(server.id))) throw new Error(NO_SSH);
+  return sshCreateAwg(server, name);
 }
 
 export async function issueForUser(

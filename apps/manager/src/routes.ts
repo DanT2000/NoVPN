@@ -401,7 +401,9 @@ async function runProvision(serverId: string, comps: string[]): Promise<void> {
     repo.addLog(`${restoring ? 'Переустановлен' : 'Установлен'} сервер «${s.name}» (${protocols.join(', ')})`);
     provisionStatus.set(serverId, { state: 'done', message: 'Установка завершена.', restored: restoring, at: Date.now() });
   } catch (e) {
-    provisionStatus.set(serverId, { state: 'error', message: e instanceof Error ? e.message : 'Ошибка установки.', at: Date.now() });
+    const msg = e instanceof Error ? e.message : 'Ошибка установки.';
+    repo.addJobError(s.name, `Установка: ${msg}`); // видно на «Обзоре»
+    provisionStatus.set(serverId, { state: 'error', message: msg, at: Date.now() });
   }
 }
 

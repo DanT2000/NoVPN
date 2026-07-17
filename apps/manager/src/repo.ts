@@ -165,7 +165,20 @@ export function deleteDevice(id: string): void {
 
 // ── servers ──
 export function listServers(): Server[] {
-  return (db.prepare('SELECT * FROM servers ORDER BY created_at ASC').all() as any[]).map(rowToServer);
+  // «Пользователи» считаем реально: сколько живых пользователей имеют активный
+  // конфиг на этом сервере (раньше колонка users никем не заполнялась → всегда 0).
+  const counts = db
+    .prepare(
+      `SELECT d.server_id AS sid, COUNT(DISTINCT d.user_id) AS n
+         FROM devices d JOIN users u ON u.id = d.user_id AND u.deleted_at IS NULL
+        WHERE d.is_active = 1 GROUP BY d.server_id`,
+    )
+    .all() as Array<{ sid: string; n: number }>;
+  const byServer = new Map(counts.map((c) => [c.sid, c.n]));
+  return (db.prepare('SELECT * FROM servers ORDER BY created_at ASC').all() as any[]).map((r) => ({
+    ...rowToServer(r),
+    users: byServer.get(r.id) ?? 0,
+  }));
 }
 export function getServer(id: string): Server | null {
   const r = db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as any;
@@ -316,6 +329,12 @@ export function listLog(limit = 30): LogEntry[] {
 }
 export function listJobErrors(limit = 20): JobError[] {
   return db.prepare('SELECT at, server, text FROM job_errors ORDER BY id DESC LIMIT ?').all(limit) as JobError[];
+}
+/** Записать реальную ошибку фоновой операции (установка/синхронизация) — видна на «Обзоре». */
+export function addJobError(server: string, text: string): void {
+  db.prepare('INSERT INTO job_errors(at, server, text) VALUES(?,?,?)').run(nowIso(), server, text.slice(0, 300));
+  // держим только последние 50
+  db.prepare('DELETE FROM job_errors WHERE id NOT IN (SELECT id FROM job_errors ORDER BY id DESC LIMIT 50)').run();
 }
 export function addHistory(userId: string, text: string): void {
   db.prepare('INSERT INTO user_history(user_id, at, text) VALUES(?, ?, ?)').run(userId, nowIso(), text);

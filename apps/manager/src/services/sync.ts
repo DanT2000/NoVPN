@@ -18,8 +18,10 @@ export async function syncAllServers(): Promise<void> {
       let peers: Array<{ publicKey: string; handshake: number; rx: number; tx: number }>;
       try {
         peers = await sshSyncAwg(s.id);
-      } catch {
-        continue; // сервер недоступен — пропускаем до следующего цикла
+      } catch (e) {
+        // Сервер недоступен — фиксируем в «Ошибки заданий» (не чаще раза в цикл) и идём дальше.
+        repo.addJobError(s.name, `Синхронизация: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
+        continue;
       }
       const byKey = new Map(peers.map((p) => [p.publicKey, p]));
       const devices = repo.listServerDeviceKeys(s.id).filter((d) => d.protocol === 'amneziawg' && d.publicKey);
