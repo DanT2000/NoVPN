@@ -301,7 +301,7 @@ router.post('/api/admin/servers/test-ssh', requireAdmin, async (req, res) => {
 router.post('/api/admin/servers', requireAdmin, (req, res) => {
   const b = req.body ?? {};
   const components: string[] = Array.isArray(b.components) ? b.components : [];
-  const protocols = components.filter((p) => p === 'xray' || p === 'amneziawg');
+  const protocols = components.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p));
   // Одноразовый enrollment-token (для будущего агент-режима).
   const enrollToken = randomToken();
   // Если переданы серверные ключи — сервер уже установлен, панель работает по SSH.
