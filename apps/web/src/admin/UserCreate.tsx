@@ -29,7 +29,11 @@ export function UserCreate() {
   const { data, goAdmin, createUser } = useApp();
 
   const servers = data?.servers ?? [];
-  const firstServerId = servers[0]?.id;
+  // Сервер по умолчанию из настроек, иначе первый доступный.
+  const firstServerId = data?.settings.defaultServerId ?? servers[0]?.id;
+  const defaultProtos: Protocol[] = (data?.settings.defaultProtocols ?? ['xray', 'amneziawg']).filter(
+    (p) => p === 'xray' || p === 'amneziawg',
+  ) as Protocol[];
   const existingCodes = data?.users.map((u) => u.code) ?? [];
 
   // Основное
@@ -50,7 +54,7 @@ export function UserCreate() {
   // Доступ
   const [allowedServers, setAllowedServers] = useState<string[]>(() => (firstServerId ? [firstServerId] : []));
   const [defaultServerId, setDefaultServerId] = useState<string | null>(() => firstServerId ?? null);
-  const [protocols, setProtocols] = useState<Protocol[]>(['xray', 'amneziawg']);
+  const [protocols, setProtocols] = useState<Protocol[]>(defaultProtos.length ? defaultProtos : ['xray', 'amneziawg']);
 
   // Код доступа
   const [codeMode, setCodeMode] = useState<'auto' | 'manual'>('auto');

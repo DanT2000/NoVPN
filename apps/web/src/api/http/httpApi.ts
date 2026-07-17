@@ -60,6 +60,23 @@ export const httpApi: ApiClient = {
   adminLogin: (login, password) => req<{ ok: boolean }>('POST', '/api/admin/login', { login, password }),
   adminLogout: () => req<Ok>('POST', '/api/admin/logout'),
 
+  exportBackup: async (password) => {
+    const res = await fetch(`${BASE}/api/admin/backup/export`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      let msg = `Ошибка ${res.status}`;
+      try { msg = JSON.parse(t).error?.message || msg; } catch {}
+      throw new Error(msg);
+    }
+    return res.blob();
+  },
+  restoreBackup: (fileBase64, password) =>
+    req<{ ok: boolean; users: number }>('POST', '/api/admin/backup/restore', { file: fileBase64, password }),
+
   createUser: (input: CreateUserInput) => req<User>('POST', '/api/admin/users', input),
   updateUser: (id, patch: UpdateUserPatch) => req<User>('PATCH', `/api/admin/users/${id}`, patch),
   extendUser: (id, days) => req<User>('POST', `/api/admin/users/${id}/extend`, { days }),

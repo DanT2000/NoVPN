@@ -562,6 +562,12 @@ export async function sshSyncAwg(
   return peers;
 }
 
+/** Лёгкая проверка живости сервера по SSH (для серверов без AWG-статистики).
+ *  Бросает, если сервер не ответил. */
+export async function sshPing(serverId: string): Promise<void> {
+  await runScript(creds(serverId), 'echo ok', 15000);
+}
+
 export async function sshRevokeXray(server: Server, uuid: string): Promise<void> {
   const script = `set -e
 python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));c['inbounds'][0]['settings']['clients']=[x for x in c['inbounds'][0]['settings']['clients'] if x.get('id')!='${uuid}'];json.dump(c,open(p,'w'),indent=2)"

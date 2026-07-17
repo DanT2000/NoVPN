@@ -26,12 +26,17 @@ export async function issueForUser(
   name: string,
   serverId: string,
   protocol: 'xray' | 'amneziawg',
+  opts: { byAdmin?: boolean } = {},
 ): Promise<IssueDeviceResult> {
   const server = repo.getServer(serverId);
   if (!server) throw new Error('Сервер не найден.');
   if (!user.allowedServers.includes(serverId)) throw new Error('Сервер недоступен для этого пользователя.');
   if (!user.allowedProtocols.includes(protocol)) throw new Error('Протокол недоступен для этого пользователя.');
   if (!server.protocols.includes(protocol)) throw new Error('Сервер не поддерживает этот протокол.');
+  // Автовыдача выключена админом — пользователь (кабинет, бот) выпустить не может.
+  // Сам админ из панели выпускает всегда: тумблер про самообслуживание, не про него.
+  if (!server.autoIssue && !opts.byAdmin)
+    throw new Error('Самостоятельная выдача конфигов на этом сервере временно отключена. Обратитесь к администратору.');
 
   if (protocol === 'xray') {
     const r = await createXrayCfg(server, name);

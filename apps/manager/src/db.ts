@@ -10,6 +10,27 @@ import { config } from './config.js';
 const dir = path.dirname(config.databasePath);
 if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
+// Восстановление из бэкапа: кнопка «Восстановить» кладёт рядом .pending-restore,
+// а подменить открытый файл БД в рантайме нельзя. Поэтому подмену делаем здесь,
+// до открытия базы. Прежнюю базу сохраняем как .replaced на всякий случай.
+{
+  const pending = `${config.databasePath}.pending-restore`;
+  if (fs.existsSync(pending)) {
+    for (const suf of ['-wal', '-shm']) {
+      try {
+        fs.rmSync(`${config.databasePath}${suf}`, { force: true });
+      } catch {
+        /* нет файла */
+      }
+    }
+    if (fs.existsSync(config.databasePath)) {
+      fs.renameSync(config.databasePath, `${config.databasePath}.replaced-${Date.now()}`);
+    }
+    fs.renameSync(pending, config.databasePath);
+    console.log('[restore] база восстановлена из бэкапа');
+  }
+}
+
 export const db = new Database(config.databasePath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');

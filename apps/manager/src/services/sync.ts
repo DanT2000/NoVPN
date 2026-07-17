@@ -3,7 +3,7 @@
 // Xray требует включённого stats API (пока не собираем).
 
 import * as repo from '../repo.js';
-import { sshHasSshAccess, sshSyncAwg } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg } from './sshServer.js';
 
 let running = false;
 
@@ -12,17 +12,33 @@ export async function syncAllServers(): Promise<void> {
   running = true;
   try {
     for (const s of repo.listServers()) {
-      if (!s.protocols.includes('amneziawg')) continue;
       if (!(await sshHasSshAccess(s.id))) continue;
+
+      // Xray-серверы статистику пока не отдают, но их доступность проверить надо —
+      // иначе упавший Xray-сервер вечно «online». Лёгкая проверка живости по SSH.
+      if (!s.protocols.includes('amneziawg')) {
+        try {
+          await sshPing(s.id);
+          repo.updateServerFields(s.id, { agent: 'online', endpoint_ok: 1, last_sync_at: repo.nowIso() });
+        } catch {
+          repo.updateServerFields(s.id, { agent: 'offline', endpoint_ok: 0 });
+        }
+        continue;
+      }
 
       let peers: Array<{ publicKey: string; handshake: number; rx: number; tx: number }>;
       try {
         peers = await sshSyncAwg(s.id);
       } catch (e) {
-        // Сервер недоступен — фиксируем в «Ошибки заданий» (не чаще раза в цикл) и идём дальше.
+        // Сервер не ответил по SSH — помечаем offline. Раньше статус был
+        // односторонней защёлкой: «online» ставился при установке и не снимался
+        // никогда, поэтому упавший сервер вечно горел зелёным на обзоре.
+        repo.updateServerFields(s.id, { agent: 'offline', endpoint_ok: 0 });
         repo.addJobError(s.name, `Синхронизация: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
         continue;
       }
+      // Достучались — сервер жив.
+      repo.updateServerFields(s.id, { agent: 'online', endpoint_ok: 1 });
       const byKey = new Map(peers.map((p) => [p.publicKey, p]));
       const devices = repo.listServerDeviceKeys(s.id).filter((d) => d.protocol === 'amneziawg' && d.publicKey);
       const affected = new Set<string>();

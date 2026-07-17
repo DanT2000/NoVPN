@@ -127,6 +127,10 @@ export interface ApiClient {
   // ── admin: auth ──
   adminLogin(login: string, password: string): Promise<{ ok: boolean }>;
   adminLogout(): Promise<Ok>;
+  /** Скачать зашифрованный паролем бэкап базы. */
+  exportBackup(password: string): Promise<Blob>;
+  /** Восстановить базу из бэкапа (base64) — панель перезапустится. */
+  restoreBackup(fileBase64: string, password: string): Promise<{ ok: boolean; users: number }>;
 
   // ── admin: users ──
   createUser(input: CreateUserInput): Promise<User>;

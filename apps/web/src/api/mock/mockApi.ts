@@ -199,6 +199,15 @@ export const mockApi: ApiClient = {
     return { ok: true };
   },
 
+  async exportBackup(_password: string): Promise<Blob> {
+    await wait(200);
+    return new Blob([JSON.stringify(state, null, 2)], { type: 'application/octet-stream' });
+  },
+  async restoreBackup(_fileBase64: string, _password: string): Promise<{ ok: boolean; users: number }> {
+    await wait(200);
+    return { ok: true, users: state.users.length };
+  },
+
   async createUser(input: CreateUserInput): Promise<User> {
     await wait(400);
     const u: User = {

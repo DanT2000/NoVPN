@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { AppSettings, UserProtocol } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
+import { api } from '../api';
 import { Chip, Field, Panel } from '../components/ui';
 
 const PROTO_OPTIONS: Array<{ value: UserProtocol; label: string }> = [
@@ -16,7 +17,7 @@ function numOr(raw: string, fallback: number): number {
 }
 
 export function Settings() {
-  const { data, saveSettings, showToast } = useApp();
+  const { data, saveSettings, showToast, showConfirm } = useApp();
   const s = data?.settings;
 
   const [appName, setAppName] = useState(s?.appName ?? '');
@@ -24,22 +25,77 @@ export function Settings() {
   const [defaultServerId, setDefaultServerId] = useState<string | null>(s?.defaultServerId ?? null);
   const [defaultProtocols, setDefaultProtocols] = useState<UserProtocol[]>(s?.defaultProtocols ?? []);
   const [messageTemplate, setMessageTemplate] = useState(s?.messageTemplate ?? '');
-  const [activeThresholdDays, setActiveThresholdDays] = useState(s?.activeThresholdDays ?? 0);
-  const [ipRetentionDays, setIpRetentionDays] = useState(s?.ipRetentionDays ?? 0);
-  const [logsRetentionDays, setLogsRetentionDays] = useState(s?.logsRetentionDays ?? 0);
-  const [sessionTtlHours, setSessionTtlHours] = useState(s?.sessionTtlHours ?? 0);
   const [codeAttempts, setCodeAttempts] = useState(s?.codeAttempts ?? 0);
   const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 0);
   const [saving, setSaving] = useState(false);
+
+  // Бэкап базы
+  const [bkPass, setBkPass] = useState('');
+  const [bkBusy, setBkBusy] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<string | null>(null);
+  const [restorePass, setRestorePass] = useState('');
 
   if (!data || !s) return null;
 
   const toggleProtocol = (value: UserProtocol) =>
     setDefaultProtocols((prev) => (prev.includes(value) ? prev.filter((p) => p !== value) : [...prev, value]));
 
+  const downloadBackup = async () => {
+    if (bkPass.length < 4) {
+      showToast('Пароль бэкапа — минимум 4 символа');
+      return;
+    }
+    setBkBusy(true);
+    try {
+      const blob = await api.exportBackup(bkPass);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.download = `novpn-backup-${stamp}.novpnbak`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast('Бэкап скачан — сохраните файл и пароль');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось создать бэкап');
+    } finally {
+      setBkBusy(false);
+    }
+  };
+
+  const pickRestoreFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // reader.result — data:...;base64,XXXX — берём часть после запятой.
+      const res = String(reader.result);
+      setRestoreFile(res.slice(res.indexOf(',') + 1));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const doRestore = () => {
+    if (!restoreFile) {
+      showToast('Выберите файл бэкапа');
+      return;
+    }
+    showConfirm({
+      title: 'Восстановить базу из бэкапа?',
+      text: 'Текущая база будет заменена содержимым бэкапа. Панель перезапустится. Все изменения, сделанные после этого бэкапа, будут потеряны.',
+      confirmLabel: 'Восстановить',
+      danger: true,
+      onConfirm: async () => {
+        const r = await api.restoreBackup(restoreFile, restorePass);
+        showToast(`Восстановлено: ${r.users} пользователей. Панель перезапускается…`);
+      },
+    });
+  };
+
   const save = async () => {
     setSaving(true);
     try {
+      // Сохраняем поверх s: неотредактированные поля сохраняют прежние значения.
       const input: AppSettings = {
         ...s,
         appName,
@@ -47,10 +103,6 @@ export function Settings() {
         defaultServerId,
         defaultProtocols,
         messageTemplate,
-        activeThresholdDays,
-        ipRetentionDays,
-        logsRetentionDays,
-        sessionTtlHours,
         codeAttempts,
         codeCooldownMin,
       };
@@ -133,61 +185,29 @@ export function Settings() {
           </Field>
         </Panel>
 
-        {/* Безопасность */}
-        <Panel title="Активность, журналы, безопасность">
+        {/* Защита входа по коду */}
+        <Panel title="Защита входа по коду">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Сколько неудачных попыток ввода кода допускается с одного адреса,
+            прежде чем он временно блокируется. Защищает от подбора.
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, alignItems: 'end' }}>
-            <Field label="Порог «активного устройства», дней">
-              <input
-                className="input"
-                type="number"
-                min={0}
-                value={activeThresholdDays}
-                onChange={(e) => setActiveThresholdDays(numOr(e.target.value, 0))}
-              />
-            </Field>
-            <Field label="Хранение IP, дней">
-              <input
-                className="input"
-                type="number"
-                min={0}
-                value={ipRetentionDays}
-                onChange={(e) => setIpRetentionDays(numOr(e.target.value, 0))}
-              />
-            </Field>
-            <Field label="Хранение журналов, дней">
-              <input
-                className="input"
-                type="number"
-                min={0}
-                value={logsRetentionDays}
-                onChange={(e) => setLogsRetentionDays(numOr(e.target.value, 0))}
-              />
-            </Field>
-            <Field label="Сессия пользователя, часов">
-              <input
-                className="input"
-                type="number"
-                min={0}
-                value={sessionTtlHours}
-                onChange={(e) => setSessionTtlHours(numOr(e.target.value, 0))}
-              />
-            </Field>
             <Field label="Попыток ввода кода">
               <input
                 className="input"
                 type="number"
-                min={0}
+                min={1}
                 value={codeAttempts}
-                onChange={(e) => setCodeAttempts(numOr(e.target.value, 0))}
+                onChange={(e) => setCodeAttempts(numOr(e.target.value, 5))}
               />
             </Field>
             <Field label="Пауза после ошибок, минут">
               <input
                 className="input"
                 type="number"
-                min={0}
+                min={1}
                 value={codeCooldownMin}
-                onChange={(e) => setCodeCooldownMin(numOr(e.target.value, 0))}
+                onChange={(e) => setCodeCooldownMin(numOr(e.target.value, 15))}
               />
             </Field>
           </div>
@@ -198,6 +218,60 @@ export function Settings() {
             Сохранить настройки
           </button>
         </div>
+
+        {/* Бэкап базы */}
+        <Panel title="Резервная копия базы">
+          <div className="body small muted" style={{ marginBottom: 12 }}>
+            Скачайте зашифрованный бэкап и храните его вместе с паролем в надёжном месте
+            (например, в менеджере паролей). Файл самодостаточен: его можно развернуть на
+            новой панели. Восстановление тоже работает — но всё, что вы делали после
+            снятия бэкапа, будет потеряно.
+          </div>
+
+          <Field label="Пароль для шифрования бэкапа">
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <input
+                className="input"
+                type="password"
+                placeholder="минимум 4 символа"
+                value={bkPass}
+                onChange={(e) => setBkPass(e.target.value)}
+                style={{ maxWidth: 240 }}
+              />
+              <button className="btn btn-primary btn-sm" disabled={bkBusy} onClick={() => void downloadBackup()}>
+                {bkBusy ? 'Готовим…' : 'Скачать бэкап'}
+              </button>
+            </div>
+          </Field>
+
+          <div style={{ height: 1, background: 'var(--border)', margin: '14px 0' }} />
+
+          <Field label="Восстановить из бэкапа">
+            <div className="stack" style={{ gap: 8 }}>
+              <input
+                type="file"
+                accept=".novpnbak"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) pickRestoreFile(f);
+                }}
+              />
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                <input
+                  className="input"
+                  type="password"
+                  placeholder="пароль бэкапа"
+                  value={restorePass}
+                  onChange={(e) => setRestorePass(e.target.value)}
+                  style={{ maxWidth: 240 }}
+                />
+                <button className="btn btn-outline btn-sm" disabled={!restoreFile} onClick={doRestore}>
+                  Восстановить
+                </button>
+              </div>
+            </div>
+          </Field>
+        </Panel>
       </div>
     </>
   );

@@ -18,6 +18,7 @@ import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
+import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { resolveTgProxyUrl, restartBot, tgApi } from './services/telegram.js';
 import * as guard from './services/loginGuard.js';
 import * as repo from './repo.js';
@@ -128,7 +129,7 @@ router.post('/api/public/devices', requireUserOrAdmin, async (req, res) => {
     if (u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
       return res.status(403).json(err('devices', 'Лимит устройств исчерпан.'));
     if (protocol !== 'xray' && protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Неизвестный протокол.'));
-    const out = await issueForUser(u, String(name || 'Устройство'), String(serverId), protocol);
+    const out = await issueForUser(u, String(name || 'Устройство'), String(serverId), protocol, { byAdmin: !!req.session.admin });
     res.json(out);
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка выпуска конфига.'));
@@ -685,4 +686,40 @@ router.put('/api/admin/apps', requireAdmin, (req, res) => {
 // ── admin: settings ──
 router.put('/api/admin/settings', requireAdmin, (req, res) => {
   res.json(repo.saveSettings(req.body as AppSettings));
+});
+
+// ── admin: бэкап базы ──
+// Скачать зашифрованный паролем бэкап. Файл самодостаточен: восстанавливается
+// на новой панели с любым ENCRYPTION_KEY.
+router.post('/api/admin/backup/export', requireAdmin, (req, res) => {
+  try {
+    const password = String(req.body?.password ?? '');
+    const buf = createBackup(password);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="novpn-backup-${stamp}.novpnbak"`);
+    repo.addLog('Скачан бэкап базы');
+    res.send(buf);
+  } catch (e) {
+    res.status(400).json(err('validation', e instanceof Error ? e.message : 'Не удалось создать бэкап.'));
+  }
+});
+
+// Восстановить базу из бэкапа. Файл приходит как base64 в JSON (чтобы не тащить
+// multipart). После успеха панель перезапускается и поднимается уже с новой базой.
+router.post('/api/admin/backup/restore', requireAdmin, (req, res) => {
+  try {
+    const password = String(req.body?.password ?? '');
+    const b64 = String(req.body?.file ?? '');
+    if (!b64) return res.status(400).json(err('validation', 'Файл не передан.'));
+    const buf = Buffer.from(b64, 'base64');
+    const sqliteBytes = decryptBackup(buf, password);
+    const { users } = restoreBackup(sqliteBytes);
+    repo.addLog(`Восстановление из бэкапа (${users} пользователей) — перезапуск`);
+    res.json({ ok: true, users });
+    // Даём ответу уйти и перезапускаемся: db.ts подхватит .pending-restore.
+    setTimeout(() => process.exit(0), 400);
+  } catch (e) {
+    res.status(400).json(err('validation', e instanceof Error ? e.message : 'Не удалось восстановить.'));
+  }
 });
