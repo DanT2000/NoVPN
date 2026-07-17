@@ -72,13 +72,66 @@ function withServerLock<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+// ── Параметры обфускации AmneziaWG ──
+// ВАЖНО: они должны быть УНИКАЛЬНЫ для каждого сервера. Если у всех серверов
+// одинаковые «магические» H1..H4, само это число становится подписью → DPI может
+// заблокировать все наши серверы одним правилом. Параметры кладём в keyvault
+// рядом с ключами: восстановление по домену возвращает и ключ, и параметры,
+// поэтому ранее выданные конфиги продолжают работать.
+export interface AwgParams {
+  Jc: number; Jmin: number; Jmax: number;
+  S1: number; S2: number;
+  H1: number; H2: number; H3: number; H4: number;
+}
+
+const rnd = (min: number, max: number) => min + Math.floor(Math.random() * (max - min + 1));
+
+export function genAwgParams(): AwgParams {
+  const Jmin = rnd(8, 40);
+  const Jmax = Math.min(1280, Jmin + rnd(20, 60));
+  const S1 = rnd(15, 120);
+  let S2 = rnd(15, 120);
+  while (S2 === S1 + 56) S2 = rnd(15, 120); // требование AmneziaWG: S1+56 ≠ S2
+  const hs = new Set<number>();
+  while (hs.size < 4) hs.add(rnd(5, 2147483600)); // > 4, чтобы не совпасть с типами WireGuard
+  const [H1, H2, H3, H4] = [...hs];
+  return { Jc: rnd(3, 10), Jmin, Jmax, S1, S2, H1: H1!, H2: H2!, H3: H3!, H4: H4! };
+}
+
+/** Прочитать параметры уже установленного awg0 (чтобы НЕ менять их при переустановке). */
+export async function sshReadAwgParams(server: Server): Promise<AwgParams | null> {
+  try {
+    const out = await runScript(
+      creds(server.id),
+      `CONF=/etc/amnezia/amneziawg/awg0.conf
+[ -f "$CONF" ] || { echo NONE; exit 0; }
+p(){ awk -F'= ' -v k="$1" 'index($0,k" ")==1{print $2; exit}' "$CONF"; }
+for k in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do echo "$k=$(p $k)"; done`,
+      20000,
+    );
+    if (/NONE/.test(out)) return null;
+    const num = (k: string) => {
+      const v = grab(out, k);
+      const n = v ? Number(v) : NaN;
+      return Number.isFinite(n) ? n : null;
+    };
+    const p: Record<string, number | null> = {};
+    for (const k of ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4']) p[k] = num(k);
+    if (Object.values(p).some((v) => v === null)) return null;
+    return p as unknown as AwgParams;
+  } catch {
+    return null;
+  }
+}
+
 // ── Провижининг сервера с нуля (xray Reality + AmneziaWG) ──
 // Скрипт без bash-${…} (кроме инжектов сверху) — безопасно в JS-шаблоне.
 // Параметры обфускации AWG фиксированы → восстановление по домену требует только приватный ключ.
 function buildInstallScript(o: {
-  sni: string; realityPriv: string; shortId: string; awgPriv: string; xray: boolean; awg: boolean;
+  sni: string; realityPriv: string; shortId: string; awgPriv: string; xray: boolean; awg: boolean; awgParams: AwgParams;
 }): string {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  const a = o.awgParams;
   return `set -e
 SNI=${q(o.sni)}
 REALITY_PRIV=${q(o.realityPriv)}
@@ -88,8 +141,9 @@ WANT_XRAY=${o.xray ? '1' : '0'}
 WANT_AWG=${o.awg ? '1' : '0'}
 IFACE="$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1)"
 [ -z "$IFACE" ] && IFACE=eth0
-JC=4; JMIN=40; JMAX=70; S1=86; S2=97
-H1=1004746675; H2=928473625; H3=1719083348; H4=1339303396
+# Параметры обфускации — УНИКАЛЬНЫ для сервера (приходят из панели/keyvault).
+JC=${a.Jc}; JMIN=${a.Jmin}; JMAX=${a.Jmax}; S1=${a.S1}; S2=${a.S2}
+H1=${a.H1}; H2=${a.H2}; H3=${a.H3}; H4=${a.H4}
 
 if [ "$WANT_XRAY" = "1" ]; then
   echo "== xray =="
@@ -186,7 +240,7 @@ echo UNINSTALL_DONE`;
 /** Установить VPN-комплект (xray/awg). Если переданы ключи — восстановление по домену. */
 export async function sshInstallServer(
   server: Server,
-  opts: { xray: boolean; awg: boolean; sni?: string; realityPriv?: string; shortId?: string; awgPriv?: string },
+  opts: { xray: boolean; awg: boolean; sni?: string; realityPriv?: string; shortId?: string; awgPriv?: string; awgParams: AwgParams },
 ): Promise<{ realityPriv?: string; realityPub?: string; shortId?: string; sni?: string; awgPriv?: string; awgPub?: string }> {
   const script = buildInstallScript({
     sni: opts.sni || 'vk.com',
@@ -195,6 +249,7 @@ export async function sshInstallServer(
     awgPriv: opts.awgPriv || '',
     xray: opts.xray,
     awg: opts.awg,
+    awgParams: opts.awgParams,
   });
   const out = await runScript(creds(server.id), script, 600000);
   if (!/INSTALL_DONE/.test(out)) throw new Error('Установка не завершилась: ' + out.slice(-300));

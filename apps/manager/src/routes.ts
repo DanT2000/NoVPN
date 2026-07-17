@@ -12,7 +12,8 @@ import type {
 import { config } from './config.js';
 import { requireAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams } from './services/sshServer.js';
+import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
@@ -373,6 +374,21 @@ async function runProvision(serverId: string, comps: string[]): Promise<void> {
     const prev = getServerKeys(s.host);
     const restoring = !!(prev?.xrayRealityPrivKey || prev?.awgServerPrivKey);
     provisionStatus.set(serverId, { state: 'running', message: restoring ? 'Переустановка с восстановлением…' : 'Устанавливаем VPN…', at: Date.now() });
+
+    // Параметры обфускации AmneziaWG — уникальны для сервера.
+    // Приоритет: 1) сохранённые в keyvault → 2) уже стоящие на сервере (старые
+    // установки: их НЕЛЬЗЯ менять, иначе выданные конфиги отвалятся) → 3) новые случайные.
+    let awgParams: AwgParams | null = null;
+    if (prev?.awgParams) {
+      try {
+        awgParams = JSON.parse(prev.awgParams) as AwgParams;
+      } catch {
+        awgParams = null;
+      }
+    }
+    if (!awgParams) awgParams = await sshReadAwgParams(s);
+    if (!awgParams) awgParams = genAwgParams();
+
     const installed = want.xray || want.awg
       ? await sshInstallServer(s, {
           xray: want.xray, awg: want.awg,
@@ -380,12 +396,14 @@ async function runProvision(serverId: string, comps: string[]): Promise<void> {
           realityPriv: restoring ? prev?.xrayRealityPrivKey : undefined,
           shortId: restoring ? prev?.xrayShortId : undefined,
           awgPriv: restoring ? prev?.awgServerPrivKey : undefined,
+          awgParams,
         })
       : {};
     saveServerKeys(s.host, {
       xrayRealityPrivKey: installed.realityPriv, xrayRealityPubKey: installed.realityPub,
       xrayShortId: installed.shortId, xraySni: installed.sni,
       awgServerPrivKey: installed.awgPriv, awgServerPubKey: installed.awgPub,
+      awgParams: JSON.stringify(awgParams),
     });
     if (want.http || want.https || want.socks) {
       provisionStatus.set(serverId, { state: 'running', message: 'Устанавливаем прокси…', at: Date.now() });

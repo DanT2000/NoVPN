@@ -14,6 +14,9 @@ export interface ServerKeys {
   xrayRealityPubKey?: string;
   xrayShortId?: string;
   xraySni?: string;
+  /** Параметры обфускации AmneziaWG (JSON) — уникальны для сервера, нужны для
+   *  восстановления по домену: без них старые конфиги не подключатся. */
+  awgParams?: string;
 }
 
 /** Нормализуем домен как ключ (без протокола/порта, в нижний регистр). */
@@ -29,8 +32,8 @@ export function saveServerKeys(host: string, k: ServerKeys): void {
   const domain = domainKey(host);
   db.prepare(
     `INSERT INTO server_keys(domain, awg_server_privkey_enc, awg_server_pubkey,
-       xray_reality_privkey_enc, xray_reality_pubkey, xray_short_id, xray_sni, updated_at)
-     VALUES(@domain,@awgPriv,@awgPub,@xrayPriv,@xrayPub,@sid,@sni,@now)
+       xray_reality_privkey_enc, xray_reality_pubkey, xray_short_id, xray_sni, awg_params, updated_at)
+     VALUES(@domain,@awgPriv,@awgPub,@xrayPriv,@xrayPub,@sid,@sni,@params,@now)
      ON CONFLICT(domain) DO UPDATE SET
        awg_server_privkey_enc=COALESCE(excluded.awg_server_privkey_enc, server_keys.awg_server_privkey_enc),
        awg_server_pubkey=COALESCE(excluded.awg_server_pubkey, server_keys.awg_server_pubkey),
@@ -38,6 +41,7 @@ export function saveServerKeys(host: string, k: ServerKeys): void {
        xray_reality_pubkey=COALESCE(excluded.xray_reality_pubkey, server_keys.xray_reality_pubkey),
        xray_short_id=COALESCE(excluded.xray_short_id, server_keys.xray_short_id),
        xray_sni=COALESCE(excluded.xray_sni, server_keys.xray_sni),
+       awg_params=COALESCE(excluded.awg_params, server_keys.awg_params),
        updated_at=excluded.updated_at`,
   ).run({
     domain,
@@ -47,6 +51,7 @@ export function saveServerKeys(host: string, k: ServerKeys): void {
     xrayPub: k.xrayRealityPubKey ?? null,
     sid: k.xrayShortId ?? null,
     sni: k.xraySni ?? null,
+    params: k.awgParams ?? null,
     now: nowIso(),
   });
 }
@@ -104,5 +109,6 @@ export function getServerKeys(host: string): ServerKeys | null {
     xrayRealityPubKey: r.xray_reality_pubkey ?? undefined,
     xrayShortId: r.xray_short_id ?? undefined,
     xraySni: r.xray_sni ?? undefined,
+    awgParams: r.awg_params ?? undefined,
   };
 }

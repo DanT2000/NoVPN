@@ -178,6 +178,7 @@ for (const stmt of [
   'ALTER TABLE apps ADD COLUMN icon TEXT',
   'ALTER TABLE apps ADD COLUMN download_url TEXT',
   'ALTER TABLE server_keys ADD COLUMN proxy_enc TEXT',
+  'ALTER TABLE server_keys ADD COLUMN awg_params TEXT',
 ]) {
   try {
     db.exec(stmt);
