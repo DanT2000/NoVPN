@@ -6,7 +6,7 @@ import { Home } from './Home';
 import { Cabinet } from './Cabinet';
 import { Wizard } from './Wizard';
 import { Devices } from './Devices';
-import { AppsUser } from './AppsUser';
+import { Connect } from './Connect';
 
 export function PublicShell() {
   const { nav, goAdmin, publicUser, goPublic } = useApp();
@@ -49,7 +49,7 @@ export function PublicShell() {
           {route === 'cabinet' && <Cabinet />}
           {route === 'wizard' && <Wizard />}
           {route === 'devices' && <Devices />}
-          {route === 'apps' && <AppsUser />}
+          {route === 'apps' && <Connect />}
         </main>
       </div>
     </div>
