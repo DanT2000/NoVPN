@@ -41,10 +41,10 @@ function storeOf(url: string): string | null {
  * выдуманная схема молча не сработает, и человек решит, что сломана подписка.
  */
 function oneTapImport(app: AppClient, subUrl: string): string | null {
-  const name = app.client.toLowerCase();
-  // Документировано: v2raytun://import/{subscription_link}
-  if (name.includes('v2raytun')) return `v2raytun://import/${subUrl}`;
-  return null;
+  const sc = app.urlScheme;
+  if (!sc) return null;
+  // Схема либо с параметром (…url=), либо путём (…/) — дописываем соответственно.
+  return sc.endsWith('=') ? sc + encodeURIComponent(subUrl) : sc + subUrl;
 }
 
 type Branch = 'xray' | 'amneziawg';

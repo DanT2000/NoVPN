@@ -1,7 +1,7 @@
 // Первичное наполнение: настройки, Telegram, каталог приложений.
 // НЕ создаёт демо-пользователей/серверы — они появляются через создание/enrollment.
 
-import type { AppSettings, TelegramSettings } from '@novpn/shared';
+import type { AppClient, AppSettings, TelegramSettings } from '@novpn/shared';
 import { DEFAULT_APPS } from '@novpn/shared';
 import { db, getSetting, setSetting } from './db.js';
 
@@ -46,5 +46,27 @@ export function seedIfEmpty(): void {
   if (appCount === 0) {
     const stmt = db.prepare('INSERT INTO app_clients(id, sort, data) VALUES(?,?,?)');
     DEFAULT_APPS.forEach((a, i) => stmt.run(a.id, i, JSON.stringify(a)));
+    return;
   }
+
+  // Каталог уже засеян раньше — обновляем только то, что задаём мы сами:
+  // иконку и схему импорта. Правки администратора (ссылки, тексты, порядок,
+  // включённость) не трогаем.
+  const rows = db.prepare('SELECT id, data FROM app_clients').all() as Array<{ id: string; data: string }>;
+  const upd = db.prepare('UPDATE app_clients SET data = ? WHERE id = ?');
+  let changed = 0;
+  for (const r of rows) {
+    const def = DEFAULT_APPS.find((a) => a.id === r.id);
+    if (!def) continue;
+    let cur: AppClient;
+    try {
+      cur = JSON.parse(r.data) as AppClient;
+    } catch {
+      continue;
+    }
+    if (cur.icon === def.icon && cur.urlScheme === def.urlScheme) continue;
+    upd.run(JSON.stringify({ ...cur, icon: def.icon, urlScheme: def.urlScheme ?? null }), r.id);
+    changed++;
+  }
+  if (changed) console.log(`[migrate] обновлены иконки/схемы импорта у приложений: ${changed}`);
 }

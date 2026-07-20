@@ -13,11 +13,12 @@ import type { AppClient, AppPlatform, User } from '@novpn/shared';
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
-/** Подтверждённые схемы «добавить подписку одним нажатием». */
-function oneTap(client: string, subUrl: string): string | null {
-  const n = client.toLowerCase();
-  if (n.includes('v2raytun')) return `v2raytun://import/${subUrl}`;
-  return null;
+/** Ссылка «добавить подписку одним нажатием» — из схемы, заданной в каталоге.
+ *  Схема либо оканчивается на '=' (параметр), либо на '/' — тогда просто дописываем. */
+function oneTap(app: AppClient, subUrl: string): string | null {
+  const sc = app.urlScheme;
+  if (!sc) return null;
+  return sc.endsWith('=') ? sc + encodeURIComponent(subUrl) : sc + subUrl;
 }
 
 function storeLabel(url: string): string {
@@ -49,7 +50,7 @@ export function renderSubPage(opts: {
     if (!list.length) return '';
     const items = list
       .map(({ a, e }) => {
-        const tap = oneTap(a.client, subUrl);
+        const tap = oneTap(a, subUrl);
         const icon = a.icon
           ? `<img class="ico" src="${esc(a.icon)}" alt="">`
           : `<div class="ico ph">${esc(a.client.slice(0, 1))}</div>`;
