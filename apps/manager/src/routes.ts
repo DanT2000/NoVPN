@@ -20,6 +20,7 @@ import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypt
 import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
+import { renderSubPage } from './services/subPage.js';
 import { resolveTgProxyUrl, restartBot, tgApi } from './services/telegram.js';
 import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
@@ -63,6 +64,24 @@ router.get('/sub/:token', (req, res) => {
     .listDevicesOfUser(u.id)
     .filter((d) => d.isActive && d.protocol === 'xray' && d.link)
     .map((d) => d.link!);
+
+  // Один адрес — два ответа. Браузер просит text/html: показываем страницу с
+  // приложениями и инструкцией. VPN-приложение просит что угодно другое:
+  // отдаём base64-список конфигов. Так человеку достаточно ОДНОЙ ссылки:
+  // открыл — понял что делать, вставил в приложение — получил конфиги.
+  if (String(req.headers.accept ?? '').includes('text/html')) {
+    const base = (repo.getSettings()?.domain || config.publicUrl || '').replace(/\/$/, '');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(
+      renderSubPage({
+        appName: config.appName,
+        user: u,
+        subUrl: `${base}/sub/${req.params.token}`,
+        apps: repo.listApps(),
+        configCount: links.length,
+      }),
+    );
+  }
 
   // Заголовки, которые читают клиенты подписок.
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
