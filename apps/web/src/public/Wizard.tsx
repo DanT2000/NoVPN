@@ -4,7 +4,7 @@ import { useApp } from '../store/AppStore';
 import { BackButton, Dot, EmptyState, ProgressBar } from '../components/ui';
 import { Qr } from '../components/Qr';
 import { dateShort } from '../lib/format';
-import { copyText, downloadText, shareText } from '../lib/clipboard';
+import { copyText, downloadText, openUrl, shareText } from '../lib/clipboard';
 
 const PLATFORMS = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
 type Platform = (typeof PLATFORMS)[number];
@@ -102,6 +102,8 @@ export function Wizard() {
   const cfgLink = result?.link ?? viewDevice?.link ?? null;
   const cfgConf = result?.conf ?? viewDevice?.conf ?? null;
   const cfgName = result?.device.name ?? viewDevice?.name ?? name;
+  // Ссылка vpn:// приходит и при выпуске, и вместе с устройством (собирается из .conf).
+  const vpnKey = result?.vpnKey ?? viewDevice?.vpnKey ?? null;
   const protoLabelFull = (() => {
     const proto = result?.device.protocol ?? viewDevice?.protocol;
     if (proto === 'xray') return 'Xray (VLESS Reality)';
@@ -268,10 +270,30 @@ export function Wizard() {
             ))}
           </div>
 
-          {cfgConf && result ? (
-            <div className="notice notice-amber">
-              <div className="row" style={{ gap: 8 }}><span style={{ fontWeight: 700 }}>Официальный ключ vpn://</span><span className="badge" style={{ color: 'var(--amber-fg)', background: 'var(--amber-bg)' }}>недоступно</span></div>
-              <div className="small" style={{ marginTop: 4 }}>Выдача официального ключа появится позже. Пока AmneziaVPN импортирует конфигурацию AmneziaWG (.conf) — используйте кнопки ниже.</div>
+          {/* Ссылка vpn:// — импорт в приложение AmneziaVPN одним нажатием.
+              Отдельное приложение AmneziaWG её не принимает, ему нужен файл .conf. */}
+          {vpnKey ? (
+            <div className="card stack" style={{ gap: 10 }}>
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 4 }}>Для приложения AmneziaVPN</div>
+                <div className="body small muted">
+                  Нажмите — приложение откроется и добавит конфигурацию само.
+                  Для отдельного приложения AmneziaWG используйте файл .conf ниже.
+                </div>
+              </div>
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn btn-primary btn-sm" onClick={() => openUrl(vpnKey)}>
+                  Открыть в AmneziaVPN
+                </button>
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={async () => {
+                    showToast((await copyText(vpnKey)) ? 'Ссылка vpn:// скопирована' : 'Не удалось скопировать');
+                  }}
+                >
+                  Копировать vpn://
+                </button>
+              </div>
             </div>
           ) : null}
 

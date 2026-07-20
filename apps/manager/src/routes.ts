@@ -19,8 +19,10 @@ import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteS
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
 import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
+import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { resolveTgProxyUrl, restartBot, tgApi } from './services/telegram.js';
 import * as guard from './services/loginGuard.js';
+import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
 import * as repo from './repo.js';
 
 export const router = Router();
@@ -44,6 +46,36 @@ function clientIp(req: Request): string {
 
 // ── health ──
 router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
+
+// ── подписка Xray ──
+// Клиенты (Happ, v2rayTun, Streisand, NekoBox) умеют «подписку»: раз добавил
+// ссылку — дальше сам тянет список конфигов и обновляет их. Отдаём base64 от
+// списка vless://-ссылок, как принято в экосистеме.
+//
+// Токен подписки ОТДЕЛЬНЫЙ от токена входа: подписка живёт в приложении и может
+// утечь вместе с ним, но пускать в личный кабинет она не должна.
+router.get('/sub/:token', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).send('');
+  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
+
+  const links = repo
+    .listDevicesOfUser(u.id)
+    .filter((d) => d.isActive && d.protocol === 'xray' && d.link)
+    .map((d) => d.link!);
+
+  // Заголовки, которые читают клиенты подписок.
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Profile-Title', `base64:${Buffer.from(config.appName, 'utf8').toString('base64')}`);
+  res.setHeader('Profile-Update-Interval', '12');
+  if (u.trafficLimitGb != null) {
+    const total = Math.round(u.trafficLimitGb * 1e9);
+    const used = Math.round((u.trafficUsedGb ?? 0) * 1e9);
+    const expire = u.expiresAt ? Math.floor(new Date(u.expiresAt).getTime() / 1000) : 0;
+    res.setHeader('Subscription-Userinfo', `upload=0; download=${used}; total=${total}; expire=${expire}`);
+  }
+  res.send(Buffer.from(links.join('\n'), 'utf8').toString('base64'));
+});
 
 // ── bootstrap ──
 // ТОЛЬКО для админа: содержит коды доступа всех пользователей и конфиги всех
@@ -167,7 +199,8 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
         is_active: 1, revoked_at: null, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
         preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: r.conf, link: null,
       })!;
-      out = { device, conf: r.conf, vpnKeyAvailable: false, vpnKeyNote: 'Официальный ключ vpn:// пока недоступен.' };
+      const vk = vpnLinkFromConf(r.conf, `${config.appName} — ${server.name}`);
+      out = { device, conf: r.conf, vpnKeyAvailable: !!vk, vpnKey: vk ?? undefined };
     }
     repo.addHistory(u.id, `Перевыпущен конфиг «${d.name}»`);
     res.json(out);
@@ -203,11 +236,41 @@ router.delete('/api/public/devices/:id', requireUserOrAdmin, (req, res) => {
 });
 
 // ── admin: auth ──
+// Логина нет — панель одноадминная. Тот же лимит попыток, что и на коде: с
+// паролем по умолчанию «admin» подбор иначе тривиален.
 router.post('/api/admin/login', (req, res) => {
-  const { login, password } = req.body ?? {};
-  const ok = login === config.adminLogin && password === config.adminPassword;
-  if (ok) req.session.admin = true;
-  res.json({ ok });
+  const ip = clientIp(req);
+  const gate = guard.checkAllowed(ip);
+  if (!gate.allowed) return res.status(429).json(err('rate_limited', gate.message!));
+
+  const { password } = req.body ?? {};
+  const ok = verifyAdminPassword(String(password ?? ''));
+  if (!ok) {
+    const v = guard.noteFailure(ip);
+    return res.json({ ok: false, message: v.allowed ? undefined : v.message });
+  }
+  guard.noteSuccess(ip);
+  req.session.admin = true;
+  res.json({ ok: true, mustChangePassword: isDefaultAdminPassword() });
+});
+
+// Смена пароля администратора из панели.
+router.post('/api/admin/password', requireAdmin, (req, res) => {
+  const current = String(req.body?.current ?? '');
+  const next = String(req.body?.next ?? '');
+  if (!verifyAdminPassword(current)) return res.status(400).json(err('validation', 'Текущий пароль неверен.'));
+  if (next.length < 6) return res.status(400).json(err('validation', 'Новый пароль — минимум 6 символов.'));
+  setAdminPassword(next);
+  repo.addLog('Изменён пароль администратора');
+  res.json({ ok: true });
+});
+
+// Перезапуск панели (после смены домена/порта). Контейнер поднимется сам:
+// в docker-compose стоит restart: unless-stopped.
+router.post('/api/admin/restart', requireAdmin, (_req, res) => {
+  repo.addLog('Перезапуск панели по кнопке из настроек');
+  res.json({ ok: true });
+  setTimeout(() => process.exit(0), 400);
 });
 router.post('/api/admin/logout', (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));

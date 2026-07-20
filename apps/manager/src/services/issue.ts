@@ -2,8 +2,10 @@
 
 import type { IssueDeviceResult, Server, User } from '@novpn/shared';
 import * as repo from '../repo.js';
+import { config } from '../config.js';
 import { encryptSecret } from '../lib/crypto.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg } from './sshServer.js';
+import { vpnLinkFromConf } from './amneziaLink.js';
 
 const NO_SSH =
   'Для сервера не задан SSH-доступ — панель не может выпустить рабочий конфиг. ' +
@@ -51,8 +53,13 @@ export async function issueForUser(
     clientIp: r.clientIp, conf: r.conf,
   });
   repo.addHistory(user.id, `Выпущен конфиг «${name}» (AmneziaWG, ${server.name})`);
+  // Ссылка vpn:// для приложения AmneziaVPN — импорт в один тап.
+  // Отдельное приложение AmneziaWG её не принимает, ему нужен файл .conf.
+  const vpnKey = vpnLinkFromConf(r.conf, `${config.appName} — ${server.name}`);
   return {
-    device, conf: r.conf, vpnKeyAvailable: false,
-    vpnKeyNote: 'Официальный ключ vpn:// пока недоступен через текущий стек. Используйте .conf в совместимых приложениях.',
+    device, conf: r.conf, vpnKeyAvailable: !!vpnKey, vpnKey: vpnKey ?? undefined,
+    vpnKeyNote: vpnKey
+      ? 'Ссылка vpn:// — для приложения AmneziaVPN. Для отдельного приложения AmneziaWG используйте файл .conf.'
+      : undefined,
   };
 }

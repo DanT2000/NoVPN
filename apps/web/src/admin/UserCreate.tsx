@@ -43,7 +43,7 @@ export function UserCreate() {
   // Лимиты
   const [dlMode, setDlMode] = useState<DlMode>('custom');
   const [dlCustom, setDlCustom] = useState('3');
-  const [expMode, setExpMode] = useState<ExpMode>('30');
+  const [expMode, setExpMode] = useState<ExpMode>('never');
   const [expCustom, setExpCustom] = useState('');
   const [trafMode, setTrafMode] = useState<TrafMode>('unlim');
   const [trafCustom, setTrafCustom] = useState('');

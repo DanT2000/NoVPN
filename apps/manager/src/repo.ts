@@ -14,8 +14,10 @@ import type {
   TelegramSettings,
   User,
 } from '@novpn/shared';
+import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
+import { vpnLinkFromConf } from './services/amneziaLink.js';
 
 export const nowIso = () => new Date().toISOString();
 export const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(6).toString('base64url')}`;
@@ -38,6 +40,16 @@ export function getUserByAccessToken(token: string): User | null {
   const r = db.prepare('SELECT * FROM users WHERE access_token = ? AND deleted_at IS NULL').get(token) as any;
   return r ? rowToUser(r) : null;
 }
+/** Пользователь по токену подписки Xray. */
+export function getUserBySubToken(token: string): User | null {
+  const r = db.prepare('SELECT * FROM users WHERE sub_token = ? AND deleted_at IS NULL').get(token) as any;
+  return r ? rowToUser(r) : null;
+}
+export function getSubToken(userId: string): string | null {
+  const r = db.prepare('SELECT sub_token FROM users WHERE id = ?').get(userId) as { sub_token: string | null } | undefined;
+  return r?.sub_token ?? null;
+}
+
 export function getAccessToken(userId: string): string | null {
   const r = db.prepare('SELECT access_token FROM users WHERE id = ?').get(userId) as { access_token: string | null } | undefined;
   return r?.access_token ?? null;
@@ -92,10 +104,10 @@ export function insertUser(u: NewUserRow): User {
   db.prepare(
     `INSERT INTO users(id,name,comment,category,tags,code,device_limit,expires_at,traffic_limit_gb,traffic_used_gb,
       reset_policy,allowed_servers,default_server_id,allowed_protocols,is_active,telegram,created_at,updated_at,
-      access_token,code_login_until)
+      access_token,code_login_until,sub_token)
      VALUES(@id,@name,@comment,@category,@tags,@code,@device_limit,@expires_at,@traffic_limit_gb,0,
       @reset_policy,@allowed_servers,@default_server_id,@allowed_protocols,1,NULL,@now,@now,
-      @access_token,@code_login_until)`,
+      @access_token,@code_login_until,@sub_token)`,
   ).run({
     id, name: u.name, comment: u.comment, category: u.category, tags: JSON.stringify(u.tags), code: u.code,
     device_limit: u.deviceLimit, expires_at: u.expiresAt, traffic_limit_gb: u.trafficLimitGb,
@@ -104,6 +116,7 @@ export function insertUser(u: NewUserRow): User {
     // Личная ссылка выдаётся сразу. Вход по коду — только если админ включил.
     access_token: crypto.randomBytes(18).toString('base64url'),
     code_login_until: u.codeLoginEnabled ? CODE_LOGIN_FOREVER : null,
+    sub_token: crypto.randomBytes(18).toString('base64url'),
   });
   return getUser(id)!;
 }
@@ -434,13 +447,25 @@ export function buildBootstrap(): BootstrapData {
   };
 }
 
-/** Устройства одного пользователя (с конфигами — это его собственные). */
+/** Устройства одного пользователя (с конфигами — это его собственные).
+ *  Для AmneziaWG добавляем ссылку vpn:// — она собирается из самого .conf. */
 export function listDevicesOfUser(userId: string): Device[] {
-  return (db.prepare('SELECT * FROM devices WHERE user_id = ? ORDER BY created_at DESC').all(userId) as any[]).map(rowToDevice);
+  return (db.prepare('SELECT * FROM devices WHERE user_id = ? ORDER BY created_at DESC').all(userId) as any[])
+    .map(rowToDevice)
+    .map((d) => (d.protocol === 'amneziawg' && d.conf ? { ...d, vpnKey: vpnLinkFromConf(d.conf, d.name) } : d));
 }
 
 /** Данные публичной части. Без userId — только справочники (серверы, приложения):
  *  ни кодов, ни конфигов, ни чужих устройств. */
+/** Публичный адрес подписки Xray для пользователя. */
+export function subscriptionUrl(userId: string): string | null {
+  const t = getSubToken(userId);
+  if (!t) return null;
+  // Домен из настроек; если админ его не заполнил — публичный адрес из окружения.
+  const base = (getSettings()?.domain || config.publicUrl || '').replace(/\/$/, '');
+  return `${base}/sub/${t}`;
+}
+
 export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
   const tg = getTelegramSafe();
   const user = userId ? getUser(userId) : null;
@@ -464,5 +489,6 @@ export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
     apps: listApps(),
     telegram: { enabled: tg.enabled, botUsername: tg.botUsername ?? null },
     botLink,
+    subLink: user ? subscriptionUrl(user.id) : null,
   };
 }

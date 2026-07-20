@@ -3,7 +3,7 @@ import { useApp } from '../store/AppStore';
 import { Dot } from '../components/ui';
 import { dateShort, daysLeft, gb, plural } from '../lib/format';
 import { statusOf } from '../lib/status';
-import { openUrl } from '../lib/clipboard';
+import { copyText, openUrl } from '../lib/clipboard';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -112,6 +112,34 @@ export function Cabinet() {
           <div style={{ fontWeight: 600 }}>{protoNames || '—'}</div>
         </Row>
       </div>
+
+      {/* Подписка Xray: одна ссылка на все устройства. Приложение само тянет
+          конфиги и обновляет их — не нужно выпускать конфиг на каждый телефон. */}
+      {data.subLink && user.allowedProtocols.includes('xray') ? (
+        <div className="card stack" style={{ gap: 10 }}>
+          <div>
+            <div className="eyebrow" style={{ marginBottom: 4 }}>Подписка Xray</div>
+            <div className="body small muted">
+              Добавьте эту ссылку в приложение один раз — оно само подтянет все ваши
+              конфигурации и будет держать их актуальными.
+            </div>
+          </div>
+          <input className="input mono" readOnly value={data.subLink} style={{ fontSize: 12 }} />
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={async () => {
+                showToast((await copyText(data.subLink!)) ? 'Ссылка подписки скопирована' : 'Не удалось скопировать');
+              }}
+            >
+              Копировать подписку
+            </button>
+            <button className="btn btn-outline btn-sm" onClick={() => goPublic('apps')}>
+              Куда вставить?
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <button className="btn btn-primary btn-lg btn-block" onClick={() => goPublic('wizard', { wizardMode: 'issue' })}>
         + Подключить новое устройство

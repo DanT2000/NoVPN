@@ -71,6 +71,9 @@ export interface User {
 export interface Device {
   id: string;
   userId: string | null;
+  /** Ссылка vpn:// для приложения AmneziaVPN (импорт в один тап).
+   *  Только у AmneziaWG-устройств; отдельное приложение AmneziaWG её не понимает. */
+  vpnKey?: string | null;
   name: string;
   serverId: string;
   protocol: Protocol;

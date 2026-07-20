@@ -6,8 +6,7 @@ import { Wordmark, Field } from '../components/ui';
 
 export function AdminLogin() {
   const { adminLogin, goAdmin, goPublic } = useApp();
-  const [login, setLogin] = useState('');
-  const [password, setPassword] = useState('');
+    const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -16,7 +15,7 @@ export function AdminLogin() {
     setBusy(true);
     setError(false);
     try {
-      const ok = await adminLogin(login, password);
+      const ok = await adminLogin(password);
       if (ok) goAdmin('dashboard');
       else setError(true);
     } catch {
@@ -54,26 +53,18 @@ export function AdminLogin() {
               void submit();
             }}
           >
-            <Field label="Логин">
-              <input
-                className="input"
-                value={login}
-                onChange={(e) => setLogin(e.target.value)}
-                autoComplete="username"
-                autoFocus
-              />
-            </Field>
-            <Field label="Пароль">
+            <Field label="Пароль администратора">
               <input
                 className="input"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                autoFocus
               />
             </Field>
 
-            {error ? <div className="notice notice-red">Неверный логин или пароль.</div> : null}
+            {error ? <div className="notice notice-red">Неверный пароль.</div> : null}
 
             <button type="submit" className="btn btn-primary btn-block btn-lg" disabled={busy}>
               {busy ? 'Входим…' : 'Войти'}

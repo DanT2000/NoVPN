@@ -129,8 +129,12 @@ export interface ApiClient {
   deleteDevice(deviceId: string): Promise<Ok>;
 
   // ── admin: auth ──
-  adminLogin(login: string, password: string): Promise<{ ok: boolean }>;
+  adminLogin(password: string): Promise<{ ok: boolean }>;
   adminLogout(): Promise<Ok>;
+  /** Сменить пароль администратора. */
+  changeAdminPassword(current: string, next: string): Promise<Ok>;
+  /** Перезапустить панель (после смены домена и т.п.). */
+  restartPanel(): Promise<Ok>;
   /** Скачать зашифрованный паролем бэкап базы. */
   exportBackup(password: string): Promise<Blob>;
   /** Восстановить базу из бэкапа (base64) — панель перезапустится. */

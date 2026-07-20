@@ -86,7 +86,7 @@ interface AppContextValue {
   deleteDevice(deviceId: string): Promise<void>;
 
   // admin auth
-  adminLogin(login: string, password: string): Promise<boolean>;
+  adminLogin(password: string): Promise<boolean>;
   adminLogout(): void;
 
   // user ops
@@ -299,8 +299,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   // ── admin auth ──
-  const adminLogin = useCallback(async (login: string, password: string) => {
-    const { ok } = await api.adminLogin(login, password);
+  const adminLogin = useCallback(async (password: string) => {
+    const { ok } = await api.adminLogin(password);
     if (ok) {
       setAdminAuthed(true);
       // Полные данные панели доступны только теперь — до входа сервер их не отдавал.

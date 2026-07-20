@@ -122,6 +122,7 @@ export const mockApi: ApiClient = {
         u && state.telegram.enabled && state.telegram.botUsername
           ? `https://t.me/${state.telegram.botUsername}?start=${u.accessToken ?? ''}`
           : null,
+      subLink: u ? `https://vpn.example.ru/sub/sub-${u.id}` : null,
     };
   },
 
@@ -190,15 +191,23 @@ export const mockApi: ApiClient = {
     return { ok: true };
   },
 
-  async adminLogin(login: string, password: string): Promise<{ ok: boolean }> {
+  async adminLogin(password: string): Promise<{ ok: boolean }> {
     await wait(400);
-    const ok = login === 'admin' && password === 'admin';
+    const ok = password === 'admin';
     if (ok) mockAdmin = true;
     return { ok };
   },
 
   async adminLogout(): Promise<Ok> {
     mockAdmin = false;
+    return { ok: true };
+  },
+  async changeAdminPassword(_current: string, _next: string): Promise<Ok> {
+    await wait(200);
+    return { ok: true };
+  },
+  async restartPanel(): Promise<Ok> {
+    await wait(200);
     return { ok: true };
   },
 

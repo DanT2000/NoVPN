@@ -209,6 +209,8 @@ for (const stmt of [
   // Последнее СЫРОЕ показание счётчиков с сервера. Нужно, чтобы считать прирост:
   // счётчики ядра обнуляются при перезапуске интерфейса, и без этого
   // потреблённый трафик пользователя обнулялся вместе с ними.
+  // Токен подписки Xray: отдельный от токена входа, живёт в VPN-приложении.
+  'ALTER TABLE users ADD COLUMN sub_token TEXT',
   'ALTER TABLE devices ADD COLUMN rx_raw INTEGER DEFAULT 0',
   'ALTER TABLE devices ADD COLUMN tx_raw INTEGER DEFAULT 0',
 ]) {
@@ -223,6 +225,24 @@ try {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_token ON users(access_token)');
 } catch {
   /* индекс уже есть */
+}
+try {
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_subtoken ON users(sub_token)');
+} catch {
+  /* индекс уже есть */
+}
+
+// Выдать токен подписки всем, у кого его ещё нет.
+{
+  const rows = db.prepare('SELECT id FROM users WHERE sub_token IS NULL').all() as Array<{ id: string }>;
+  if (rows.length) {
+    const upd = db.prepare('UPDATE users SET sub_token = ? WHERE id = ?');
+    const tx = db.transaction((list: Array<{ id: string }>) => {
+      for (const r of list) upd.run(crypto.randomBytes(18).toString('base64url'), r.id);
+    });
+    tx(rows);
+    console.log(`[migrate] выдал токены подписки: ${rows.length}`);
+  }
 }
 
 // До перехода на накопительный учёт received_bytes/sent_bytes хранили СЫРОЕ

@@ -29,6 +29,11 @@ export function Settings() {
   const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 15);
   const [saving, setSaving] = useState(false);
 
+  // Пароль администратора
+  const [pwCur, setPwCur] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+
   // Бэкап базы
   const [bkPass, setBkPass] = useState('');
   const [bkBusy, setBkBusy] = useState(false);
@@ -39,6 +44,35 @@ export function Settings() {
 
   const toggleProtocol = (value: UserProtocol) =>
     setDefaultProtocols((prev) => (prev.includes(value) ? prev.filter((p) => p !== value) : [...prev, value]));
+
+  const changePassword = async () => {
+    if (pwNew.length < 6) {
+      showToast('Новый пароль — минимум 6 символов');
+      return;
+    }
+    setPwBusy(true);
+    try {
+      await api.changeAdminPassword(pwCur, pwNew);
+      setPwCur('');
+      setPwNew('');
+      showToast('Пароль изменён');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось сменить пароль');
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
+  const restartPanel = () =>
+    showConfirm({
+      title: 'Перезапустить панель?',
+      text: 'Панель будет недоступна несколько секунд. Подключения пользователей к VPN это не затрагивает.',
+      confirmLabel: 'Перезапустить',
+      onConfirm: async () => {
+        await api.restartPanel();
+        showToast('Перезапускаем… обновите страницу через несколько секунд');
+      },
+    });
 
   const downloadBackup = async () => {
     if (bkPass.length < 4) {
@@ -218,6 +252,34 @@ export function Settings() {
             Сохранить настройки
           </button>
         </div>
+
+        {/* Пароль администратора и перезапуск */}
+        <Panel title="Доступ в панель">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Логина нет — вход только по паролю. Смените стандартный пароль сразу после
+            установки: панель доступна из интернета.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <Field label="Текущий пароль">
+              <input className="input" type="password" value={pwCur} onChange={(e) => setPwCur(e.target.value)} />
+            </Field>
+            <Field label="Новый пароль">
+              <input className="input" type="password" placeholder="минимум 6 символов" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
+            </Field>
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+            <button className="btn btn-primary btn-sm" disabled={pwBusy} onClick={() => void changePassword()}>
+              {pwBusy ? 'Меняем…' : 'Сменить пароль'}
+            </button>
+            <button className="btn btn-outline btn-sm" onClick={restartPanel}>
+              Перезапустить панель
+            </button>
+          </div>
+          <div className="body small muted" style={{ marginTop: 8 }}>
+            Перезапуск нужен, если меняли домен или переменные окружения. Занимает
+            несколько секунд, выданные конфиги при этом не затрагиваются.
+          </div>
+        </Panel>
 
         {/* Бэкап базы */}
         <Panel title="Резервная копия базы">
