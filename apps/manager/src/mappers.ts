@@ -87,6 +87,8 @@ export function rowToApp(r: any): AppClient {
     instruction: d.instruction ?? '',
     enabled: d.enabled ?? true,
     icon: d.icon ?? null,
+    // Схема импорта подписки — без неё кнопка «Добавить подписку» не появится.
+    urlScheme: d.urlScheme ?? null,
     platforms: Array.isArray(d.platforms) ? d.platforms : [],
   };
 }

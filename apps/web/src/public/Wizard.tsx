@@ -1,13 +1,24 @@
+// Подключение устройства: имя → сервер → протокол → готовая конфигурация.
+//
+// Шаги, где выбирать не из чего, пропускаются: один сервер — не спрашиваем
+// сервер, один разрешённый протокол — не спрашиваем протокол.
+//
+// Результат зависит от протокола:
+//   Xray      — показываем ССЫЛКУ-ПОДПИСКУ: она разом даёт все конфигурации
+//               и обновляется сама. Отдельная ссылка конфига — второстепенно.
+//   AmneziaWG — ссылка vpn:// (открывает приложение AmneziaVPN) и файл .conf
+//               (для отдельного приложения AmneziaWG, ссылку оно не понимает).
+
 import { useMemo, useState } from 'react';
 import type { AppClient, IssueDeviceResult, PublicServerView } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
-import { BackButton, Dot, EmptyState, ProgressBar } from '../components/ui';
+import { BackButton, Dot, EmptyState } from '../components/ui';
 import { Qr } from '../components/Qr';
-import { dateShort } from '../lib/format';
-import { copyText, downloadText, openUrl, shareText } from '../lib/clipboard';
+import { copyText, downloadText, openUrl } from '../lib/clipboard';
 
 const PLATFORMS = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
 type Platform = (typeof PLATFORMS)[number];
+type Proto = 'xray' | 'amneziawg';
 
 function detectPlatform(): Platform {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
@@ -19,14 +30,11 @@ function detectPlatform(): Platform {
   return 'Android';
 }
 
-/** Протокол, который выдаст приложение по его совместимости. */
-function appProtocol(a: AppClient): 'xray' | 'amneziawg' {
-  return a.compat.includes('xray') ? 'xray' : 'amneziawg';
-}
-function appKind(a: AppClient): 'xray' | 'amnezia-app' | 'amneziawg' {
-  if (a.compat.includes('xray')) return 'xray';
-  if (a.compat.includes('amnezia-app')) return 'amnezia-app';
-  return 'amneziawg';
+/** Ссылка «добавить подписку одним нажатием» из схемы каталога. */
+function oneTap(app: AppClient, subUrl: string): string | null {
+  const sc = app.urlScheme;
+  if (!sc || !subUrl) return null;
+  return sc.endsWith('=') ? sc + encodeURIComponent(subUrl) : sc + subUrl;
 }
 
 export function Wizard() {
@@ -34,13 +42,13 @@ export function Wizard() {
   const mode = nav.params.wizardMode ?? 'issue';
   const viewDeviceId = nav.params.deviceId;
 
-  const [step, setStep] = useState(mode === 'view' ? 4 : 1);
   const [name, setName] = useState('');
   const [serverId, setServerId] = useState<string | null>(null);
+  const [proto, setProto] = useState<Proto | null>(null);
   const [platform, setPlatform] = useState<Platform>(detectPlatform());
-  const [appId, setAppId] = useState<string | null>(null);
+  const [rawStep, setRawStep] = useState<1 | 2 | 3 | 4>(1);
   const [issuing, setIssuing] = useState(false);
-  const [result, setResult] = useState<(IssueDeviceResult & { appId: string | null }) | null>(null);
+  const [result, setResult] = useState<IssueDeviceResult | null>(null);
 
   const viewDevice = useMemo(
     () => (mode === 'view' && viewDeviceId ? data?.devices.find((d) => d.id === viewDeviceId) ?? null : null),
@@ -59,38 +67,40 @@ export function Wizard() {
     );
   }
 
-  const allowedServers = data.servers.filter((s) => user.allowedServers.includes(s.id));
+  // Серверы, доступные пользователю и живые.
+  const servers = data.servers.filter((s) => user.allowedServers.includes(s.id));
+  const onlineServers = servers.filter((s) => s.online);
+  // Один сервер — выбирать нечего.
+  const autoServer = onlineServers.length === 1 ? onlineServers[0]! : null;
+  const effServerId = serverId ?? autoServer?.id ?? null;
   const chosenServer: PublicServerView | undefined =
     (mode === 'view' && viewDevice ? data.servers.find((s) => s.id === viewDevice.serverId) : undefined) ??
-    data.servers.find((s) => s.id === serverId);
+    data.servers.find((s) => s.id === effServerId);
 
-  const chosenApp = data.apps.find((a) => a.id === appId) ?? null;
+  // Протоколы: и пользователю разрешены, и на сервере установлены.
+  const protosOf = (srv?: PublicServerView): Proto[] =>
+    (['xray', 'amneziawg'] as Proto[]).filter(
+      (p) => (user.allowedProtocols as string[]).includes(p) && (srv?.protocols as string[] | undefined)?.includes(p),
+    );
+  const protoOptions = protosOf(chosenServer);
+  const autoProto = protoOptions.length === 1 ? protoOptions[0]! : null;
+  const effProto: Proto | null = proto ?? autoProto;
 
-  const availableApps = data.apps.filter((a) => {
-    if (!a.enabled || !a.platforms.some((p) => p.platform === platform)) return false;
-    const proto = appProtocol(a);
-    const userOk = (user.allowedProtocols as string[]).includes(proto);
-    const serverOk = chosenServer ? (chosenServer.protocols as string[]).includes(proto) : true;
-    return userOk && serverOk;
-  });
+  const step: 1 | 2 | 3 | 4 = mode === 'view' || result ? 4 : rawStep;
 
-  const back = () => {
-    if (mode === 'view') return goPublic('devices');
-    // Шаг 4 — конфиг уже выпущен. Возврат в форму дал бы повторный выпуск и
-    // дубликат устройства, поэтому уводим к списку устройств.
-    if (step >= 4) return goPublic('devices');
-    if (step <= 1) return goPublic('cabinet');
-    setStep(step - 1);
+  /** Дальше: пропускаем шаги, где выбирать не из чего. */
+  const next = () => {
+    if (rawStep === 1) return setRawStep(autoServer ? (autoProto ? 4 : 3) : 2);
+    if (rawStep === 2) return setRawStep(autoProto ? 4 : 3);
+    setRawStep(4);
   };
 
   const doIssue = async () => {
-    if (!chosenServer || !chosenApp || issuing) return;
+    if (!chosenServer || !effProto || issuing) return;
     setIssuing(true);
     try {
-      const finalName = name.trim() || `Устройство ${data.devices.filter((d) => d.userId === user.id).length + 1}`;
-      const res = await issueDevice({ userId: user.id, name: finalName, serverId: chosenServer.id, protocol: appProtocol(chosenApp) });
-      setResult({ ...res, appId: chosenApp.id });
-      setStep(4);
+      const res = await issueDevice({ userId: user.id, name: name.trim(), serverId: chosenServer.id, protocol: effProto });
+      setResult(res);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не удалось создать конфигурацию');
     } finally {
@@ -98,244 +108,244 @@ export function Wizard() {
     }
   };
 
-  // config payload for step 4 (view or freshly issued)
+  const back = () => {
+    if (mode === 'view' || result) return goPublic('devices');
+    if (rawStep === 4) return setRawStep(autoProto ? (autoServer ? 1 : 2) : 3);
+    if (rawStep === 3) return setRawStep(autoServer ? 1 : 2);
+    if (rawStep === 2) return setRawStep(1);
+    goPublic('cabinet');
+  };
+
+  // ── данные результата ──
+  const dev = result?.device ?? viewDevice;
+  const cfgProto = (dev?.protocol ?? effProto) as Proto | undefined;
   const cfgLink = result?.link ?? viewDevice?.link ?? null;
   const cfgConf = result?.conf ?? viewDevice?.conf ?? null;
-  const cfgName = result?.device.name ?? viewDevice?.name ?? name;
-  // Ссылка vpn:// приходит и при выпуске, и вместе с устройством (собирается из .conf).
   const vpnKey = result?.vpnKey ?? viewDevice?.vpnKey ?? null;
-  const protoLabelFull = (() => {
-    const proto = result?.device.protocol ?? viewDevice?.protocol;
-    if (proto === 'xray') return 'Xray (VLESS Reality)';
-    const kind = chosenApp ? appKind(chosenApp) : null;
-    return kind === 'amnezia-app' ? 'AmneziaWG (для AmneziaVPN)' : 'AmneziaWG';
-  })();
+  const cfgName = dev?.name ?? name;
+  const subUrl = data.subLink ?? '';
 
-  const stepLabel = mode === 'view' || step === 4 ? null : `Шаг ${step} из 4`;
-  const title = mode === 'view' ? cfgName || 'Конфигурация' : step === 4 ? cfgName || 'Готово' : 'Новое устройство';
+  const apps = data.apps.filter(
+    (a) =>
+      a.enabled &&
+      a.platforms.some((p) => p.platform === platform) &&
+      (cfgProto === 'xray' ? a.compat.includes('xray') : a.compat.includes('amneziawg') || a.compat.includes('amnezia-app')),
+  );
 
-  const copyCfg = async () => {
-    const text = cfgLink ?? cfgConf ?? '';
-    showToast((await copyText(text)) ? (cfgLink ? 'Ссылка скопирована' : 'Конфигурация скопирована') : 'Не удалось скопировать');
-  };
-  const downloadCfg = () => {
-    if (cfgLink) downloadText(`novpn-${cfgName}.txt`, cfgLink);
-    else if (cfgConf) downloadText(`novpn-${cfgName}.conf`, cfgConf);
-  };
-  const shareCfg = async () => {
-    const text = cfgLink ?? cfgConf ?? '';
-    if (!(await shareText(text))) {
-      await copyText(text);
-      showToast('Скопировано (Web Share недоступен)');
-    }
-  };
+  const title =
+    step === 4 ? (mode === 'view' ? cfgName || 'Конфигурация' : 'Готово') : 'Новое устройство';
 
   return (
     <div className="stack" style={{ gap: 16, paddingTop: 12 }}>
-      <div className="row-between">
-        <div className="row" style={{ gap: 12, minWidth: 0 }}>
-          <BackButton onClick={back} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 20, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
-            {stepLabel ? <div className="small muted">{stepLabel}</div> : null}
-          </div>
+      <div className="row" style={{ gap: 12, minWidth: 0 }}>
+        <BackButton onClick={back} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 20, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+          {step < 4 ? <div className="small muted">Шаг {step} из 3</div> : null}
         </div>
       </div>
 
-      {mode === 'issue' && step < 4 ? (
-        <div className="row" style={{ gap: 6 }}>
-          {[1, 2, 3, 4].map((n) => (
-            <div key={n} className="progress" style={{ flex: 1, height: 4 }}>
-              <span style={{ width: n <= step ? '100%' : '0%' }} />
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {/* STEP 1 — name */}
-      {mode === 'issue' && step === 1 ? (
+      {/* ШАГ 1 — имя */}
+      {step === 1 ? (
         <div className="stack" style={{ gap: 14 }}>
-          <p className="body small" style={{ margin: 0 }}>Назовите устройство, чтобы потом было проще его узнать.</p>
+          <p className="body small" style={{ margin: 0 }}>Назовите устройство, чтобы потом его узнать.</p>
           <input className="input" placeholder="Например, Телефон" aria-label="Название устройства" value={name} onChange={(e) => setName(e.target.value)} />
           <div className="chip-row">
             {['Телефон', 'Ноутбук', 'Планшет', 'ПК'].map((q) => (
               <button key={q} type="button" className="chip chip-sm" onClick={() => setName(q)}>{q}</button>
             ))}
           </div>
-          <button className="btn btn-primary btn-lg" onClick={() => setStep(2)}>Далее</button>
+          <button className="btn btn-primary btn-lg" disabled={!name.trim()} onClick={next}>Далее</button>
         </div>
       ) : null}
 
-      {/* STEP 2 — server */}
-      {mode === 'issue' && step === 2 ? (
+      {/* ШАГ 2 — сервер (только если их несколько) */}
+      {step === 2 ? (
         <div className="stack" style={{ gap: 12 }}>
-          <p className="body small" style={{ margin: 0 }}>Выберите сервер подключения.</p>
-          <div className="stack" style={{ gap: 8 }}>
-            {allowedServers.map((s) => {
-              const online = s.online;
-              const selected = serverId === s.id;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  disabled={!online}
-                  onClick={() => setServerId(s.id)}
-                  className="card"
-                  style={{
-                    textAlign: 'left', cursor: online ? 'pointer' : 'not-allowed', opacity: online ? 1 : 0.5,
-                    border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', gap: 10,
-                  }}
-                >
-                  <Dot color={online ? 'var(--green-dot)' : 'var(--red-fg)'} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="row" style={{ gap: 8 }}>
-                      <span style={{ fontWeight: 700 }}>{s.name}</span>
-                      {s.recommended ? <span className="badge">Рекомендуемый</span> : s.isDefault ? <span className="badge">По умолчанию</span> : null}
-                    </div>
-                    <div className="small muted">{online ? s.host : 'временно недоступен'}</div>
+          <p className="body small" style={{ margin: 0 }}>Выберите сервер.</p>
+          {onlineServers.length === 0 ? (
+            <EmptyState title="Нет доступных серверов" text="Все серверы сейчас недоступны. Попробуйте позже." />
+          ) : (
+            onlineServers.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => {
+                  setServerId(s.id);
+                  // Протоколы берём у выбранного сервера, а не у прежнего.
+                  const ps = protosOf(s);
+                  if (ps.length === 1) setProto(ps[0]!);
+                  setRawStep(ps.length === 1 ? 4 : 3);
+                }}
+                className="card"
+                style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
+              >
+                <Dot color="var(--green-dot)" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="row" style={{ gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>{s.country ? `${s.country} ` : ''}{s.name}</span>
+                    {s.recommended ? <span className="badge">Рекомендуемый</span> : null}
                   </div>
-                </button>
-              );
-            })}
-          </div>
-          <button className="btn btn-primary btn-lg" disabled={!serverId} onClick={() => setStep(3)}>Далее</button>
+                  <div className="small muted">{s.host}</div>
+                </div>
+              </button>
+            ))
+          )}
         </div>
       ) : null}
 
-      {/* STEP 3 — platform + app */}
-      {mode === 'issue' && step === 3 ? (
-        <div className="stack" style={{ gap: 14 }}>
-          <div className="stack" style={{ gap: 8 }}>
-            <span className="eyebrow">1 · Ваша система</span>
-            <div className="chip-row">
-              {PLATFORMS.map((p) => (
-                <button key={p} type="button" className={`chip chip-sm ${platform === p ? 'active' : ''}`} onClick={() => { setPlatform(p); setAppId(null); }}>{p}</button>
-              ))}
-            </div>
-          </div>
-          <div className="stack" style={{ gap: 8 }}>
-            <span className="eyebrow">2 · Приложение</span>
-            <p className="small muted" style={{ margin: 0 }}>Протокол и формат конфигурации подберутся автоматически под выбранное приложение.</p>
-            {availableApps.length === 0 ? (
-              <EmptyState title="Нет приложений для этой платформы" text="Выберите другую платформу выше." />
-            ) : (
-              <div className="stack" style={{ gap: 8 }}>
-                {availableApps.map((a) => {
-                  const selected = appId === a.id;
-                  const kindLabel = appKind(a) === 'xray' ? 'Xray' : appKind(a) === 'amnezia-app' ? 'AmneziaVPN' : 'AmneziaWG';
-                  return (
-                    <button key={a.id} type="button" onClick={() => setAppId(a.id)} className="card"
-                      style={{ textAlign: 'left', cursor: 'pointer', border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`, display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 34, height: 34, borderRadius: 'var(--r-ctrl)', background: 'var(--surface-btn-2)', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: 'var(--accent-light)' }}>
-                        {a.icon ? <img src={a.icon} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : a.client.charAt(0)}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="row" style={{ gap: 8 }}><span style={{ fontWeight: 700 }}>{a.client}</span><span className="badge">{kindLabel}</span></div>
-                        <div className="small muted">{platform}</div>
-                      </div>
-                    </button>
-                  );
-                })}
+      {/* ШАГ 3 — протокол (только если их несколько) */}
+      {step === 3 ? (
+        <div className="stack" style={{ gap: 12 }}>
+          <p className="body small" style={{ margin: 0 }}>Выберите способ подключения.</p>
+          {protoOptions.includes('xray') ? (
+            <button className="card stack" style={{ gap: 6, textAlign: 'left', cursor: 'pointer' }} onClick={() => { setProto('xray'); setRawStep(4); }}>
+              <div className="row-between">
+                <span style={{ fontWeight: 700, fontSize: 16 }}>Xray</span>
+                <span className="badge">рекомендуем</span>
               </div>
-            )}
-          </div>
-          <button className="btn btn-primary btn-lg" disabled={!appId || issuing} onClick={doIssue}>
-            {issuing ? 'Создаём конфигурацию…' : 'Создать конфигурацию'}
-          </button>
+              <span className="body small muted">
+                Одна ссылка-подписка на все устройства, конфигурации обновляются сами.
+              </span>
+            </button>
+          ) : null}
+          {protoOptions.includes('amneziawg') ? (
+            <button className="card stack" style={{ gap: 6, textAlign: 'left', cursor: 'pointer' }} onClick={() => { setProto('amneziawg'); setRawStep(4); }}>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>AmneziaVPN</div>
+              <span className="body small muted">
+                Отдельная конфигурация на устройство. Берите, если Xray блокируют.
+              </span>
+            </button>
+          ) : null}
+          {protoOptions.length === 0 ? (
+            <EmptyState title="Нет доступных протоколов" text="На этом сервере нет протоколов, разрешённых вам." />
+          ) : null}
         </div>
       ) : null}
 
-      {/* STEP 4 — result */}
+      {/* ШАГ 4 — результат */}
       {step === 4 ? (
         <div className="stack" style={{ gap: 14 }}>
-          {result ? (
-            <div className="notice notice-green">
-              <div style={{ fontWeight: 700 }}>Конфигурация готова</div>
-              <div className="small" style={{ marginTop: 2 }}>Импортируйте её в приложение — инструкция ниже.</div>
-            </div>
+          {/* ещё не выпущено — кнопка выпуска */}
+          {!dev ? (
+            <>
+              <div className="card stack" style={{ gap: 6 }}>
+                <div className="row-between"><span className="muted">Устройство</span><b>{name}</b></div>
+                <div className="row-between"><span className="muted">Сервер</span><b>{chosenServer?.name ?? '—'}</b></div>
+                <div className="row-between"><span className="muted">Способ</span><b>{effProto === 'xray' ? 'Xray' : 'AmneziaWG'}</b></div>
+              </div>
+              <button className="btn btn-primary btn-lg btn-block" disabled={issuing} onClick={() => void doIssue()}>
+                {issuing ? 'Создаём…' : 'Создать конфигурацию'}
+              </button>
+            </>
           ) : null}
 
-          <div className="card" style={{ padding: '4px 16px' }}>
-            {[
-              ['Устройство', cfgName],
-              ['Сервер', chosenServer?.name ?? '—'],
-              ['Приложение', chosenApp?.client ?? '—'],
-              ['Протокол', protoLabelFull],
-              ['Создано', dateShort(result?.device.createdAt ?? viewDevice?.createdAt ?? new Date().toISOString())],
-            ].map(([k, v]) => (
-              <div key={k} className="divide-row">
-                <span className="mono" style={{ fontSize: 12, color: 'var(--text-muted-2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{k}</span>
-                <span style={{ fontWeight: 600, textAlign: 'right' }}>{v}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Ссылка vpn:// — импорт в приложение AmneziaVPN одним нажатием.
-              Отдельное приложение AmneziaWG её не принимает, ему нужен файл .conf. */}
-          {vpnKey ? (
+          {/* Xray → подписка */}
+          {dev && cfgProto === 'xray' && subUrl ? (
             <div className="card stack" style={{ gap: 10 }}>
               <div>
-                <div className="eyebrow" style={{ marginBottom: 4 }}>Для приложения AmneziaVPN</div>
+                <div className="eyebrow" style={{ marginBottom: 4 }}>Ваша ссылка-подписка</div>
                 <div className="body small muted">
-                  Нажмите — приложение откроется и добавит конфигурацию само.
-                  Для отдельного приложения AmneziaWG используйте файл .conf ниже.
+                  Добавьте её в приложение — все ваши конфигурации появятся сразу и будут обновляться.
+                </div>
+              </div>
+              <Qr text={subUrl} caption="Или отсканируйте" />
+              <input className="input mono" readOnly value={subUrl} style={{ fontSize: 12 }} />
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={async () => showToast((await copyText(subUrl)) ? 'Ссылка скопирована' : 'Не удалось скопировать')}
+              >
+                Копировать ссылку
+              </button>
+            </div>
+          ) : null}
+
+          {/* AmneziaWG → vpn:// и файл */}
+          {dev && cfgProto === 'amneziawg' ? (
+            <div className="card stack" style={{ gap: 10 }}>
+              <div>
+                <div className="eyebrow" style={{ marginBottom: 4 }}>Конфигурация «{cfgName}»</div>
+                <div className="body small muted">
+                  Кнопка ниже открывает приложение AmneziaVPN и добавляет конфигурацию.
+                  Для отдельного приложения AmneziaWG скачайте файл .conf — ссылку оно не понимает.
                 </div>
               </div>
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                <button className="btn btn-primary btn-sm" onClick={() => openUrl(vpnKey)}>
-                  Открыть в AmneziaVPN
-                </button>
-                <button
-                  className="btn btn-outline btn-sm"
-                  onClick={async () => {
-                    showToast((await copyText(vpnKey)) ? 'Ссылка vpn:// скопирована' : 'Не удалось скопировать');
-                  }}
-                >
-                  Копировать vpn://
-                </button>
+                {vpnKey ? (
+                  <button className="btn btn-primary btn-sm" onClick={() => openUrl(vpnKey)}>Открыть в AmneziaVPN</button>
+                ) : null}
+                {cfgConf ? (
+                  <button className="btn btn-outline btn-sm" onClick={() => downloadText(`novpn-${cfgName}.conf`, cfgConf)}>
+                    Скачать .conf
+                  </button>
+                ) : null}
+                {vpnKey ? (
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={async () => showToast((await copyText(vpnKey)) ? 'Ссылка скопирована' : 'Не удалось скопировать')}
+                  >
+                    Копировать vpn://
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : null}
 
-          {cfgLink || cfgConf ? (
-            <div className="card stack" style={{ gap: 12, alignItems: 'stretch' }}>
-              {/* QR — только для Xray-ссылки: её приложения читают сканированием.
-                  Сырой .conf AmneziaWG через QR не импортируется, поэтому для него
-                  QR не показываем — там основной способ «Скачать .conf». */}
-              {cfgLink ? (
-                <Qr text={cfgLink} caption="Отсканируйте в приложении" />
+          {/* Xray без подписки (её ещё нет) — отдельная ссылка конфига */}
+          {dev && cfgProto === 'xray' && !subUrl && cfgLink ? (
+            <div className="card stack" style={{ gap: 10 }}>
+              <div className="eyebrow">Ссылка подключения</div>
+              <Qr text={cfgLink} caption="Отсканируйте в приложении" />
+              <input className="input mono" readOnly value={cfgLink} style={{ fontSize: 12 }} />
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={async () => showToast((await copyText(cfgLink)) ? 'Скопировано' : 'Не удалось скопировать')}
+              >
+                Копировать
+              </button>
+            </div>
+          ) : null}
+
+          {/* Приложения под выбранный способ */}
+          {dev ? (
+            <div className="stack" style={{ gap: 10 }}>
+              <div className="chip-row">
+                {PLATFORMS.map((p) => (
+                  <button key={p} type="button" className={`chip chip-sm ${platform === p ? 'active' : ''}`} onClick={() => setPlatform(p)}>{p}</button>
+                ))}
+              </div>
+              {apps.length === 0 ? (
+                <EmptyState title="Нет приложений для этой системы" text="Выберите другую систему выше." />
               ) : (
-                <div className="notice small">
-                  Скачайте файл <b>.conf</b> и откройте его в приложении AmneziaWG или AmneziaVPN
-                  («Добавить из файла»). QR для AmneziaWG не используется — приложение его не читает.
-                </div>
+                apps.map((a) => {
+                  const entry = a.platforms.find((p) => p.platform === platform)!;
+                  const tap = cfgProto === 'xray' ? oneTap(a, subUrl) : null;
+                  return (
+                    <div key={a.id} className="card" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                      {a.icon ? (
+                        <img src={a.icon} alt="" width={40} height={40} style={{ borderRadius: 11, flex: 'none' }} />
+                      ) : null}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600 }}>{a.client}</div>
+                        <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                          {entry.url ? (
+                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(entry.url!)}>Установить</button>
+                          ) : null}
+                          {tap ? (
+                            <button className="btn btn-primary btn-sm" onClick={() => openUrl(tap)}>Добавить подписку</button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
               )}
-              <div className="field-label">{cfgLink ? 'Ссылка подключения' : 'Конфигурация AmneziaWG (.conf)'}</div>
-              <pre className="mono" style={{ background: 'var(--bg-app)', border: '1px solid var(--border-input)', borderRadius: 'var(--r-ctrl)', padding: 12, margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap', overflowX: 'auto', wordBreak: 'break-all', maxHeight: 220 }}>
-                {cfgLink ?? cfgConf}
-              </pre>
-              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                <button className="btn btn-primary btn-sm" onClick={copyCfg}>{cfgLink ? 'Копировать' : 'Копировать .conf'}</button>
-                <button className="btn btn-outline btn-sm" onClick={downloadCfg}>{cfgLink ? 'Скачать' : 'Скачать .conf'}</button>
-                <button className="btn btn-outline btn-sm" onClick={shareCfg}>Поделиться</button>
-              </div>
             </div>
           ) : null}
 
-          {chosenApp && result ? (
-            <div className="card stack" style={{ gap: 6 }}>
-              <span className="eyebrow">Подключение и использование</span>
-              <p className="small body" style={{ margin: 0, lineHeight: 1.5 }}>
-                {chosenApp.instruction || 'Откройте приложение, выберите добавленный профиль и включите подключение.'}
-              </p>
-            </div>
+          {dev ? (
+            <button className="btn btn-outline btn-block" onClick={() => goPublic('devices')}>К моим устройствам</button>
           ) : null}
-
-          <div className="notice notice-amber small">Не передавайте конфигурацию посторонним — она привязана к вашему коду и лимитам.</div>
-
-          <button className="btn btn-primary btn-lg" onClick={() => goPublic(mode === 'view' ? 'devices' : 'cabinet')}>
-            {mode === 'view' ? 'К устройствам' : 'Готово'}
-          </button>
         </div>
       ) : null}
     </div>
