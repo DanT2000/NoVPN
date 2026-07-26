@@ -18,6 +18,7 @@ import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
+import { checkDbIsolation } from './services/dbHealth.js';
 
 export const nowIso = () => new Date().toISOString();
 export const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(6).toString('base64url')}`;
@@ -509,7 +510,17 @@ export function buildBootstrap(): BootstrapData {
     adminLog: listLog(),
     jobErrors: listJobErrors(),
     history: allHistory(),
+    dbHealth: checkDbIsolation(earliestDataIso()),
   };
+}
+
+/** Время самой ранней записи в базе (для самотеста персистентности): если данные
+ *  старше текущего процесса — том очевидно постоянный. */
+function earliestDataIso(): string | null {
+  const r = db
+    .prepare('SELECT MIN(t) AS t FROM (SELECT created_at AS t FROM users UNION ALL SELECT at AS t FROM admin_log)')
+    .get() as { t: string | null } | undefined;
+  return r?.t ?? null;
 }
 
 /** Устройства одного пользователя (с конфигами — это его собственные).

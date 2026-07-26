@@ -29,15 +29,32 @@ const NAV: NavItem[] = [
 ];
 
 export function AdminShell() {
-  const { adminAuthed, mustChangePassword, nav, goAdmin, adminLogout, isMobile } = useApp();
+  const { adminAuthed, mustChangePassword, nav, goAdmin, adminLogout, isMobile, data } = useApp();
 
   if (!adminAuthed) return <AdminLogin />;
+
+  const dbRisky = data?.dbHealth?.risky === true;
 
   const route = (nav.route === 'login' ? 'dashboard' : nav.route) as AdminRoute;
   const activeKey = NAV.find((n) => n.match.includes(route))?.key ?? 'dashboard';
 
   const content = (
     <>
+      {/* КРИТИЧНО: персистентность базы не подтверждена — редеплой может стереть данные. */}
+      {dbRisky ? (
+        <div className="notice notice-red" style={{ marginBottom: 14 }}>
+          <b>⚠️ Не подтверждено, что база переживёт обновление!</b>
+          <div style={{ marginTop: 6 }}>
+            Файл базы <code>{data?.dbHealth?.dbPath}</code> должен лежать на постоянном томе.
+            Если это не так, при каждом редеплое/переустановке все пользователи, устройства и
+            настройки будут потеряны. Подключите постоянное хранилище (persistent storage) для
+            каталога базы: в Coolify это «Storages» с точкой монтирования на <code>/data</code>,
+            в docker-compose — именованный том на <code>/data</code>. Затем обновите панель ещё
+            раз — если данные сохранятся, предупреждение исчезнет само. Сделайте это до того,
+            как заведёте пользователей.
+          </div>
+        </div>
+      ) : null}
       {/* Первый запуск / стандартный пароль — просим сменить, пока не сменён. */}
       {mustChangePassword && route !== 'settings' ? (
         <div className="notice notice-amber" style={{ marginBottom: 14 }}>

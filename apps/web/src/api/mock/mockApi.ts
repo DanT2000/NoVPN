@@ -103,6 +103,7 @@ export const mockApi: ApiClient = {
       users: clone(state.users), devices: clone(state.devices), servers: clone(state.servers),
       apps: clone(state.apps), telegram: clone(state.telegram), settings: clone(state.settings),
       adminLog: clone(state.adminLog), jobErrors: clone(state.jobErrors), history: clone(state.history),
+      dbHealth: { dbPath: '/data/database.sqlite', container: true, confirmedPersistent: true, risky: false },
     };
   },
 
