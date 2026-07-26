@@ -337,23 +337,32 @@ export function getDeviceCounters(id: string): { rxTotal: number; txTotal: numbe
  * это осознанно: не отключаем то, о неактивности чего не знаем наверняка.
  * Возвращает число отключённых.
  */
-export function disableInactiveDevices(days: number): number {
-  if (!days || days <= 0) return 0;
+export interface DisabledDevice {
+  id: string;
+  userId: string | null;
+  name: string;
+  serverId: string;
+  protocol: string;
+  uuid: string | null;
+  publicKey: string | null;
+}
+/** Отключить неактивные устройства (флаг в БД) и вернуть их — чтобы вызывающий
+ *  ещё и отозвал их конфиги на сервере по SSH. */
+export function disableInactiveDevices(days: number): DisabledDevice[] {
+  if (!days || days <= 0) return [];
   const cutoff = new Date(Date.now() - days * 86400000).toISOString();
   // Только AmneziaWG: по нему у нас есть достоверная активность (handshake).
-  // Явный фильтр, а не расчёт на NULL у Xray — чтобы поведение совпадало с тем,
-  // что написано в настройках, даже если last_seen когда-то попадёт к Xray.
   const rows = db
     .prepare(
-      "SELECT id, user_id, name FROM devices WHERE is_active = 1 AND protocol = 'amneziawg' AND last_seen_at IS NOT NULL AND last_seen_at < ?",
+      "SELECT id, user_id AS userId, name, server_id AS serverId, protocol, uuid, public_key AS publicKey FROM devices WHERE is_active = 1 AND protocol = 'amneziawg' AND last_seen_at IS NOT NULL AND last_seen_at < ?",
     )
-    .all(cutoff) as Array<{ id: string; user_id: string | null; name: string }>;
+    .all(cutoff) as DisabledDevice[];
   for (const r of rows) {
     db.prepare('UPDATE devices SET is_active = 0, revoked_at = ? WHERE id = ?').run(nowIso(), r.id);
-    if (r.user_id) addHistory(r.user_id, `Устройство «${r.name}» отключено автоматически: неактивно более ${days} дн`);
+    if (r.userId) addHistory(r.userId, `Устройство «${r.name}» отключено автоматически: неактивно более ${days} дн`);
   }
   if (rows.length) addLog(`Автоотключение неактивных устройств: ${rows.length}`);
-  return rows.length;
+  return rows;
 }
 
 /** Пересчёт расхода трафика и последней активности пользователя из ВСЕХ его устройств. */

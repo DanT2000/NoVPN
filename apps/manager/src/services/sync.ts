@@ -4,7 +4,7 @@
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
 import * as repo from '../repo.js';
-import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray } from './sshServer.js';
 
 const PROXY_PROTOS = ['http', 'https', 'socks5'];
 
@@ -14,10 +14,22 @@ export async function syncAllServers(): Promise<void> {
   if (running) return;
   running = true;
   try {
-    // Автоотключение неактивных устройств (если включено в настройках).
+    // Автоотключение неактивных устройств (если включено в настройках) — и
+    // реальный отзыв на сервере, иначе отключённый конфиг продолжал бы работать.
     try {
       const days = Number(repo.getSettings()?.inactiveDisableDays ?? 0);
-      if (days > 0) repo.disableInactiveDevices(days);
+      if (days > 0) {
+        for (const d of repo.disableInactiveDevices(days)) {
+          const server = repo.getServer(d.serverId);
+          if (!server || !(await sshHasSshAccess(server.id))) continue;
+          try {
+            if (d.protocol === 'amneziawg' && d.publicKey) await sshRevokeAwg(server, d.publicKey);
+            else if (d.protocol === 'xray' && d.uuid) await sshRevokeXray(server, d.uuid);
+          } catch {
+            /* best-effort: сервер недоступен — отзыв в БД уже сделан */
+          }
+        }
+      }
     } catch (e) {
       repo.addJobError('панель', `Автоотключение устройств: ${e instanceof Error ? e.message : 'ошибка'}`);
     }
