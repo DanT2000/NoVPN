@@ -213,6 +213,10 @@ for (const stmt of [
   'ALTER TABLE users ADD COLUMN sub_token TEXT',
   'ALTER TABLE devices ADD COLUMN rx_raw INTEGER DEFAULT 0',
   'ALTER TABLE devices ADD COLUMN tx_raw INTEGER DEFAULT 0',
+  // Числовой chat_id Telegram: поле telegram хранит только handle (@username),
+  // а бот-рассылка требует именно chat_id. Заполняется при привязке и при любом
+  // входящем сообщении от привязанного пользователя (бэкофилл для старых).
+  'ALTER TABLE users ADD COLUMN telegram_chat_id INTEGER',
 ]) {
   try {
     db.exec(stmt);

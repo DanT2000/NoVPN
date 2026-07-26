@@ -135,6 +135,8 @@ export interface ApiClient {
   changeAdminPassword(current: string, next: string): Promise<Ok>;
   /** Перезапустить панель (после смены домена и т.п.). */
   restartPanel(): Promise<Ok>;
+  /** Экстренная рассылка через бота всем привязанным пользователям. */
+  broadcast(text: string): Promise<{ total: number; sent: number; failed: number }>;
   /** Скачать зашифрованный паролем бэкап базы. */
   exportBackup(password: string): Promise<Blob>;
   /** Восстановить базу из бэкапа (base64) — панель перезапустится. */

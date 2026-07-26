@@ -60,6 +60,7 @@ export const httpApi: ApiClient = {
   adminLogout: () => req<Ok>('POST', '/api/admin/logout'),
   changeAdminPassword: (current, next) => req<Ok>('POST', '/api/admin/password', { current, next }),
   restartPanel: () => req<Ok>('POST', '/api/admin/restart'),
+  broadcast: (text) => req<{ total: number; sent: number; failed: number }>('POST', '/api/admin/broadcast', { text }),
 
   exportBackup: async (password) => {
     const res = await fetch(`${BASE}/api/admin/backup/export`, {

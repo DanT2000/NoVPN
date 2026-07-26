@@ -210,6 +210,10 @@ export const mockApi: ApiClient = {
     await wait(200);
     return { ok: true };
   },
+  async broadcast(_text: string): Promise<{ total: number; sent: number; failed: number }> {
+    await wait(200);
+    return { total: 0, sent: 0, failed: 0 };
+  },
 
   async exportBackup(_password: string): Promise<Blob> {
     await wait(200);

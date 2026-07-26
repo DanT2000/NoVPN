@@ -407,6 +407,27 @@ export function replaceApps(apps: AppClient[]): AppClient[] {
   return listApps();
 }
 
+/** Запомнить числовой chat_id привязанного пользователя (для бот-рассылки).
+ *  Пишем только при изменении, чтобы не дёргать updated_at на каждом сообщении. */
+export function setTelegramChatId(userId: string, chatId: number): void {
+  db.prepare('UPDATE users SET telegram_chat_id = ? WHERE id = ? AND (telegram_chat_id IS NULL OR telegram_chat_id != ?)').run(
+    chatId,
+    userId,
+    chatId,
+  );
+}
+
+/** Привязанные к Telegram пользователи с известным chat_id — цели рассылки. */
+export function listTelegramTargets(): Array<{ id: string; name: string; chatId: number }> {
+  return (
+    db.prepare('SELECT id, name, telegram_chat_id AS chatId FROM users WHERE telegram_chat_id IS NOT NULL').all() as Array<{
+      id: string;
+      name: string;
+      chatId: number;
+    }>
+  ).map((r) => ({ id: r.id, name: r.name, chatId: r.chatId }));
+}
+
 // ── settings / telegram ──
 export function getSettings(): AppSettings {
   return getSetting<AppSettings>('settings', {} as AppSettings);

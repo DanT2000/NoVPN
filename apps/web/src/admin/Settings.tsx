@@ -36,6 +36,10 @@ export function Settings() {
   const [pwNew, setPwNew] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
 
+  // Экстренная рассылка через бота
+  const [bcText, setBcText] = useState('');
+  const [bcBusy, setBcBusy] = useState(false);
+
   // Бэкап базы
   const [bkPass, setBkPass] = useState('');
   const [bkBusy, setBkBusy] = useState(false);
@@ -75,6 +79,31 @@ export function Settings() {
         showToast('Перезапускаем… обновите страницу через несколько секунд');
       },
     });
+
+  const sendBroadcast = () => {
+    const text = bcText.trim();
+    if (!text) {
+      showToast('Введите текст сообщения');
+      return;
+    }
+    showConfirm({
+      title: 'Разослать всем?',
+      text: 'Сообщение получат все пользователи с привязанным Telegram. Отменить рассылку нельзя.',
+      confirmLabel: 'Отправить',
+      onConfirm: async () => {
+        setBcBusy(true);
+        try {
+          const r = await api.broadcast(text);
+          setBcText('');
+          showToast(r.total === 0 ? 'Нет пользователей с привязанным Telegram' : `Отправлено ${r.sent} из ${r.total}`);
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : 'Не удалось разослать');
+        } finally {
+          setBcBusy(false);
+        }
+      },
+    });
+  };
 
   const downloadBackup = async () => {
     if (bkPass.length < 4) {
@@ -309,8 +338,8 @@ export function Settings() {
           </Field>
           <div className="body small muted" style={{ marginTop: 8 }}>
             Если устройство не выходит на связь дольше указанного срока, оно автоматически
-            отключается. Отслеживается активность AmneziaWG; у Xray активность пока не
-            собирается, поэтому такие устройства авто-отключение не затрагивает.
+            отключается. Отслеживается активность AmneziaWG (по рукопожатию). Xray работает
+            одной подпиской на всех устройствах, поэтому авто-отключение к нему не применяется.
           </div>
         </Panel>
 
@@ -339,6 +368,30 @@ export function Settings() {
           <div className="body small muted" style={{ marginTop: 8 }}>
             Перезапуск нужен, если меняли домен или переменные окружения. Занимает
             несколько секунд, выданные конфиги при этом не затрагиваются.
+          </div>
+        </Panel>
+
+        {/* Экстренная рассылка через бота */}
+        <Panel title="Экстренная рассылка">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Сообщение уйдёт в Telegram всем пользователям с привязанным ботом — например,
+            если VPN временно недоступен и нужно всех предупредить. Нужен настроенный бот.
+          </div>
+          <Field label="Текст сообщения">
+            <textarea
+              className="input"
+              rows={4}
+              maxLength={4000}
+              placeholder="Например: На сервере профилактика до 21:00, подключение временно недоступно."
+              value={bcText}
+              onChange={(e) => setBcText(e.target.value)}
+              style={{ resize: 'vertical' }}
+            />
+          </Field>
+          <div className="row" style={{ gap: 8, marginTop: 4 }}>
+            <button className="btn btn-primary btn-sm" disabled={bcBusy || !bcText.trim()} onClick={sendBroadcast}>
+              {bcBusy ? 'Отправляем…' : 'Отправить всем'}
+            </button>
           </div>
         </Panel>
 

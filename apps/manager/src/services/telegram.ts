@@ -120,6 +120,30 @@ async function pollLoop(myLoop: number): Promise<void> {
   }
 }
 
+/** Экстренная рассылка всем привязанным пользователям (по одному сообщению).
+ *  Отправляет последовательно с паузой (лимит Telegram ~30 сообщений/сек),
+ *  заблокировавшие бота молча пропускаются. Возвращает счётчики. */
+export async function broadcastToLinked(text: string): Promise<{ total: number; sent: number; failed: number }> {
+  const body = text.trim();
+  if (!body) throw new Error('Пустое сообщение.');
+  if (!getToken()) throw new Error('Бот не настроен: задайте токен в настройках Telegram.');
+  const targets = repo.listTelegramTargets();
+  let sent = 0;
+  let failed = 0;
+  for (const t of targets) {
+    try {
+      await tgApi('sendMessage', { chat_id: t.chatId, text: body, disable_web_page_preview: true });
+      sent += 1;
+    } catch {
+      // Пользователь заблокировал/удалил бота или chat_id устарел — пропускаем.
+      failed += 1;
+    }
+    await sleep(60); // ~16 сообщений/сек — с запасом под лимит Telegram
+  }
+  repo.addLog(`Экстренная рассылка: отправлено ${sent} из ${targets.length}`);
+  return { total: targets.length, sent, failed };
+}
+
 type Kb = Array<Array<{ text: string; callback_data: string }>>;
 
 async function send(chatId: number | string, text: string, opts: { markdown?: boolean; kb?: Kb } = {}): Promise<void> {
@@ -181,6 +205,8 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
   const chatId = msg.chat.id as number;
   const text = (msg.text as string).trim();
   const handle = handleOf(msg.from ?? {}, chatId);
+  // Бэкофилл chat_id для уже привязанных (поле telegram хранит только handle).
+  { const l = findUser(handle); if (l) repo.setTelegramChatId(l.id, chatId); }
 
   // Команды меню/конфига для уже привязанных. «/start <payload>» с полезной
   // нагрузкой — это привязка, её пропускаем ниже, поэтому исключаем.
@@ -218,6 +244,7 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
     return;
   }
   repo.updateUserFields(user.id, { telegram: handle });
+  repo.setTelegramChatId(user.id, chatId);
   repo.addHistory(user.id, `Привязан Telegram: ${handle}`);
   await send(chatId, `Готово, ${user.name}! Telegram привязан. ✅`);
   await showMenu(chatId, user);
@@ -237,6 +264,7 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
     await send(chatId, 'Сначала привяжите Telegram: откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
     return;
   }
+  repo.setTelegramChatId(user.id, chatId); // бэкофилл chat_id для рассылки
   if (data === 'menu') return showMenu(chatId, user);
   if (data === 'getcfg') return startGetConfig(chatId, user);
   if (data.startsWith('proto:')) return issueAndSend(chatId, user, data.slice(6) as 'xray' | 'amneziawg');

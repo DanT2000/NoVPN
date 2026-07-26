@@ -21,7 +21,7 @@ import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { renderSubPage } from './services/subPage.js';
-import { resolveTgProxyUrl, restartBot, tgApi } from './services/telegram.js';
+import { resolveTgProxyUrl, restartBot, tgApi, broadcastToLinked } from './services/telegram.js';
 import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
 import * as repo from './repo.js';
@@ -294,6 +294,19 @@ router.post('/api/admin/restart', requireAdmin, (_req, res) => {
   repo.addLog('Перезапуск панели по кнопке из настроек');
   res.json({ ok: true });
   setTimeout(() => process.exit(0), 400);
+});
+
+// Экстренная рассылка: админ пишет текст — бот отправляет всем привязанным.
+router.post('/api/admin/broadcast', requireAdmin, async (req, res) => {
+  try {
+    const text = String(req.body?.text ?? '').trim();
+    if (!text) return res.status(400).json(err('validation', 'Введите текст сообщения.'));
+    if (text.length > 4000) return res.status(400).json(err('validation', 'Слишком длинное сообщение (макс. 4000 символов).'));
+    const r = await broadcastToLinked(text);
+    res.json(r);
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось разослать.'));
+  }
 });
 router.post('/api/admin/logout', (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));
