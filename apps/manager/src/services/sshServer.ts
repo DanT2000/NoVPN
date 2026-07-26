@@ -159,13 +159,21 @@ if [ "$WANT_XRAY" = "1" ]; then
 import json,sys
 sni,priv,sid=sys.argv[1],sys.argv[2],sys.argv[3]
 cfg={"log":{"loglevel":"warning"},
+ # Статистика по клиентам (трафик/активность) — панель читает через api statsquery.
+ "stats":{},
+ "api":{"tag":"api","services":["StatsService"]},
+ "policy":{"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}},
+           "system":{"statsInboundUplink":True,"statsInboundDownlink":True}},
  "inbounds":[{"listen":"0.0.0.0","port":443,"protocol":"vless","tag":"vless-reality",
    "settings":{"clients":[],"decryption":"none"},
    "streamSettings":{"network":"tcp","security":"reality",
      "realitySettings":{"show":False,"dest":sni+":443","xver":0,
        "serverNames":[sni],"privateKey":priv,"shortIds":[sid]}},
-   "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]}}],
- "outbounds":[{"protocol":"freedom","tag":"direct"}]}
+   "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]}},
+   {"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door",
+    "settings":{"address":"127.0.0.1"},"tag":"api"}],
+ "outbounds":[{"protocol":"freedom","tag":"direct"}],
+ "routing":{"rules":[{"type":"field","inboundTag":["api"],"outboundTag":"api"}]}}
 print(json.dumps(cfg,indent=2))
 PY
   docker rm -f amnezia-xray >/dev/null 2>&1 || true
@@ -372,7 +380,7 @@ uuid,email=sys.argv[1],sys.argv[2]
 p='/opt/amnezia/xray/server.json'
 c=json.load(open(p))
 cl=c['inbounds'][0]['settings']['clients']
-cl.append({'id':uuid,'flow':'xtls-rprx-vision','email':email})
+cl.append({'id':uuid,'flow':'xtls-rprx-vision','email':email,'level':0})
 seen=set()
 for x in cl:
     e=x.get('email') or x['id']; base=e; i=1
@@ -560,6 +568,57 @@ export async function sshSyncAwg(
     }
   }
   return peers;
+}
+
+/** Собрать статистику Xray по клиентам с прошлого замера.
+ *  Требует включённого stats API (api-inbound 127.0.0.1:10085 + policy level 0).
+ *  statsquery --reset возвращает трафик С МОМЕНТА ПРОШЛОГО ЗАМЕРА и обнуляет
+ *  счётчик — панель сама копит накопленное (устойчиво к рестарту контейнера,
+ *  который обнуляет in-memory статистику Xray). Связка email→uuid берётся из
+ *  server.json, поэтому работает и для старых, уже выданных конфигов.
+ *  Если stats API не включён — вернёт пустой список (не ошибка). */
+export async function sshSyncXray(
+  serverId: string,
+): Promise<Array<{ uuid: string; up: number; down: number }>> {
+  // Карту email→uuid отдаём JSON-ом: email может содержать пробелы (legacy /
+  // 3x-ui клиенты) — split по пробелам такие ломает.
+  const script = `set -e
+echo '---MAP---'
+python3 -c "import json,sys;c=json.load(open('/opt/amnezia/xray/server.json'));json.dump([[(x.get('email') or x['id']),x['id']] for x in c['inbounds'][0]['settings']['clients']],sys.stdout)" 2>/dev/null || true
+echo
+echo '---STATS---'
+docker exec amnezia-xray xray api statsquery --server=127.0.0.1:10085 --reset 2>/dev/null || true`;
+  const out = await runScript(creds(serverId), script, 30000);
+  const mapPart = out.split('---MAP---')[1]?.split('---STATS---')[0] ?? '';
+  const statPart = out.split('---STATS---')[1] ?? '';
+  const emailToUuid = new Map<string, string>();
+  try {
+    for (const pair of JSON.parse(mapPart.trim() || '[]') as Array<[string, string]>) {
+      if (pair?.[0] && pair?.[1]) emailToUuid.set(pair[0], pair[1]);
+    }
+  } catch {
+    /* нет server.json / битый JSON — вернём пусто */
+  }
+  const up = new Map<string, number>();
+  const down = new Map<string, number>();
+  try {
+    // statsquery отдаёт { "stat": [ {"name":"user>>>email>>>traffic>>>uplink","value":"123"} ] }.
+    const j = JSON.parse(statPart.trim() || '{}');
+    for (const s of (j.stat ?? []) as Array<{ name?: string; value?: string }>) {
+      const m = String(s.name ?? '').match(/^user>>>(.+?)>>>traffic>>>(uplink|downlink)$/);
+      if (!m) continue;
+      const v = Number(s.value ?? 0) || 0;
+      if (m[2] === 'uplink') up.set(m[1]!, v);
+      else down.set(m[1]!, v);
+    }
+  } catch {
+    /* нет статистики / неполный JSON — вернём то, что смогли (обычно пусто) */
+  }
+  const res: Array<{ uuid: string; up: number; down: number }> = [];
+  for (const [email, uuid] of emailToUuid) {
+    res.push({ uuid, up: up.get(email) ?? 0, down: down.get(email) ?? 0 });
+  }
+  return res;
 }
 
 /** Лёгкая проверка живости сервера по SSH (для серверов без AWG-статистики).
