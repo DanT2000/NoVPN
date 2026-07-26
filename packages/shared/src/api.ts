@@ -1,8 +1,8 @@
 // Контракты API. Один источник истины для фронтенда (api-клиент)
 // и backend (роуты). Соответствуют будущим endpoint'ам.
 
-import type { AppClient, BootstrapData, Device, PublicServerView, User } from './types.js';
-import type { Protocol } from './enums.js';
+import type { AppClient, BootstrapData, Device, ProxyAccount, PublicServerView, User } from './types.js';
+import type { Protocol, ProxyType } from './enums.js';
 
 export interface ApiError {
   type:
@@ -59,6 +59,11 @@ export interface PublicBootstrapData {
   /** Ссылка-подписка Xray: добавляется в приложение один раз, дальше оно само
    *  подтягивает все конфиги пользователя. null, если нет входа. */
   subLink: string | null;
+  /** Прокси-аккаунты пользователя (по серверам). Пусто, если прокси не выданы. */
+  proxyAccounts: ProxyAccount[];
+  /** Типы прокси, которые пользователь может себе выдать (пересечение прав
+   *  пользователя и установленных на сервере прокси показывается в кабинете). */
+  allowedProxies: ProxyType[];
 }
 
 /** POST /api/public/devices — выпуск конфига (одно устройство = один конфиг). */

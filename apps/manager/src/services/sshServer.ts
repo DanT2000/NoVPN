@@ -642,3 +642,60 @@ PUB="${publicKey}" python3 -c "import os,re;p='/etc/amnezia/amneziawg/awg0.conf'
 echo OK`;
   await withServerLock(server.id, () => runScript(creds(server.id), script, 60000));
 }
+
+// Добавить/удалить пользователя 3proxy, НЕ затирая остальных. Конфиг
+// пересобирается детерминированно: заголовок (nscache/nserver/timeouts) →
+// одна строка users со всеми логинами → auth/allow → сохранённые сервисные
+// строки (proxy/socks с их портами). 3proxy требует auth/allow ДО сервисов.
+function buildProxyUserScript(mode: 'add' | 'remove', login: string, pass: string): string {
+  const py = `import sys
+mode,login,passwd=sys.argv[1],sys.argv[2],sys.argv[3]
+p='/etc/3proxy/3proxy.cfg'
+try:
+    lines=open(p).read().splitlines()
+except FileNotFoundError:
+    print('NOCFG'); sys.exit(1)
+users={}; services=[]; header=[]
+for ln in lines:
+    s=ln.strip()
+    if not s: continue
+    if s.startswith('users '):
+        for tok in s[6:].split():
+            if ':CL:' in tok:
+                u,pw=tok.split(':CL:',1); users[u]=pw
+    elif s.startswith('proxy') or s.startswith('socks'):
+        services.append(s)
+    elif s.startswith('auth') or s.startswith('allow') or s.startswith('deny'):
+        pass
+    else:
+        header.append(s)
+if mode=='add': users[login]=passwd
+elif mode=='remove': users.pop(login,None)
+out=list(header)
+if users:
+    out.append('users '+' '.join('%s:CL:%s'%(u,pw) for u,pw in users.items()))
+    out.append('auth strong')
+    out.append('allow '+' '.join(users.keys()))
+else:
+    out.append('auth none')
+out+=services
+open(p,'w').write('\\n'.join(out)+'\\n')
+print('OK users=%d'%len(users))`;
+  return `set -e
+python3 - '${mode}' '${login}' '${pass}' <<'PY'
+${py}
+PY
+chmod 600 /etc/3proxy/3proxy.cfg
+systemctl restart 3proxy
+echo PROXY_USER_OK`;
+}
+
+export async function sshAddProxyUser(server: Server, login: string, pass: string): Promise<void> {
+  const out = await withServerLock(server.id, () => runScript(creds(server.id), buildProxyUserScript('add', login, pass), 60000));
+  if (/NOCFG/.test(out)) throw new Error('На сервере не установлены прокси — сначала установите их в настройках сервера.');
+  if (!/PROXY_USER_OK/.test(out)) throw new Error('Не удалось добавить прокси-логин на сервере.');
+}
+
+export async function sshRevokeProxyUser(server: Server, login: string): Promise<void> {
+  await withServerLock(server.id, () => runScript(creds(server.id), buildProxyUserScript('remove', login, ''), 60000));
+}

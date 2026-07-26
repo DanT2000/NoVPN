@@ -1,9 +1,13 @@
+import { useState } from 'react';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
+import { api } from '../api';
 import { Dot } from '../components/ui';
 import { dateShort, daysLeft, gb, plural } from '../lib/format';
 import { statusOf } from '../lib/status';
 import { copyText, openUrl } from '../lib/clipboard';
+
+const PROXY_LABELS: Record<string, string> = { http: 'HTTP', https: 'HTTPS', socks5: 'SOCKS5' };
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -29,7 +33,8 @@ function Tile({ title, sub, onClick, chevron }: { title: string; sub: string; on
 }
 
 export function Cabinet() {
-  const { publicUser: user, publicData: data, goPublic, logoutPublic, showToast } = useApp();
+  const { publicUser: user, publicData: data, goPublic, logoutPublic, showToast, showConfirm, reloadPublic } = useApp();
+  const [pxBusy, setPxBusy] = useState<string | null>(null);
   if (!user || !data) return null;
 
   const devices = data.devices.filter((d) => d.userId === user.id);
@@ -50,6 +55,47 @@ export function Cabinet() {
 
   // Человек вошёл по старому коду: код скоро отключат, надо взять личную ссылку.
   const codeSunset = user.codeLoginUntil ? daysLeft(user.codeLoginUntil) : null;
+
+  // Прокси: отдельный логин на пользователя. Показываем выданные аккаунты и
+  // предлагаем выдать на серверах, где нужный тип установлен и разрешён.
+  const allowedProxies = (data.allowedProxies ?? []) as string[];
+  const proxyAccounts = data.proxyAccounts ?? [];
+  const proxyServers = data.servers.filter(
+    (s) =>
+      user.allowedServers.includes(s.id) &&
+      (s.protocols as string[]).some((p) => allowedProxies.includes(p)) &&
+      !proxyAccounts.some((a) => a.serverId === s.id),
+  );
+  const showProxy = allowedProxies.length > 0 || proxyAccounts.length > 0;
+
+  async function issueProxy(serverId: string) {
+    setPxBusy(serverId);
+    try {
+      await api.issueProxy(serverId);
+      await reloadPublic();
+      showToast('Прокси выдан');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось выдать прокси');
+    } finally {
+      setPxBusy(null);
+    }
+  }
+  function revokeProxy(id: string) {
+    showConfirm({
+      title: 'Отозвать прокси?',
+      text: 'Логин перестанет работать. Позже можно выдать заново.',
+      confirmLabel: 'Отозвать',
+      onConfirm: async () => {
+        try {
+          await api.revokeProxyAccount(id);
+          await reloadPublic();
+          showToast('Прокси отозван');
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : 'Не удалось отозвать');
+        }
+      },
+    });
+  }
 
   return (
     <div className="stack" style={{ gap: 16, paddingTop: 12 }}>
@@ -138,6 +184,60 @@ export function Cabinet() {
               Куда вставить?
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {showProxy ? (
+        <div className="card stack" style={{ gap: 10 }}>
+          <div>
+            <div className="eyebrow" style={{ marginBottom: 4 }}>Прокси</div>
+            <div className="body small muted">
+              Отдельный логин и пароль для прокси. Один логин работает для всех доступных
+              типов (HTTP/SOCKS5/HTTPS) на сервере.
+            </div>
+          </div>
+          {proxyAccounts.map((a) => (
+            <div key={a.id} className="card stack" style={{ gap: 6, background: 'var(--surface-2)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <b>{a.serverName}</b>
+                <button className="btn btn-outline btn-sm" onClick={() => revokeProxy(a.id)}>Отозвать</button>
+              </div>
+              <Row label="Логин"><span className="mono">{a.login}</span></Row>
+              <Row label="Пароль"><span className="mono">{a.password}</span></Row>
+              {a.endpoints.map((e) => (
+                <Row key={e.type} label={PROXY_LABELS[e.type] ?? e.type}>
+                  <span className="mono">{e.host}:{e.port}</span>
+                </Row>
+              ))}
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={async () => {
+                  const txt =
+                    `login: ${a.login}\npassword: ${a.password}\n` +
+                    a.endpoints.map((e) => `${PROXY_LABELS[e.type] ?? e.type}: ${e.host}:${e.port}`).join('\n');
+                  showToast((await copyText(txt)) ? 'Данные прокси скопированы' : 'Не удалось скопировать');
+                }}
+              >
+                Копировать данные
+              </button>
+            </div>
+          ))}
+          {proxyServers.map((s) => (
+            <button
+              key={s.id}
+              className="btn btn-secondary btn-sm"
+              disabled={pxBusy === s.id}
+              onClick={() => void issueProxy(s.id)}
+            >
+              {pxBusy === s.id ? 'Выдаём…' : `Выдать прокси — ${s.name}`}
+            </button>
+          ))}
+          {proxyServers.length === 0 && proxyAccounts.length === 0 ? (
+            <div className="body small muted">
+              Прокси вам разрешены, но пока не установлены ни на одном доступном сервере.
+              Обратитесь к администратору.
+            </div>
+          ) : null}
         </div>
       ) : null}
 

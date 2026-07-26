@@ -62,6 +62,9 @@ export interface User {
   allowedServers: string[];
   defaultServerId: string | null;
   allowedProtocols: UserProtocol[];
+  /** Типы прокси, которые пользователь может себе выдать в кабинете (если они
+   *  установлены на сервере). Пусто — прокси недоступны. */
+  allowedProxies: ProxyType[];
   isActive: boolean;
   telegram: string | null;
   createdAt: string;
@@ -192,17 +195,28 @@ export interface Job {
   error: string | null;
 }
 
-/** Прокси-доступ (HTTP/SOCKS5) — только для администратора. */
-export interface ProxyAccess {
-  id: string;
-  serverId: string;
+/** Точка подключения прокси конкретного типа (для показа пользователю). */
+export interface ProxyEndpoint {
   type: ProxyType;
+  host: string;
+  port: number;
+}
+
+/** Прокси-аккаунт пользователя на сервере: один уникальный логин/пароль,
+ *  распространяется на установленные на сервере типы прокси, разрешённые
+ *  пользователю. Пароль виден владельцу в кабинете (в отличие от VPN он нужен
+ *  для подключения). */
+export interface ProxyAccount {
+  id: string;
+  userId: string | null;
+  serverId: string;
+  serverName: string;
+  serverHost: string;
   login: string;
-  /** Пароль наружу не возвращается после создания. */
-  passwordSet: boolean;
-  expiresAt: string | null;
-  trafficLimitGb: number | null;
-  trafficUsedGb: number;
+  /** Пароль — отдаётся владельцу/админу для подключения (у прокси иначе никак). */
+  password: string;
+  /** Готовые точки подключения (host:port) по каждому доступному типу. */
+  endpoints: ProxyEndpoint[];
   isActive: boolean;
   createdAt: string;
 }

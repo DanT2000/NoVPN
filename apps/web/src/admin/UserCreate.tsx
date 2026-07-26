@@ -1,7 +1,7 @@
 // A3 — Создание пользователя. Форма из четырёх панелей + отправка.
 
 import { useState } from 'react';
-import type { Protocol } from '@novpn/shared';
+import type { Protocol, ProxyType } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import type { CreateUserInput } from '../api/types';
 import { CategoryPicker, Chip, Dot, Field, Panel, ScreenHeader } from '../components/ui';
@@ -53,6 +53,9 @@ export function UserCreate() {
   const [allowedServers, setAllowedServers] = useState<string[]>(() => (firstServerId ? [firstServerId] : []));
   const [defaultServerId, setDefaultServerId] = useState<string | null>(() => firstServerId ?? null);
   const [protocols, setProtocols] = useState<Protocol[]>(defaultProtos.length ? defaultProtos : ['xray', 'amneziawg']);
+  // Прокси — отдельное разрешение (не VPN-протокол). Пользователь сможет выдать
+  // их себе в кабинете, если они установлены на сервере.
+  const [proxies, setProxies] = useState<ProxyType[]>([]);
 
   // Вход по коду — опционально. Основной способ доступа это личная ссылка,
   // код по умолчанию выключен. Сам код панель генерирует сама (нужен как
@@ -76,26 +79,27 @@ export function UserCreate() {
 
   function changeCategory(v: string) {
     setCategory(v);
-    if (v !== 'Админ') setProtocols((prev) => prev.filter((p) => p === 'xray' || p === 'amneziawg'));
   }
 
   function toggleProtocol(p: Protocol) {
     setProtocols((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
   }
+  function toggleProxy(p: ProxyType) {
+    setProxies((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  }
 
   const protocolOptions: Array<{ key: Protocol; label: string }> = [
     { key: 'xray', label: 'Xray' },
     { key: 'amneziawg', label: 'Amnezia' },
-    ...(isAdmin
-      ? ([
-          { key: 'http', label: 'HTTP' },
-          { key: 'socks5', label: 'SOCKS5' },
-        ] as Array<{ key: Protocol; label: string }>)
-      : []),
+  ];
+  const proxyOptions: Array<{ key: ProxyType; label: string }> = [
+    { key: 'http', label: 'HTTP' },
+    { key: 'socks5', label: 'SOCKS5' },
+    { key: 'https', label: 'HTTPS' },
   ];
 
   async function submit() {
-    const effProtocols = isAdmin ? protocols : protocols.filter((p) => p === 'xray' || p === 'amneziawg');
+    const effProtocols = protocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg');
 
     if (!name.trim()) {
       setError('Укажите имя пользователя.');
@@ -105,8 +109,8 @@ export function UserCreate() {
       setError('Выберите хотя бы один сервер.');
       return;
     }
-    if (effProtocols.length === 0) {
-      setError('Выберите хотя бы один протокол.');
+    if (effProtocols.length === 0 && proxies.length === 0) {
+      setError('Выберите хотя бы один протокол или прокси.');
       return;
     }
     setError(null);
@@ -132,6 +136,7 @@ export function UserCreate() {
       allowedServers,
       defaultServerId,
       allowedProtocols: effProtocols,
+      allowedProxies: proxies,
       // Код генерирует сервер — пустая строка. Вход по коду по умолчанию выключен.
       code: '',
       codeLoginEnabled,
@@ -285,16 +290,24 @@ export function UserCreate() {
         </div>
 
         <div className="field">
-          <span className="field-label">Разрешённые протоколы</span>
+          <span className="field-label">Разрешённые VPN-протоколы</span>
           <div className="chip-row">
             {protocolOptions.map((p) => (
               <Chip key={p.key} label={p.label} active={protocols.includes(p.key)} onClick={() => toggleProtocol(p.key)} />
             ))}
           </div>
+        </div>
+
+        <div className="field">
+          <span className="field-label">Прокси (пользователь выдаст себе в кабинете)</span>
+          <div className="chip-row">
+            {proxyOptions.map((p) => (
+              <Chip key={p.key} label={p.label} active={proxies.includes(p.key)} onClick={() => toggleProxy(p.key)} />
+            ))}
+          </div>
           <span className="small muted">
-            {isAdmin
-              ? 'Категория «Админ»: дополнительно доступны прокси HTTP и SOCKS5.'
-              : 'HTTP и SOCKS5 доступны только для категории «Админ».'}
+            Появятся в кабинете, только если соответствующий прокси установлен на сервере
+            (Серверы → «Прокси на сервере»). Каждому пользователю выдаётся отдельный логин.
           </span>
         </div>
       </Panel>

@@ -9,6 +9,7 @@ import type {
   Device,
   IssueDeviceRequest,
   IssueDeviceResult,
+  ProxyAccount,
   PublicBootstrapData,
   PublicUserView,
   Server,
@@ -124,6 +125,8 @@ export const mockApi: ApiClient = {
           ? `https://t.me/${state.telegram.botUsername}?start=${u.accessToken ?? ''}`
           : null,
       subLink: u ? `https://vpn.example.ru/sub/sub-${u.id}` : null,
+      proxyAccounts: [],
+      allowedProxies: u ? u.allowedProxies : [],
     };
   },
 
@@ -215,6 +218,19 @@ export const mockApi: ApiClient = {
     await wait(200);
     return { total: 0, sent: 0, failed: 0 };
   },
+  async issueProxy(serverId: string, _userId?: string): Promise<ProxyAccount> {
+    await wait(300);
+    const s = state.servers.find((x) => x.id === serverId);
+    return {
+      id: nextId('px'), userId: mockUserId, serverId, serverName: s?.name ?? '', serverHost: s?.host ?? 'host',
+      login: 'demo' + Math.random().toString(36).slice(2, 7), password: Math.random().toString(36).slice(2, 12),
+      endpoints: [{ type: 'http', host: s?.host ?? 'host', port: 8080 }], isActive: true, createdAt: nowIso(),
+    };
+  },
+  async revokeProxyAccount(_id: string): Promise<Ok> {
+    await wait(200);
+    return { ok: true };
+  },
 
   async exportBackup(_password: string): Promise<Blob> {
     await wait(200);
@@ -233,6 +249,7 @@ export const mockApi: ApiClient = {
       trafficLimitGb: input.trafficLimitGb, trafficUsedGb: 0, resetPolicy: input.resetPolicy,
       allowedServers: input.allowedServers, defaultServerId: input.defaultServerId,
       allowedProtocols: input.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
+      allowedProxies: input.allowedProxies ?? [],
       isActive: true, telegram: null, createdAt: nowIso(), lastActivityAt: null,
       // Новым — только личная ссылка: вход по коду для них не открывается.
       accessToken: 'tok-' + Math.random().toString(36).slice(2, 14), codeLoginUntil: null,

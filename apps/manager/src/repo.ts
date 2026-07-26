@@ -8,6 +8,9 @@ import type {
   Device,
   JobError,
   LogEntry,
+  ProxyAccount,
+  ProxyEndpoint,
+  ProxyType,
   PublicBootstrapData,
   PublicUserView,
   Server,
@@ -16,9 +19,11 @@ import type {
 } from '@novpn/shared';
 import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
+import { decryptSecret } from './lib/crypto.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { checkDbIsolation } from './services/dbHealth.js';
+import { getServerProxy } from './services/keyvault.js';
 
 export const nowIso = () => new Date().toISOString();
 export const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(6).toString('base64url')}`;
@@ -92,6 +97,7 @@ export interface NewUserRow {
   allowedServers: string[];
   defaultServerId: string | null;
   allowedProtocols: Array<'xray' | 'amneziawg'>;
+  allowedProxies?: Array<'http' | 'https' | 'socks5'>;
   /** Разрешить вход по коду. По умолчанию нет — основной способ это личная ссылка. */
   codeLoginEnabled?: boolean;
 }
@@ -110,16 +116,17 @@ export function insertUser(u: NewUserRow): User {
   const now = nowIso();
   db.prepare(
     `INSERT INTO users(id,name,comment,category,tags,code,device_limit,expires_at,traffic_limit_gb,traffic_used_gb,
-      reset_policy,allowed_servers,default_server_id,allowed_protocols,is_active,telegram,created_at,updated_at,
+      reset_policy,allowed_servers,default_server_id,allowed_protocols,allowed_proxies,is_active,telegram,created_at,updated_at,
       access_token,code_login_until,sub_token)
      VALUES(@id,@name,@comment,@category,@tags,@code,@device_limit,@expires_at,@traffic_limit_gb,0,
-      @reset_policy,@allowed_servers,@default_server_id,@allowed_protocols,1,NULL,@now,@now,
+      @reset_policy,@allowed_servers,@default_server_id,@allowed_protocols,@allowed_proxies,1,NULL,@now,@now,
       @access_token,@code_login_until,@sub_token)`,
   ).run({
     id, name: u.name, comment: u.comment, category: u.category, tags: JSON.stringify(u.tags), code: u.code,
     device_limit: u.deviceLimit, expires_at: u.expiresAt, traffic_limit_gb: u.trafficLimitGb,
     reset_policy: u.resetPolicy, allowed_servers: JSON.stringify(u.allowedServers),
-    default_server_id: u.defaultServerId, allowed_protocols: JSON.stringify(u.allowedProtocols), now,
+    default_server_id: u.defaultServerId, allowed_protocols: JSON.stringify(u.allowedProtocols),
+    allowed_proxies: JSON.stringify(u.allowedProxies ?? []), now,
     // Личная ссылка выдаётся сразу. Вход по коду — только если админ включил.
     access_token: crypto.randomBytes(18).toString('base64url'),
     code_login_until: u.codeLoginEnabled ? codeLoginUntilFromSettings() : null,
@@ -176,6 +183,91 @@ export function findActiveXrayDevice(userId: string, serverId: string): Device |
     .prepare("SELECT id FROM devices WHERE user_id = ? AND server_id = ? AND protocol = 'xray' AND is_active = 1 ORDER BY created_at DESC LIMIT 1")
     .get(userId, serverId) as { id: string } | undefined;
   return r ? getDevice(r.id) : null;
+}
+
+// ── прокси-аккаунты (per-user логин на сервере) ──
+const PROXY_TYPES: ProxyType[] = ['http', 'https', 'socks5'];
+
+interface ProxyRow {
+  id: string;
+  user_id: string | null;
+  server_id: string;
+  login: string;
+  pass_enc: string;
+  is_active: number;
+  created_at: string;
+}
+
+export function findActiveProxyAccount(userId: string, serverId: string): ProxyRow | null {
+  return (
+    (db
+      .prepare('SELECT * FROM proxy_accounts WHERE user_id = ? AND server_id = ? AND is_active = 1 ORDER BY created_at DESC LIMIT 1')
+      .get(userId, serverId) as ProxyRow | undefined) ?? null
+  );
+}
+export function getProxyAccountRow(id: string): ProxyRow | null {
+  return (db.prepare('SELECT * FROM proxy_accounts WHERE id = ?').get(id) as ProxyRow | undefined) ?? null;
+}
+export function insertProxyAccountRow(d: { userId: string; serverId: string; login: string; passEnc: string }): ProxyRow {
+  const id = newId('px');
+  db.prepare('INSERT INTO proxy_accounts(id,user_id,server_id,login,pass_enc,is_active,created_at) VALUES(?,?,?,?,?,1,?)').run(
+    id,
+    d.userId,
+    d.serverId,
+    d.login,
+    d.passEnc,
+    nowIso(),
+  );
+  return getProxyAccountRow(id)!;
+}
+export function deactivateProxyAccount(id: string): void {
+  db.prepare('UPDATE proxy_accounts SET is_active = 0 WHERE id = ?').run(id);
+}
+export function listProxyAccountRowsOfUser(userId: string): ProxyRow[] {
+  return db.prepare('SELECT * FROM proxy_accounts WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC').all(userId) as ProxyRow[];
+}
+
+/** Доступные пользователю на сервере типы прокси = разрешено пользователю ∩
+ *  реально установлено на сервере. */
+export function availableProxyTypes(user: User, server: Server): ProxyType[] {
+  const allow = new Set(user.allowedProxies);
+  const inst = new Set(server.protocols as string[]);
+  return PROXY_TYPES.filter((t) => allow.has(t) && inst.has(t));
+}
+
+/** Собрать ProxyAccount для показа владельцу/админу: пароль расшифрован (у прокси
+ *  он нужен для подключения), эндпоинты — по портам сервера ∩ типам пользователя. */
+export function buildProxyAccountView(row: ProxyRow): ProxyAccount | null {
+  const server = getServer(row.server_id);
+  if (!server) return null;
+  const user = row.user_id ? getUser(row.user_id) : null;
+  const px = getServerProxy(server.host);
+  const allow = new Set<ProxyType>(user ? user.allowedProxies : PROXY_TYPES);
+  const endpoints: ProxyEndpoint[] = [];
+  if (px) {
+    if (px.httpPort && allow.has('http')) endpoints.push({ type: 'http', host: server.host, port: px.httpPort });
+    if (px.socksPort && allow.has('socks5')) endpoints.push({ type: 'socks5', host: server.host, port: px.socksPort });
+    if (px.httpsPort && allow.has('https')) endpoints.push({ type: 'https', host: px.httpsHost || server.host, port: px.httpsPort });
+  }
+  return {
+    id: row.id,
+    userId: row.user_id ?? null,
+    serverId: server.id,
+    serverName: server.name,
+    serverHost: server.host,
+    login: row.login,
+    password: decryptSecret(row.pass_enc),
+    endpoints,
+    isActive: !!row.is_active,
+    createdAt: row.created_at,
+  };
+}
+
+/** Прокси-аккаунты пользователя как готовые view (для кабинета). */
+export function listProxyAccountsOfUser(userId: string): ProxyAccount[] {
+  return listProxyAccountRowsOfUser(userId)
+    .map((r) => buildProxyAccountView(r))
+    .filter((x): x is ProxyAccount => x !== null);
 }
 // Устройства сервера с ключами — для синхронизации трафика. Берём ВСЕ (в т.ч.
 // отозванные, но не удалённые): пользователь мог перевыпустить конфиг, а телефон
@@ -566,5 +658,7 @@ export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
     telegram: { enabled: tg.enabled, botUsername: tg.botUsername ?? null },
     botLink,
     subLink: user ? subscriptionUrl(user.id) : null,
+    proxyAccounts: user ? listProxyAccountsOfUser(user.id) : [],
+    allowedProxies: user ? user.allowedProxies : [],
   };
 }

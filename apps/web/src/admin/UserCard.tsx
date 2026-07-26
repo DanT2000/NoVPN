@@ -2,7 +2,7 @@
 // выпуск конфигов, устройства, история.
 
 import { useState } from 'react';
-import type { IssueDeviceResult, Protocol, Server, User } from '@novpn/shared';
+import type { IssueDeviceResult, Protocol, ProxyType, Server, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { CategoryPicker, Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader, Toggle } from '../components/ui';
@@ -98,6 +98,7 @@ function UserCardInner({ user }: { user: User }) {
   const [allowedServers, setAllowedServers] = useState<string[]>([...user.allowedServers]);
   const [defaultServerId, setDefaultServerId] = useState<string | null>(user.defaultServerId ?? user.allowedServers[0] ?? null);
   const [protocols, setProtocols] = useState<Protocol[]>([...user.allowedProtocols]);
+  const [proxies, setProxies] = useState<ProxyType[]>([...(user.allowedProxies ?? [])]);
   const [savingProfile, setSavingProfile] = useState(false);
 
   // ── Личная ссылка ──
@@ -152,18 +153,17 @@ function UserCardInner({ user }: { user: User }) {
   const selectedServers = servers.filter((s) => allowedServers.includes(s.id));
   const installed = installedOn(servers, allowedServers);
 
-  // Протоколы к показу: только установленные (xray/amnezia) + прокси для админа.
-  const protocolOptions: Array<{ key: Protocol; label: string }> = [
-    ...(['xray', 'amneziawg'] as Protocol[])
-      .filter((p) => installed.includes(p))
-      .map((p) => ({ key: p, label: p === 'xray' ? 'Xray' : 'Amnezia' })),
-    ...(isAdmin
-      ? ([
-          { key: 'http', label: 'HTTP-прокси' },
-          { key: 'socks5', label: 'SOCKS5' },
-        ] as Array<{ key: Protocol; label: string }>)
-      : []),
-  ];
+  // VPN-протоколы к показу: только установленные на доступных серверах.
+  const protocolOptions: Array<{ key: Protocol; label: string }> = (['xray', 'amneziawg'] as Protocol[])
+    .filter((p) => installed.includes(p))
+    .map((p) => ({ key: p, label: p === 'xray' ? 'Xray' : 'Amnezia' }));
+  // Прокси к показу: установленные на доступных серверах.
+  const proxyOptions: Array<{ key: ProxyType; label: string }> = (['http', 'socks5', 'https'] as ProxyType[])
+    .filter((p) => installed.includes(p))
+    .map((p) => ({ key: p, label: p === 'http' ? 'HTTP' : p === 'https' ? 'HTTPS' : 'SOCKS5' }));
+  function toggleProxy(p: ProxyType) {
+    setProxies((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  }
 
   let expLine: string;
   if (!user.expiresAt) expLine = 'Бессрочно';
@@ -194,11 +194,10 @@ function UserCardInner({ user }: { user: User }) {
       showToast('Выберите хотя бы один сервер');
       return;
     }
-    const eff = protocols.filter((p) =>
-      p === 'xray' || p === 'amneziawg' ? installed.includes(p) : isAdmin && (p === 'http' || p === 'socks5'),
-    );
-    if (eff.length === 0) {
-      showToast('Выберите хотя бы один установленный протокол');
+    const eff = protocols.filter((p) => (p === 'xray' || p === 'amneziawg') && installed.includes(p));
+    const effProxies = proxies.filter((p) => installed.includes(p));
+    if (eff.length === 0 && effProxies.length === 0) {
+      showToast('Выберите хотя бы один установленный протокол или прокси');
       return;
     }
     const deviceLimit = dlMode === '1' ? 1 : dlMode === '10' ? 10 : dlMode === 'unlim' ? null : posInt(dlCustom);
@@ -217,6 +216,7 @@ function UserCardInner({ user }: { user: User }) {
         allowedServers,
         defaultServerId: def,
         allowedProtocols: eff as User['allowedProtocols'],
+        allowedProxies: effProxies,
       });
       showToast('Профиль сохранён');
     } finally {
@@ -561,9 +561,9 @@ function UserCardInner({ user }: { user: User }) {
         ) : null}
 
         <div className="field">
-          <span className="field-label">Разрешённые протоколы</span>
+          <span className="field-label">Разрешённые VPN-протоколы</span>
           {protocolOptions.length === 0 ? (
-            <span className="small muted">На выбранных серверах нет установленных протоколов.</span>
+            <span className="small muted">На выбранных серверах нет установленных VPN-протоколов.</span>
           ) : (
             <div className="chip-row">
               {protocolOptions.map((p) => (
@@ -571,10 +571,18 @@ function UserCardInner({ user }: { user: User }) {
               ))}
             </div>
           )}
-          <span className="small muted">
-            Показаны только протоколы, установленные на выбранных серверах{isAdmin ? '. Для «Админ» доступны прокси HTTP/SOCKS5.' : '.'}
-          </span>
         </div>
+        {proxyOptions.length > 0 ? (
+          <div className="field">
+            <span className="field-label">Прокси (пользователь выдаст себе в кабинете)</span>
+            <div className="chip-row">
+              {proxyOptions.map((p) => (
+                <Chip key={p.key} label={p.label} active={proxies.includes(p.key)} onClick={() => toggleProxy(p.key)} />
+              ))}
+            </div>
+            <span className="small muted">Каждому пользователю выдаётся отдельный логин.</span>
+          </div>
+        ) : null}
       </Panel>
 
       <Panel

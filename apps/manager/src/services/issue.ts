@@ -1,10 +1,11 @@
 // Выпуск конфига пользователю. Общая логика для HTTP-роутов и Telegram-бота.
 
-import type { IssueDeviceResult, Server, User } from '@novpn/shared';
+import type { IssueDeviceResult, ProxyAccount, Server, User } from '@novpn/shared';
+import crypto from 'node:crypto';
 import * as repo from '../repo.js';
 import { config } from '../config.js';
 import { encryptSecret } from '../lib/crypto.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg } from './sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshAddProxyUser } from './sshServer.js';
 import { vpnLinkFromConf } from './amneziaLink.js';
 
 const NO_SSH =
@@ -69,4 +70,32 @@ export async function issueForUser(
       ? 'Ссылка vpn:// — для приложения AmneziaVPN. Для отдельного приложения AmneziaWG используйте файл .conf.'
       : undefined,
   };
+}
+
+const rand = (n: number) => crypto.randomBytes(n).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, n);
+const sanLogin = (s: string) => (s.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 12) || 'user');
+
+/** Выдать пользователю прокси-аккаунт на сервере (один логин на пользователя+
+ *  сервер, работает для всех установленных и разрешённых типов прокси). Если
+ *  аккаунт уже есть — возвращаем его (та же учётка). */
+export async function issueProxyForUser(user: User, serverId: string, opts: { byAdmin?: boolean } = {}): Promise<ProxyAccount> {
+  const server = repo.getServer(serverId);
+  if (!server) throw new Error('Сервер не найден.');
+  if (!user.allowedServers.includes(serverId)) throw new Error('Сервер недоступен для этого пользователя.');
+  const types = repo.availableProxyTypes(user, server);
+  if (types.length === 0)
+    throw new Error('На этом сервере нет доступных вам прокси (не установлены или не разрешены).');
+  if (!server.autoIssue && !opts.byAdmin)
+    throw new Error('Самостоятельная выдача на этом сервере временно отключена. Обратитесь к администратору.');
+  if (!(await sshHasSshAccess(server.id))) throw new Error('Для сервера не задан SSH-доступ.');
+
+  const existing = repo.findActiveProxyAccount(user.id, serverId);
+  if (existing) return repo.buildProxyAccountView(existing)!;
+
+  const login = `${sanLogin(user.name)}${rand(5)}`;
+  const password = rand(16);
+  await sshAddProxyUser(server, login, password);
+  const row = repo.insertProxyAccountRow({ userId: user.id, serverId, login, passEnc: encryptSecret(password) });
+  repo.addHistory(user.id, `Выдан прокси-доступ (${types.join('/')}, ${server.name})`);
+  return repo.buildProxyAccountView(row)!;
 }

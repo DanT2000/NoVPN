@@ -188,10 +188,22 @@ CREATE TABLE IF NOT EXISTS server_keys (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS proxy_accounts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  server_id TEXT NOT NULL,
+  login TEXT NOT NULL,
+  pass_enc TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 CREATE INDEX IF NOT EXISTS idx_devices_server ON devices(server_id);
 CREATE INDEX IF NOT EXISTS idx_history_user ON user_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_server ON jobs(server_id, state);
+CREATE INDEX IF NOT EXISTS idx_proxy_user ON proxy_accounts(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_login ON proxy_accounts(server_id, login);
 `);
 
 // Миграции для существующих БД (ADD COLUMN идемпотентно — игнорируем дубликаты).
@@ -217,6 +229,8 @@ for (const stmt of [
   // а бот-рассылка требует именно chat_id. Заполняется при привязке и при любом
   // входящем сообщении от привязанного пользователя (бэкофилл для старых).
   'ALTER TABLE users ADD COLUMN telegram_chat_id INTEGER',
+  // Типы прокси, которые пользователю разрешено выдать себе (JSON-массив).
+  'ALTER TABLE users ADD COLUMN allowed_proxies TEXT',
 ]) {
   try {
     db.exec(stmt);

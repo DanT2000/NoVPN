@@ -8,6 +8,7 @@ import type {
   CheckCodeResult,
   IssueDeviceRequest,
   IssueDeviceResult,
+  ProxyAccount,
   PublicBootstrapData,
   Server,
   TelegramSettings,
@@ -61,6 +62,8 @@ export const httpApi: ApiClient = {
   changeAdminPassword: (current, next) => req<Ok>('POST', '/api/admin/password', { current, next }),
   restartPanel: () => req<Ok>('POST', '/api/admin/restart'),
   broadcast: (text) => req<{ total: number; sent: number; failed: number }>('POST', '/api/admin/broadcast', { text }),
+  issueProxy: (serverId, userId) => req<ProxyAccount>('POST', '/api/public/proxy', { serverId, userId }),
+  revokeProxyAccount: (id) => req<Ok>('POST', `/api/public/proxy/${id}/revoke`),
 
   exportBackup: async (password) => {
     const res = await fetch(`${BASE}/api/admin/backup/export`, {

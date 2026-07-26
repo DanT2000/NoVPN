@@ -9,6 +9,8 @@ import type {
   Device,
   IssueDeviceRequest,
   IssueDeviceResult,
+  ProxyAccount,
+  ProxyType,
   PublicBootstrapData,
   Server,
   TelegramSettings,
@@ -28,7 +30,9 @@ export interface CreateUserInput {
   resetPolicy: 'never' | 'monthly';
   allowedServers: string[];
   defaultServerId: string | null;
-  allowedProtocols: Array<'xray' | 'amneziawg' | 'http' | 'https' | 'socks5'>;
+  allowedProtocols: Array<'xray' | 'amneziawg'>;
+  /** Типы прокси, которые пользователь может себе выдать (если установлены на сервере). */
+  allowedProxies?: ProxyType[];
   /** Код доступа. Пустая строка — сервер сгенерирует сам (код это внутренний
    *  идентификатор, вводить его человеку не нужно). */
   code: string;
@@ -49,6 +53,7 @@ export type UpdateUserPatch = Partial<
     | 'allowedServers'
     | 'defaultServerId'
     | 'allowedProtocols'
+    | 'allowedProxies'
     | 'expiresAt'
   >
 >;
@@ -127,6 +132,11 @@ export interface ApiClient {
   reissueDevice(deviceId: string): Promise<IssueDeviceResult>;
   revokeDevice(deviceId: string): Promise<Ok>;
   deleteDevice(deviceId: string): Promise<Ok>;
+  /** Выдать/получить прокси-аккаунт на сервере (для текущего пользователя; админ
+   *  может передать userId, чтобы выдать за пользователя). */
+  issueProxy(serverId: string, userId?: string): Promise<ProxyAccount>;
+  /** Отозвать прокси-аккаунт (удаляет логин на сервере). */
+  revokeProxyAccount(id: string): Promise<Ok>;
 
   // ── admin: auth ──
   adminLogin(password: string): Promise<{ ok: boolean; mustChangePassword?: boolean }>;

@@ -13,11 +13,11 @@ import type {
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { agentService } from './services/agent.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
-import { createXrayCfg, createAwgCfg, issueForUser } from './services/issue.js';
+import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { renderSubPage } from './services/subPage.js';
@@ -258,6 +258,38 @@ router.delete('/api/public/devices/:id', requireUserOrAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// Выдать/получить прокси-аккаунт пользователя на сервере.
+router.post('/api/public/proxy', requireUserOrAdmin, async (req, res) => {
+  try {
+    const { serverId } = req.body ?? {};
+    const targetId = req.session.admin && req.body?.userId ? String(req.body.userId) : String(req.session.userId);
+    const u = repo.getUser(targetId);
+    if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+    if (!u.isActive) return res.status(403).json(err('disabled', 'Доступ отключён.'));
+    const acc = await issueProxyForUser(u, String(serverId), { byAdmin: !!req.session.admin });
+    res.json(acc);
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось выдать прокси.'));
+  }
+});
+
+// Отозвать прокси-аккаунт (удаляет логин на сервере).
+router.post('/api/public/proxy/:id/revoke', requireUserOrAdmin, async (req, res) => {
+  const row = repo.getProxyAccountRow(req.params.id!);
+  if (!row) return res.status(404).json(err('not_found', 'Прокси не найден.'));
+  // Владелец или админ.
+  if (!req.session.admin && row.user_id !== String(req.session.userId))
+    return res.status(404).json(err('not_found', 'Прокси не найден.'));
+  try {
+    const server = repo.getServer(row.server_id);
+    if (server && (await sshHasSshAccess(server.id))) await sshRevokeProxyUser(server, row.login);
+    repo.deactivateProxyAccount(row.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось отозвать прокси.'));
+  }
+});
+
 // ── admin: auth ──
 // Логина нет — панель одноадминная. Тот же лимит попыток, что и на коде: с
 // паролем по умолчанию «admin» подбор иначе тривиален.
@@ -330,13 +362,15 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
   const allowedServers: string[] = Array.isArray(b.allowedServers) ? b.allowedServers : [];
   if (allowedServers.length === 0) return res.status(400).json(err('validation', 'Выберите хотя бы один сервер.'));
   const allowedProtocols = (Array.isArray(b.allowedProtocols) ? b.allowedProtocols : []).filter((p: string) => p === 'xray' || p === 'amneziawg');
-  if (allowedProtocols.length === 0) return res.status(400).json(err('validation', 'Выберите хотя бы один протокол.'));
+  const allowedProxies = (Array.isArray(b.allowedProxies) ? b.allowedProxies : []).filter((p: string) => p === 'http' || p === 'https' || p === 'socks5');
+  if (allowedProtocols.length === 0 && allowedProxies.length === 0)
+    return res.status(400).json(err('validation', 'Выберите хотя бы один протокол или прокси.'));
 
   const u = repo.insertUser({
     name, comment: String(b.comment ?? ''), category: b.category ?? 'Общие', tags: Array.isArray(b.tags) ? b.tags : [],
     code, deviceLimit: b.deviceLimit ?? null, expiresAt: b.expiresAt ?? null, trafficLimitGb: b.trafficLimitGb ?? null,
     resetPolicy: b.resetPolicy === 'monthly' ? 'monthly' : 'never', allowedServers,
-    defaultServerId: b.defaultServerId ?? null, allowedProtocols,
+    defaultServerId: b.defaultServerId ?? null, allowedProtocols, allowedProxies,
     codeLoginEnabled: b.codeLoginEnabled === true,
   });
   repo.addLog(`Создан пользователь «${u.name}»`);
@@ -371,6 +405,8 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.defaultServerId !== undefined) fields.default_server_id = b.defaultServerId;
   if (b.allowedProtocols !== undefined)
     fields.allowed_protocols = JSON.stringify((b.allowedProtocols as string[]).filter((p) => p === 'xray' || p === 'amneziawg'));
+  if (b.allowedProxies !== undefined)
+    fields.allowed_proxies = JSON.stringify((b.allowedProxies as string[]).filter((p) => p === 'http' || p === 'https' || p === 'socks5'));
   res.json(repo.updateUserFields(u.id, fields));
 });
 
