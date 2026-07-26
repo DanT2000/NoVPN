@@ -49,9 +49,10 @@ export function devStatusOf(device: Device): StatusView {
 }
 
 export function serverAgentView(server: Server): StatusView {
+  // Панель управляет сервером по SSH (без агента на VPS) — показываем связь.
   return server.agent === 'online'
-    ? { key: 'online', label: 'online', ...C.green }
-    : { key: 'offline', label: 'offline', ...C.red };
+    ? { key: 'online', label: 'на связи', ...C.green }
+    : { key: 'offline', label: 'нет связи', ...C.red };
 }
 
 export function serverEndpointView(server: Server): StatusView {

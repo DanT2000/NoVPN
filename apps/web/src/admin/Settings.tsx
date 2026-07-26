@@ -105,8 +105,8 @@ export function Settings() {
   };
 
   const downloadBackup = async () => {
-    if (bkPass.length < 4) {
-      showToast('Пароль бэкапа — минимум 4 символа');
+    if (bkPass.length < 8) {
+      showToast('Пароль бэкапа — минимум 8 символов');
       return;
     }
     setBkBusy(true);
@@ -184,6 +184,8 @@ export function Settings() {
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось сохранить настройки');
     } finally {
       setSaving(false);
     }
@@ -215,6 +217,12 @@ export function Settings() {
           {!domain.trim() ? (
             <div className="body small muted" style={{ marginTop: 6 }}>
               Пока не задан — ссылки используют текущий адрес страницы.
+            </div>
+          ) : null}
+          {domain.trim() !== (s.domain ?? '').trim() ? (
+            <div className="notice notice-amber small" style={{ marginTop: 8 }}>
+              <b>Внимание:</b> уже разосланные пользователям личные ссылки и подписки со старым
+              адресом после смены перестанут открываться — их придётся выдать заново.
             </div>
           ) : null}
         </Panel>
@@ -375,10 +383,11 @@ export function Settings() {
         {/* Бэкап базы */}
         <Panel title="Резервная копия базы">
           <div className="body small muted" style={{ marginBottom: 12 }}>
-            Скачайте зашифрованный бэкап и храните его вместе с паролем в надёжном месте
-            (например, в менеджере паролей). Файл самодостаточен: его можно развернуть на
-            новой панели. Восстановление тоже работает — но всё, что вы делали после
-            снятия бэкапа, будет потеряно.
+            Файл содержит данные доступа ВСЕХ пользователей (личные токены, коды, привязки)
+            — храните его как секрет, вместе с паролем, в надёжном месте (например, в
+            менеджере паролей). Файл самодостаточен: его можно развернуть на новой панели.
+            Восстановление тоже работает — но всё, что вы делали после снятия бэкапа, будет
+            потеряно.
           </div>
 
           <Field label="Пароль для шифрования бэкапа">
@@ -386,7 +395,7 @@ export function Settings() {
               <input
                 className="input"
                 type="password"
-                placeholder="минимум 4 символа"
+                placeholder="минимум 8 символов"
                 value={bkPass}
                 onChange={(e) => setBkPass(e.target.value)}
                 style={{ maxWidth: 240 }}

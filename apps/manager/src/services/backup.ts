@@ -45,7 +45,7 @@ function snapshot(): Buffer {
  * AES-256-GCM, ключ = scrypt(пароль, salt).
  */
 export function createBackup(password: string): Buffer {
-  if (!password || password.length < 4) throw new Error('Пароль бэкапа слишком короткий.');
+  if (!password || password.length < 8) throw new Error('Пароль бэкапа — минимум 8 символов.');
   const plain = snapshot();
   const salt = crypto.randomBytes(16);
   const iv = crypto.randomBytes(12);

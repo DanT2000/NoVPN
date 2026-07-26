@@ -1,5 +1,6 @@
 // A7 — Добавление сервера. 5-шаговый мастер (данные → проверка → компоненты →
-// установка → готово). Установка симулируется; сервер добавляется через store.
+// установка → готово). Установка РЕАЛЬНАЯ: сервер добавляется через store, затем
+// провижинится по SSH (xray/awg/прокси), прогресс приходит с сервера.
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { TestServerConnectionResult } from '@novpn/shared';
@@ -87,6 +88,9 @@ export function ServerWizard() {
   const [log, setLog] = useState<string[]>([]);
   const [installErr, setInstallErr] = useState<string | null>(null);
   const addedRef = useRef(false);
+  // id уже созданного сервера: при повторе установки после ошибки НЕ создаём
+  // дубль — переиспользуем существующий сервер и повторяем только провижининг.
+  const createdIdRef = useRef<string | null>(null);
 
   const components = (): Component[] => {
     const out: Component[] = [];
@@ -121,14 +125,20 @@ export function ServerWizard() {
     (async () => {
       const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
       try {
-        const srv = await addServer(buildInput());
-        await api.provisionServer(srv.id, components()); // запуск (асинхронно на сервере)
+        // Сервер создаём только один раз. Повтор после ошибки переиспользует его.
+        let srvId = createdIdRef.current;
+        if (!srvId) {
+          const srv = await addServer(buildInput());
+          createdIdRef.current = srv.id;
+          srvId = srv.id;
+        }
+        await api.provisionServer(srvId, components()); // запуск (асинхронно на сервере)
         const started = Date.now();
         let lastMsg = '';
         for (;;) {
           await sleep(5000);
           if (Date.now() - started > 8 * 60 * 1000) throw new Error('Установка заняла слишком долго — проверьте сервер.');
-          const st = await api.provisionStatus(srv.id);
+          const st = await api.provisionStatus(srvId);
           if (st.message && st.message !== lastMsg) {
             lastMsg = st.message;
             setLog((prev) => [...prev, st.message]);

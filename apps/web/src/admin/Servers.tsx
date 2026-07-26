@@ -14,7 +14,6 @@ import { gb, plural, rel } from '../lib/format';
 import { COUNTRIES, countryValue } from '../lib/countries';
 
 type Proto = 'xray' | 'amneziawg' | 'http' | 'https' | 'socks5';
-const PROTO_OPTS: Proto[] = ['xray', 'amneziawg', 'http', 'https', 'socks5'];
 
 function ProxyBox({ proxy }: { proxy: ServerProxyConfig }) {
   const { showToast } = useApp();
@@ -117,11 +116,23 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
   const [pxResult, setPxResult] = useState<ServerProxyConfig | null>(null);
   const [pxErr, setPxErr] = useState<string | null>(null);
 
-  async function installProxies() {
+  function installProxies() {
     if (!pxHttp && !pxHttps && !pxSocks) {
       setPxErr('Отметьте хотя бы один тип прокси.');
       return;
     }
+    setPxErr(null);
+    showConfirm({
+      title: 'Установить прокси на сервере?',
+      text:
+        'Панель по SSH соберёт на сервере 3proxy и настроит выбранные типы.' +
+        (pxHttps ? ' Для HTTPS дополнительно поставит certbot/stunnel и выпустит TLS-сертификат (нужен домен и свободный порт 80).' : '') +
+        ' Операция занимает несколько минут.',
+      confirmLabel: 'Установить',
+      onConfirm: () => runInstallProxies(),
+    });
+  }
+  async function runInstallProxies() {
     setPxBusy(true);
     setPxErr(null);
     try {
@@ -180,6 +191,8 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
       });
       showToast('Сервер изменён');
       onClose();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось сохранить сервер');
     } finally {
       setSaving(false);
     }
@@ -221,15 +234,16 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
       </Field>
 
       <div className="field">
-        <span className="field-label">Протоколы (установленные на сервере)</span>
+        <span className="field-label">VPN-протоколы этого сервера</span>
         <div className="chip-row">
-          {PROTO_OPTS.map((p) => (
+          {(['xray', 'amneziawg'] as Proto[]).map((p) => (
             <Chip key={p} label={PROTOCOL_LABELS[p]} size="sm" active={protocols.includes(p)} onClick={() => toggle(p)} />
           ))}
         </div>
         <span className="small muted">
-          Отмечайте только реально установленные протоколы — по ним выдаются конфиги. Для выпуска нужен серверный
-          ключ протокола (ниже).
+          Для нового сервера просто нажмите «Установить / переустановить ПО» ниже — панель сама поставит
+          отмеченные протоколы. Отмечать вручную нужно, только если регистрируете УЖЕ установленный сервер
+          (тогда впишите его серверные ключи ниже). Прокси настраиваются отдельным блоком.
         </span>
       </div>
 
@@ -266,7 +280,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         {pxResult ? <ProxyBox proxy={pxResult} /> : null}
         <div className="row" style={{ gap: 8, marginTop: 8 }}>
           <button className="btn btn-secondary btn-sm" disabled={pxBusy} onClick={() => void installProxies()}>
-            {pxBusy ? 'Устанавливаем… (до минуты)' : 'Установить / обновить прокси'}
+            {pxBusy ? 'Устанавливаем… (до нескольких минут)' : 'Установить / обновить прокси'}
           </button>
           <button className="btn btn-outline btn-sm" onClick={() => void showExisting()}>
             Показать текущие
@@ -386,8 +400,8 @@ export function Servers() {
 
                 {/* Метрики */}
                 <div style={{ display: 'grid', gridTemplateColumns: statCols, gap: 12 }}>
-                  <Metric label="Агент" value={agentV.label} color={agentV.fg} />
-                  <Metric label="VPN endpoint" value={endpointV.label} color={endpointV.fg} />
+                  <Metric label="Связь с сервером" value={agentV.label} color={agentV.fg} />
+                  <Metric label="VPN-адрес" value={endpointV.label} color={endpointV.fg} />
                   <Metric label="Протоколы" value={protocols} />
                   <Metric label="Трафик" value={gb(s.trafficGb)} />
                   <Metric label="Пользователи" value={String(s.users)} />
