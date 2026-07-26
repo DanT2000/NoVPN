@@ -227,6 +227,10 @@ export function insertProxyAccountRow(d: { userId: string; serverId: string; log
 export function deactivateProxyAccount(id: string): void {
   db.prepare('UPDATE proxy_accounts SET is_active = 0 WHERE id = ?').run(id);
 }
+/** Деактивировать ВСЕ прокси-аккаунты пользователя (при отключении/удалении). */
+export function deactivateUserProxyAccounts(userId: string): void {
+  db.prepare('UPDATE proxy_accounts SET is_active = 0 WHERE user_id = ? AND is_active = 1').run(userId);
+}
 export function listProxyAccountRowsOfUser(userId: string): ProxyRow[] {
   return db.prepare('SELECT * FROM proxy_accounts WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC').all(userId) as ProxyRow[];
 }
@@ -652,20 +656,26 @@ export function listDevicesOfUser(userId: string): Device[] {
 /** Публичный базовый адрес панели СО СХЕМОЙ. Домен из настроек человек часто
  *  вводит без https:// («panel.example.ru») — нормализуем, иначе ссылки-подписки
  *  и адреса в /sub получаются битыми (VPN-приложению нужен полный URL). */
-export function publicBaseUrl(): string {
-  const raw = (getSettings()?.domain || config.publicUrl || '').trim().replace(/\/+$/, '');
-  if (!raw) return '';
-  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+export function publicBaseUrl(fallbackOrigin?: string): string {
+  const domain = (getSettings()?.domain || '').trim().replace(/\/+$/, '');
+  if (domain) return /^https?:\/\//i.test(domain) ? domain : `https://${domain}`;
+  // Домен не задан: предпочитаем адрес, по которому пользователь реально обратился
+  // (request origin), и только в последнюю очередь PUBLIC_URL из окружения (в деве
+  // это localhost) — иначе выданные ссылки молча вели бы на localhost.
+  const fo = (fallbackOrigin || '').trim().replace(/\/+$/, '');
+  if (fo) return /^https?:\/\//i.test(fo) ? fo : `https://${fo}`;
+  const envUrl = (config.publicUrl || '').trim().replace(/\/+$/, '');
+  return envUrl ? (/^https?:\/\//i.test(envUrl) ? envUrl : `https://${envUrl}`) : '';
 }
 
-export function subscriptionUrl(userId: string): string | null {
+export function subscriptionUrl(userId: string, fallbackOrigin?: string): string | null {
   const t = getSubToken(userId);
   if (!t) return null;
-  const base = publicBaseUrl();
+  const base = publicBaseUrl(fallbackOrigin);
   return base ? `${base}/sub/${t}` : null;
 }
 
-export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
+export function buildPublicBootstrap(userId?: string, fallbackOrigin?: string): PublicBootstrapData {
   const tg = getTelegramSafe();
   const user = userId ? getUser(userId) : null;
   // Deep-link привязки: /start <токен пользователя>. Токен длинный, не подбирается.
@@ -688,7 +698,7 @@ export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
     apps: listApps(),
     telegram: { enabled: tg.enabled, botUsername: tg.botUsername ?? null },
     botLink,
-    subLink: user ? subscriptionUrl(user.id) : null,
+    subLink: user ? subscriptionUrl(user.id, fallbackOrigin) : null,
     proxyAccounts: user ? listProxyAccountsOfUser(user.id) : [],
     allowedProxies: user ? user.allowedProxies : [],
   };

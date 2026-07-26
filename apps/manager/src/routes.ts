@@ -16,7 +16,7 @@ import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeA
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
-import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser } from './services/issue.js';
+import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser, revokeUserAccessOnServers } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { renderSubPage } from './services/subPage.js';
@@ -44,6 +44,15 @@ function clientIp(req: Request): string {
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
+/** Адрес, по которому пользователь реально обратился к панели (учитывая обратный
+ *  прокси). Нужен, чтобы генерируемые ссылки работали даже без заданного домена. */
+function reqOrigin(req: { headers: Record<string, unknown>; protocol?: string }): string {
+  const h = req.headers;
+  const proto = String(h['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]!.trim();
+  const host = String(h['x-forwarded-host'] || h.host || '').split(',')[0]!.trim();
+  return host ? `${proto}://${host}` : '';
+}
+
 // ── health ──
 router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 
@@ -69,7 +78,7 @@ router.get('/sub/:token', (req, res) => {
   // отдаём base64-список конфигов. Так человеку достаточно ОДНОЙ ссылки:
   // открыл — понял что делать, вставил в приложение — получил конфиги.
   if (String(req.headers.accept ?? '').includes('text/html')) {
-    const base = repo.publicBaseUrl();
+    const base = repo.publicBaseUrl(reqOrigin(req));
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.send(
       renderSubPage({
@@ -103,7 +112,7 @@ router.get('/api/bootstrap', requireAdmin, (_req, res) => res.json(repo.buildBoo
 // Данные публичной части. Без входа по коду — только справочники;
 // со входом — плюс свои устройства. Чужое не отдаётся никогда.
 router.get('/api/public/bootstrap', (req, res) => {
-  res.json(repo.buildPublicBootstrap(req.session?.userId));
+  res.json(repo.buildPublicBootstrap(req.session?.userId, reqOrigin(req)));
 });
 
 /** Общие проверки доступа, одинаковые для входа по коду и по ссылке. */
@@ -120,7 +129,9 @@ function accessError(u: User): { type: string; message: string } | null {
 // на ссылки, и только до code_login_until. Защищён от перебора: 6 цифр — это
 // миллион вариантов, без лимита попыток рабочий код находится за час.
 router.post('/api/public/check-code', (req, res) => {
-  const ip = clientIp(req);
+  // Отдельный от админского входа bucket: перебор кода не должен блокировать
+  // вход администратора с того же IP, и наоборот.
+  const ip = `code:${clientIp(req)}`;
   const gate = guard.checkAllowed(ip);
   if (!gate.allowed) return res.status(429).json(err('rate_limited', gate.message!));
 
@@ -293,7 +304,7 @@ router.post('/api/public/proxy/:id/revoke', requireUserOrAdmin, async (req, res)
 // Логина нет — панель одноадминная. Тот же лимит попыток, что и на коде: с
 // паролем по умолчанию «admin» подбор иначе тривиален.
 router.post('/api/admin/login', (req, res) => {
-  const ip = clientIp(req);
+  const ip = `admin:${clientIp(req)}`;
   const gate = guard.checkAllowed(ip);
   if (!gate.allowed) return res.status(429).json(err('rate_limited', gate.message!));
 
@@ -431,14 +442,18 @@ router.post('/api/admin/users/:id/extend', requireAdmin, (req, res) => {
   res.json(updated);
 });
 
-router.post('/api/admin/users/:id/active', requireAdmin, (req, res) => {
+router.post('/api/admin/users/:id/active', requireAdmin, async (req, res) => {
   const u = repo.getUser(req.params.id!);
   if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
   const active = !!req.body?.active;
   repo.updateUserFields(u.id, { is_active: active ? 1 : 0 });
   if (!active) {
+    // Сначала реально отзываем конфиги на VPN-серверах, затем помечаем в БД —
+    // иначе отключённый пользователь продолжал бы пользоваться VPN.
+    await revokeUserAccessOnServers(u.id);
     for (const d of repo.listDevices().filter((x) => x.userId === u.id && x.isActive))
       repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: repo.nowIso() });
+    repo.deactivateUserProxyAccounts(u.id);
   }
   res.json(repo.getUser(u.id));
 });
@@ -456,12 +471,14 @@ router.post('/api/admin/users/:id/code', requireAdmin, (req, res) => {
   const u = repo.getUser(req.params.id!);
   if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
   const code = String(req.body?.code ?? '');
-  if (!/^\d{6}$/.test(code)) return res.json(err('validation', 'Код — 6 цифр.'));
-  if (repo.codeExists(code, u.id)) return res.json(err('validation', 'Такой код уже используется.'));
+  if (!/^\d{6}$/.test(code)) return res.status(400).json(err('validation', 'Код — 6 цифр.'));
+  if (repo.codeExists(code, u.id)) return res.status(400).json(err('validation', 'Такой код уже используется.'));
   res.json({ user: repo.updateUserFields(u.id, { code }) });
 });
 
-router.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
+router.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const u = repo.getUser(req.params.id!);
+  if (u) await revokeUserAccessOnServers(u.id); // сначала снять доступ на серверах
   repo.softDeleteUser(req.params.id!);
   res.json({ ok: true });
 });

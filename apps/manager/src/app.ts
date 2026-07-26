@@ -5,6 +5,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { router } from './routes.js';
 import { agentRouter } from './routes/agent.js';
+import { SqliteSessionStore } from './services/sessionStore.js';
 
 export function createApp() {
   const app = express();
@@ -18,11 +19,12 @@ export function createApp() {
   // прокси перед нами (openresty + traefik = 2): Express возьмёт адрес, который
   // подставил наш прокси, а не тот, что придумал клиент.
   app.set('trust proxy', config.trustProxyHops);
-  // Сохраняем «сырое» тело для проверки подписи агента.
-  // Лимит 64mb: логотип/файлы клиентов админ загружает как data URL (хранятся в БД).
+  // Сохраняем «сырое» тело для проверки подписи агента. Лимит 16mb: покрывает
+  // иконки приложений (data URL) и восстановление бэкапа (base64 базы); при этом
+  // ограничивает объём тела на неаутентифицированных маршрутах (защита от DoS).
   app.use(
     express.json({
-      limit: '64mb',
+      limit: '16mb',
       verify: (req, _res, buf) => {
         (req as express.Request & { rawBody?: string }).rawBody = buf.toString('utf8');
       },
@@ -32,6 +34,7 @@ export function createApp() {
   app.use(
     session({
       name: 'novpn.sid',
+      store: new SqliteSessionStore(),
       secret: config.sessionSecret,
       resave: false,
       saveUninitialized: false,
@@ -56,6 +59,18 @@ export function createApp() {
       res.sendFile(path.join(config.webDist, 'index.html'));
     });
   }
+
+  // Единый обработчик ошибок: битый JSON / слишком большое тело отдаём в том же
+  // формате {error}, а не HTML со стеком, и не шумим стеком в логах.
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const e = err as { type?: string; status?: number } | null;
+    if (e?.type === 'entity.parse.failed')
+      return res.status(400).json({ error: { type: 'validation', message: 'Некорректный JSON в запросе.' } });
+    if (e?.type === 'entity.too.large')
+      return res.status(413).json({ error: { type: 'validation', message: 'Слишком большой запрос.' } });
+    if (!err) return next();
+    res.status(500).json({ error: { type: 'server', message: 'Внутренняя ошибка сервера.' } });
+  });
 
   return app;
 }

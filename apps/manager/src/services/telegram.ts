@@ -62,6 +62,22 @@ export async function tgApi<T = any>(method: string, params: Record<string, unkn
   return d.result as T;
 }
 
+// Защита от перебора кодов через бота: не более N попыток на чат за окно.
+const linkAttempts = new Map<number, { count: number; resetAt: number }>();
+function linkGuard(chatId: number): boolean {
+  const now = Date.now();
+  const WINDOW = 10 * 60 * 1000;
+  const MAX = 5;
+  const rec = linkAttempts.get(chatId);
+  if (!rec || now > rec.resetAt) {
+    linkAttempts.set(chatId, { count: 1, resetAt: now + WINDOW });
+    return true;
+  }
+  if (rec.count >= MAX) return false;
+  rec.count += 1;
+  return true;
+}
+
 // ── Бот (long-polling) ──
 let running = false;
 let offset = 0;
@@ -235,8 +251,22 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
     payload = text.trim();
   }
 
-  // Токен личной ссылки (длинный) или 6-значный код (пока жив).
-  const user = /^\d{6}$/.test(payload) ? repo.getUserByCode(payload) : repo.getUserByAccessToken(payload);
+  // Привязка по 6-значному коду — только для тех, у кого вход по коду СЕЙЧАС
+  // разрешён (не истёк), и с защитой от перебора (иначе бот — открытый брутфорс
+  // 10^6 кодов с угоном чужого аккаунта). Личная ссылка (длинный токен) не
+  // подбирается — для неё ограничений нет.
+  let user = null as ReturnType<typeof repo.getUserByAccessToken>;
+  if (/^\d{6}$/.test(payload)) {
+    if (!linkGuard(chatId)) {
+      await send(chatId, 'Слишком много попыток. Попробуйте позже или откройте личную ссылку с сайта.');
+      return;
+    }
+    const cand = repo.getUserByCode(payload);
+    const until = cand ? repo.getCodeLoginUntil(cand.id) : null;
+    if (cand && until && new Date(until) > new Date()) user = cand;
+  } else {
+    user = repo.getUserByAccessToken(payload);
+  }
   if (!user) {
     const linked = findUser(handle);
     if (linked) return showMenu(chatId, linked);

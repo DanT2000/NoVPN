@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import * as repo from '../repo.js';
 import { config } from '../config.js';
 import { encryptSecret } from '../lib/crypto.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshAddProxyUser } from './sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshAddProxyUser, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser } from './sshServer.js';
 import { vpnLinkFromConf } from './amneziaLink.js';
 
 const NO_SSH =
@@ -33,6 +33,13 @@ export async function issueForUser(
 ): Promise<IssueDeviceResult> {
   const server = repo.getServer(serverId);
   if (!server) throw new Error('Сервер не найден.');
+  // Доступ проверяем ЗДЕСЬ, в общей функции выпуска: иначе пути в обход UI-шага
+  // (напр. старая inline-кнопка в боте) могли выпустить конфиг отключённому или
+  // истёкшему пользователю. Админ (byAdmin) не ограничен статусом/сроком.
+  if (!opts.byAdmin) {
+    if (!user.isActive) throw new Error('Доступ отключён.');
+    if (user.expiresAt && new Date(user.expiresAt) < new Date()) throw new Error('Срок действия доступа истёк.');
+  }
   if (!user.allowedServers.includes(serverId)) throw new Error('Сервер недоступен для этого пользователя.');
   if (!user.allowedProtocols.includes(protocol)) throw new Error('Протокол недоступен для этого пользователя.');
   if (!server.protocols.includes(protocol)) throw new Error('Сервер не поддерживает этот протокол.');
@@ -72,6 +79,34 @@ export async function issueForUser(
   };
 }
 
+/** Отозвать ВСЕ активные конфиги/прокси пользователя на серверах — при отключении,
+ *  удалении или истечении доступа. Иначе уже импортированный конфиг продолжал бы
+ *  работать на VPN-сервере бессрочно. Best-effort: сбой одного сервера не мешает
+ *  остальным; отзыв в БД делает вызывающий отдельно. */
+export async function revokeUserAccessOnServers(userId: string): Promise<void> {
+  for (const d of repo.listDevicesOfUser(userId)) {
+    if (!d.isActive) continue;
+    const row = repo.getDeviceRow(d.id);
+    const server = repo.getServer(d.serverId);
+    if (!row || !server || !(await sshHasSshAccess(server.id))) continue;
+    try {
+      if (row.protocol === 'xray' && row.uuid) await sshRevokeXray(server, row.uuid);
+      else if (row.protocol === 'amneziawg' && row.public_key) await sshRevokeAwg(server, row.public_key);
+    } catch {
+      /* best-effort: сервер недоступен — отзыв в БД всё равно состоится */
+    }
+  }
+  for (const acc of repo.listProxyAccountRowsOfUser(userId)) {
+    const server = repo.getServer(acc.server_id);
+    if (!server || !(await sshHasSshAccess(server.id))) continue;
+    try {
+      await sshRevokeProxyUser(server, acc.login);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
 const rand = (n: number) => crypto.randomBytes(n).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, n);
 const sanLogin = (s: string) => (s.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 12) || 'user');
 
@@ -81,6 +116,10 @@ const sanLogin = (s: string) => (s.toLowerCase().replace(/[^a-z0-9]+/g, '').slic
 export async function issueProxyForUser(user: User, serverId: string, opts: { byAdmin?: boolean } = {}): Promise<ProxyAccount> {
   const server = repo.getServer(serverId);
   if (!server) throw new Error('Сервер не найден.');
+  if (!opts.byAdmin) {
+    if (!user.isActive) throw new Error('Доступ отключён.');
+    if (user.expiresAt && new Date(user.expiresAt) < new Date()) throw new Error('Срок действия доступа истёк.');
+  }
   if (!user.allowedServers.includes(serverId)) throw new Error('Сервер недоступен для этого пользователя.');
   const types = repo.availableProxyTypes(user, server);
   if (types.length === 0)

@@ -19,7 +19,6 @@ import { db } from '../db.js';
 
 const MAGIC = 'NOVPNBAK';
 const VERSION = 1;
-const KDF_ITERS = 200_000;
 
 /** Снять консистентный снимок базы во временный файл и вернуть его содержимое. */
 function snapshot(): Buffer {
