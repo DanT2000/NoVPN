@@ -86,7 +86,7 @@ cd novpn && git pull && ./install.sh
 ## Troubleshooting
 
 - **Панель не открывается / `install.sh` не дождался healthz** — логи:
-  `docker compose -f deploy/docker-compose.yml logs --tail=50 manager`.
+  `docker compose --env-file .env -f deploy/docker-compose.yml logs --tail=50 manager`.
 - **Красное предупреждение «база не изолирована»** — база не на постоянном томе и
   будет стёрта при обновлении. Убедитесь, что каталог базы примонтирован как том
   (`novpn_data:/data`).

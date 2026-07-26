@@ -60,8 +60,10 @@ if [ -z "${PUB}" ] || printf '%s' "$PUB" | grep -q 'panel.example.com'; then
 fi
 
 # 3) Сборка и запуск ────────────────────────────────────────────────
+# --env-file указываем явно: compose иначе ищет .env рядом с compose-файлом
+# (в deploy/), а он лежит в корне проекта.
 grn "Собираю и запускаю панель (${DC})…"
-$DC -f "$COMPOSE_FILE" up -d --build
+$DC --env-file .env -f "$COMPOSE_FILE" up -d --build
 
 # 4) Ожидание готовности ────────────────────────────────────────────
 PORT="$(grep -E '^PORT=' .env | head -1 | cut -d= -f2- || true)"; PORT="${PORT:-3000}"
@@ -77,5 +79,5 @@ for i in $(seq 1 30); do
 done
 echo
 red "Панель не ответила на /healthz за отведённое время. Проверьте логи:"
-echo "  $DC -f $COMPOSE_FILE logs --tail=50 manager"
+echo "  $DC --env-file .env -f $COMPOSE_FILE logs --tail=50 manager"
 exit 1
