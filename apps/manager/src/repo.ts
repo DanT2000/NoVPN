@@ -98,6 +98,12 @@ export interface NewUserRow {
 // «Бессрочно включено» для входа по коду. Сравнение в check-code — до этой даты.
 export const CODE_LOGIN_FOREVER = '2999-01-01T00:00:00.000Z';
 
+/** Срок жизни входа по коду из настроек: now + codeLoginDays (0 = бессрочно). */
+function codeLoginUntilFromSettings(): string {
+  const days = Number(getSettings()?.codeLoginDays ?? 15);
+  return days > 0 ? new Date(Date.now() + days * 86400000).toISOString() : CODE_LOGIN_FOREVER;
+}
+
 export function insertUser(u: NewUserRow): User {
   const id = newId('u');
   const now = nowIso();
@@ -115,19 +121,22 @@ export function insertUser(u: NewUserRow): User {
     default_server_id: u.defaultServerId, allowed_protocols: JSON.stringify(u.allowedProtocols), now,
     // Личная ссылка выдаётся сразу. Вход по коду — только если админ включил.
     access_token: crypto.randomBytes(18).toString('base64url'),
-    code_login_until: u.codeLoginEnabled ? CODE_LOGIN_FOREVER : null,
+    code_login_until: u.codeLoginEnabled ? codeLoginUntilFromSettings() : null,
     sub_token: crypto.randomBytes(18).toString('base64url'),
   });
   return getUser(id)!;
 }
 
-/** Включить/выключить вход по коду для пользователя. */
+/** Включить/выключить вход по коду для пользователя.
+ *  При включении срок берётся из настроек (codeLoginDays): через столько дней
+ *  вход по коду сам отключится. 0 = без срока. */
 export function setCodeLogin(userId: string, enabled: boolean): void {
-  db.prepare('UPDATE users SET code_login_until = ?, updated_at = ? WHERE id = ?').run(
-    enabled ? CODE_LOGIN_FOREVER : null,
-    nowIso(),
-    userId,
-  );
+  let until: string | null = null;
+  if (enabled) {
+    const days = Number(getSettings()?.codeLoginDays ?? 15);
+    until = days > 0 ? new Date(Date.now() + days * 86400000).toISOString() : CODE_LOGIN_FOREVER;
+  }
+  db.prepare('UPDATE users SET code_login_until = ?, updated_at = ? WHERE id = ?').run(until, nowIso(), userId);
 }
 
 export function updateUserFields(id: string, fields: Record<string, unknown>): User | null {

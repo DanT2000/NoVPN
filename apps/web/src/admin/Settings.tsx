@@ -28,6 +28,7 @@ export function Settings() {
   const [codeAttempts, setCodeAttempts] = useState(s?.codeAttempts ?? 5);
   const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 15);
   const [inactiveDisableDays, setInactiveDisableDays] = useState(s?.inactiveDisableDays ?? 0);
+  const [codeLoginDays, setCodeLoginDays] = useState(s?.codeLoginDays ?? 15);
   const [saving, setSaving] = useState(false);
 
   // Пароль администратора
@@ -127,6 +128,18 @@ export function Settings() {
     });
   };
 
+  // Настройки изменены? Тогда показываем липкую панель сохранения.
+  const dirty =
+    appName !== (s.appName ?? '') ||
+    domain !== (s.domain ?? '') ||
+    defaultServerId !== (s.defaultServerId ?? null) ||
+    JSON.stringify(defaultProtocols) !== JSON.stringify(s.defaultProtocols ?? []) ||
+    messageTemplate !== (s.messageTemplate ?? '') ||
+    codeAttempts !== (s.codeAttempts ?? 5) ||
+    codeCooldownMin !== (s.codeCooldownMin ?? 15) ||
+    inactiveDisableDays !== (s.inactiveDisableDays ?? 0) ||
+    codeLoginDays !== (s.codeLoginDays ?? 15);
+
   const save = async () => {
     setSaving(true);
     try {
@@ -141,6 +154,7 @@ export function Settings() {
         codeAttempts,
         codeCooldownMin,
         inactiveDisableDays,
+        codeLoginDays,
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
@@ -157,13 +171,32 @@ export function Settings() {
       </div>
 
       <div className="stack" style={{ gap: 16, maxWidth: 640 }}>
+        {/* Домен — отдельным заметным блоком: от него зависят все ссылки */}
+        <Panel title="Адрес сайта (домен)">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Адрес, по которому открывается панель. От него строятся ВСЕ ссылки: личные
+            ссылки пользователей, подписки Xray, привязка Telegram. Меняете домен — впишите
+            новый здесь и нажмите «Перезапустить панель».
+          </div>
+          <Field label="Домен">
+            <input
+              className="input mono"
+              placeholder={typeof window !== 'undefined' ? window.location.origin : 'https://vpn.example.ru'}
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+            />
+          </Field>
+          {!domain.trim() ? (
+            <div className="body small muted" style={{ marginTop: 6 }}>
+              Пока не задан — ссылки используют текущий адрес страницы.
+            </div>
+          ) : null}
+        </Panel>
+
         {/* Брендинг */}
-        <Panel title="Брендинг и домен">
+        <Panel title="Брендинг">
           <Field label="Название">
             <input className="input" value={appName} onChange={(e) => setAppName(e.target.value)} />
-          </Field>
-          <Field label="Основной домен">
-            <input className="input mono" value={domain} onChange={(e) => setDomain(e.target.value)} />
           </Field>
           <div className="row" style={{ gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             <div
@@ -246,6 +279,19 @@ export function Settings() {
                 onChange={(e) => setCodeCooldownMin(numOr(e.target.value, 15))}
               />
             </Field>
+            <Field label="Авто-отключение кода, дней (0 — не отключать)">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                value={codeLoginDays}
+                onChange={(e) => setCodeLoginDays(numOr(e.target.value, 15))}
+              />
+            </Field>
+          </div>
+          <div className="body small muted" style={{ marginTop: 8 }}>
+            Когда вы включаете пользователю вход по коду, он автоматически отключится через
+            указанное число дней. Основной способ — личная ссылка; код это временный запасной.
           </div>
         </Panel>
 
@@ -267,12 +313,6 @@ export function Settings() {
             собирается, поэтому такие устройства авто-отключение не затрагивает.
           </div>
         </Panel>
-
-        <div>
-          <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>
-            Сохранить настройки
-          </button>
-        </div>
 
         {/* Пароль администратора и перезапуск */}
         <Panel title="Доступ в панель">
@@ -356,6 +396,23 @@ export function Settings() {
           </Field>
         </Panel>
       </div>
+
+      {/* Липкая панель сохранения: появляется, когда что-то изменено, и «едет»
+          вместе с прокруткой — чтобы не пришлось искать кнопку внизу. */}
+      {dirty ? (
+        <div
+          style={{
+            position: 'sticky', bottom: 0, marginTop: 16, padding: '12px 0',
+            background: 'var(--bg-app)', borderTop: '1px solid var(--border)',
+            display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+          }}
+        >
+          <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>
+            {saving ? 'Сохраняем…' : 'Сохранить настройки'}
+          </button>
+          <span className="body small muted">Есть несохранённые изменения.</span>
+        </div>
+      ) : null}
     </>
   );
 }
