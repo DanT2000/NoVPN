@@ -3,6 +3,7 @@
 
 import type { User } from '@novpn/shared';
 import { dateLong } from './format';
+import { publicBase } from './urls';
 
 export function genUuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
@@ -18,7 +19,7 @@ export function buildMessage(
   url: string,
 ): string {
   const expires = user.expiresAt ? dateLong(user.expiresAt) : 'бессрочно';
-  const base = url.replace(/\/$/, '');
+  const base = publicBase(url);
   // Личная ссылка: человек переходит и сразу в кабинете, вводить ничего не надо.
   const link = user.accessToken ? `${base}/k/${user.accessToken}` : base;
   return template

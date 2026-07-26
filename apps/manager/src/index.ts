@@ -8,8 +8,7 @@ seedIfEmpty();
 
 const app = createApp();
 app.listen(config.port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[NoVPN manager] ${config.appName} слушает :${config.port} (mockAgent=${config.enableMockAgent})`);
+  console.log(`[NoVPN] панель слушает :${config.port}`);
   startSyncLoop();
   setTimeout(() => void startBot(), 5000); // поднять Telegram-бота, если включён
 });

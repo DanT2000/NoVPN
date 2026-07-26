@@ -152,19 +152,12 @@ export interface TelegramSettings {
 }
 
 export interface AppSettings {
-  appName: string;
-  logo: string | null;
   domain: string;
   defaultServerId: string | null;
   defaultProtocols: UserProtocol[];
   messageTemplate: string;
-  activeThresholdDays: number;
-  ipRetentionDays: number;
-  logsRetentionDays: number;
-  codeLength: number;
   codeAttempts: number;
   codeCooldownMin: number;
-  sessionTtlHours: number;
   /** Автоотключение неактивных устройств: если устройство не выходило на связь
    *  дольше N дней — отключаем его. 0 = не отключать. */
   inactiveDisableDays: number;

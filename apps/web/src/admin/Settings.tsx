@@ -20,7 +20,6 @@ export function Settings() {
   const { data, saveSettings, showToast, showConfirm } = useApp();
   const s = data?.settings;
 
-  const [appName, setAppName] = useState(s?.appName ?? '');
   const [domain, setDomain] = useState(s?.domain ?? '');
   const [defaultServerId, setDefaultServerId] = useState<string | null>(s?.defaultServerId ?? null);
   const [defaultProtocols, setDefaultProtocols] = useState<UserProtocol[]>(s?.defaultProtocols ?? []);
@@ -159,7 +158,6 @@ export function Settings() {
 
   // Настройки изменены? Тогда показываем липкую панель сохранения.
   const dirty =
-    appName !== (s.appName ?? '') ||
     domain !== (s.domain ?? '') ||
     defaultServerId !== (s.defaultServerId ?? null) ||
     JSON.stringify(defaultProtocols) !== JSON.stringify(s.defaultProtocols ?? []) ||
@@ -175,7 +173,6 @@ export function Settings() {
       // Сохраняем поверх s: неотредактированные поля сохраняют прежние значения.
       const input: AppSettings = {
         ...s,
-        appName,
         domain,
         defaultServerId,
         defaultProtocols,
@@ -220,26 +217,6 @@ export function Settings() {
               Пока не задан — ссылки используют текущий адрес страницы.
             </div>
           ) : null}
-        </Panel>
-
-        {/* Брендинг */}
-        <Panel title="Брендинг">
-          <Field label="Название">
-            <input className="input" value={appName} onChange={(e) => setAppName(e.target.value)} />
-          </Field>
-          <div className="row" style={{ gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div
-              aria-hidden
-              style={{
-                minWidth: 56, height: 56, borderRadius: 'var(--r-card)', flex: 'none', padding: '0 16px',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: 'var(--accent)', color: 'var(--text-on-accent)', fontSize: 22, fontWeight: 800, letterSpacing: '0.02em',
-              }}
-            >
-              {appName.trim() || 'NoVPN'}
-            </div>
-            <span className="small muted">Бренд — это текстовое название выше. Отдельный логотип не требуется.</span>
-          </div>
         </Panel>
 
         {/* Значения по умолчанию */}

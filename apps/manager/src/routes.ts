@@ -12,7 +12,6 @@ import type {
 } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { agentService } from './services/agent.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
@@ -70,7 +69,7 @@ router.get('/sub/:token', (req, res) => {
   // отдаём base64-список конфигов. Так человеку достаточно ОДНОЙ ссылки:
   // открыл — понял что делать, вставил в приложение — получил конфиги.
   if (String(req.headers.accept ?? '').includes('text/html')) {
-    const base = (repo.getSettings()?.domain || config.publicUrl || '').replace(/\/$/, '');
+    const base = repo.publicBaseUrl();
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.send(
       renderSubPage({

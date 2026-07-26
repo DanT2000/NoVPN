@@ -53,7 +53,17 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
   const { editServer, showToast, reload, showConfirm } = useApp();
   const [provBusy, setProvBusy] = useState<string | null>(null);
 
-  async function reinstall() {
+  function reinstall() {
+    showConfirm({
+      title: 'Установить / переустановить ПО?',
+      text:
+        'Установит по SSH xray/AmneziaWG (и прокси, если включены). Операция занимает несколько минут. ' +
+        'Если ключи сервера сохранены в панели — ранее выданные конфиги продолжат работать; иначе их придётся перевыпустить.',
+      confirmLabel: 'Установить',
+      onConfirm: () => runReinstall(),
+    });
+  }
+  async function runReinstall() {
     setProvBusy('install');
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {

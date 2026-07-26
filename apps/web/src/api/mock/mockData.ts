@@ -53,11 +53,10 @@ export const TELEGRAM: TelegramSettings = {
 };
 
 export const SETTINGS: AppSettings = {
-  appName: 'NoVPN', logo: null, domain: 'https://vpn.example.ru',
+  domain: 'https://vpn.example.ru',
   defaultServerId: 's1', defaultProtocols: ['xray', 'amneziawg'],
   messageTemplate: 'Ваш доступ NoVPN:\n\n{link}\n\nПерейдите по ссылке — откроется личный кабинет, вводить ничего не нужно. Там подключите устройство и получите конфигурацию.\n\nДействует до: {expires}',
-  activeThresholdDays: 7, ipRetentionDays: 30, logsRetentionDays: 90,
-  codeLength: 6, codeAttempts: 5, codeCooldownMin: 15, sessionTtlHours: 24, inactiveDisableDays: 0, codeLoginDays: 15,
+  codeAttempts: 5, codeCooldownMin: 15, inactiveDisableDays: 0, codeLoginDays: 15,
 };
 
 export const ADMIN_LOG: LogEntry[] = [

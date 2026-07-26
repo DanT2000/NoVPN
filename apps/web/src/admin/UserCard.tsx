@@ -10,6 +10,7 @@ import { Qr } from '../components/Qr';
 import { dateShort, daysLeft, gb, rel, DAY_MS } from '../lib/format';
 import { countActiveDevices, devStatusOf, serverAgentView, statusOf } from '../lib/status';
 import { copyText, downloadText } from '../lib/clipboard';
+import { publicBase } from '../lib/urls';
 
 const CATEGORIES = ['Общие', 'Семья', 'Друзья', 'Работа', 'Админ'] as const;
 const digits = (s: string) => s.replace(/\D+/g, '');
@@ -105,7 +106,7 @@ function UserCardInner({ user }: { user: User }) {
   // Домен берём из настроек, а если не задан — из адресной строки, чтобы
   // ссылка была рабочей сразу, без похода в настройки.
   const accessLink = user.accessToken
-    ? `${(data?.settings.domain || window.location.origin).replace(/\/$/, '')}/k/${user.accessToken}`
+    ? `${publicBase(data?.settings.domain)}/k/${user.accessToken}`
     : 'ссылка не выдана';
   const codeLoginActive = !!user.codeLoginUntil && new Date(user.codeLoginUntil) > new Date();
   const reissueLinkFor = () =>

@@ -8,6 +8,7 @@ import { EmptyState } from '../components/ui';
 import { dateShort, gb } from '../lib/format';
 import { buildMessage } from '../lib/gen';
 import { copyText, shareText } from '../lib/clipboard';
+import { publicBase } from '../lib/urls';
 
 export function UserCreated() {
   const { data, nav, goAdmin } = useApp();
@@ -35,7 +36,7 @@ function UserCreatedInner({ user }: { user: User }) {
   const { data, isMobile, goAdmin, showToast } = useApp();
   const template = data?.settings.messageTemplate ?? '';
   // Если домен в настройках не задан — берём текущий адрес сайта, чтобы {url} не был пустым.
-  const domain = (data?.settings.domain || (typeof window !== 'undefined' ? window.location.origin : '')) ?? '';
+  const domain = publicBase(data?.settings.domain);
   const [message, setMessage] = useState(() => buildMessage(template, user, domain));
   if (!data) return null;
 

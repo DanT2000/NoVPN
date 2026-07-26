@@ -58,7 +58,7 @@ export function Dashboard() {
 
   const stats = [
     { label: 'Активные пользователи', value: String(activeUsers), sub: `из ${users.length} всего` },
-    { label: 'Активные конфиги', value: String(activeDevices), sub: 'сейчас выдано' },
+    { label: 'Активные конфиги', value: String(activeDevices), sub: '' },
     { label: 'Трафик', value: gb(totalTraffic), sub: 'суммарно по серверам' },
     { label: 'Серверы', value: `${onlineServers}/${servers.length}`, sub: 'онлайн' },
   ];
@@ -77,7 +77,7 @@ export function Dashboard() {
             <div key={c.label} className="card">
               <div className="eyebrow" style={{ marginBottom: 10 }}>{c.label}</div>
               <div className="mono" style={{ fontSize: 22, fontWeight: 700 }}>{c.value}</div>
-              <div className="small muted" style={{ marginTop: 4 }}>{c.sub}</div>
+              {c.sub ? <div className="small muted" style={{ marginTop: 4 }}>{c.sub}</div> : null}
             </div>
           ))}
         </div>

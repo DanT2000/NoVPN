@@ -6,20 +6,13 @@ import { DEFAULT_APPS } from '@novpn/shared';
 import { db, getSetting, setSetting } from './db.js';
 
 const DEFAULT_SETTINGS: AppSettings = {
-  appName: 'NoVPN',
-  logo: null,
   domain: '',
   defaultServerId: null,
   defaultProtocols: ['xray', 'amneziawg'],
   messageTemplate:
     'Ваш доступ NoVPN:\n\n{link}\n\nПерейдите по ссылке — откроется личный кабинет, вводить ничего не нужно. Там подключите устройство и получите конфигурацию.\n\nДействует до: {expires}',
-  activeThresholdDays: 7,
-  ipRetentionDays: 30,
-  logsRetentionDays: 90,
-  codeLength: 6,
   codeAttempts: 5,
   codeCooldownMin: 15,
-  sessionTtlHours: 24,
   inactiveDisableDays: 0,
   codeLoginDays: 15,
 };

@@ -649,12 +649,20 @@ export function listDevicesOfUser(userId: string): Device[] {
 /** Данные публичной части. Без userId — только справочники (серверы, приложения):
  *  ни кодов, ни конфигов, ни чужих устройств. */
 /** Публичный адрес подписки Xray для пользователя. */
+/** Публичный базовый адрес панели СО СХЕМОЙ. Домен из настроек человек часто
+ *  вводит без https:// («panel.example.ru») — нормализуем, иначе ссылки-подписки
+ *  и адреса в /sub получаются битыми (VPN-приложению нужен полный URL). */
+export function publicBaseUrl(): string {
+  const raw = (getSettings()?.domain || config.publicUrl || '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
 export function subscriptionUrl(userId: string): string | null {
   const t = getSubToken(userId);
   if (!t) return null;
-  // Домен из настроек; если админ его не заполнил — публичный адрес из окружения.
-  const base = (getSettings()?.domain || config.publicUrl || '').replace(/\/$/, '');
-  return `${base}/sub/${t}`;
+  const base = publicBaseUrl();
+  return base ? `${base}/sub/${t}` : null;
 }
 
 export function buildPublicBootstrap(userId?: string): PublicBootstrapData {
