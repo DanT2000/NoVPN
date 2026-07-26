@@ -41,10 +41,17 @@ export async function issueForUser(
     throw new Error('Самостоятельная выдача конфигов на этом сервере временно отключена. Обратитесь к администратору.');
 
   if (protocol === 'xray') {
+    // Одна Xray-конфигурация работает на любом числе устройств. Если у
+    // пользователя на этом сервере уже есть активный Xray-конфиг — переиспользуем
+    // его (подписка одна на всех), а не плодим по конфигу на каждое устройство.
+    const existing = repo.findActiveXrayDevice(user.id, serverId);
+    if (existing) {
+      return { device: existing, link: existing.link ?? undefined, reused: true, subscriptionUrl: repo.subscriptionUrl(user.id) ?? undefined };
+    }
     const r = await createXrayCfg(server, name);
     const device = repo.insertDevice({ userId: user.id, name, serverId, protocol, uuid: r.uuid, publicKey: r.publicKey, link: r.link });
     repo.addHistory(user.id, `Выпущен конфиг «${name}» (Xray, ${server.name})`);
-    return { device, link: r.link };
+    return { device, link: r.link, subscriptionUrl: repo.subscriptionUrl(user.id) ?? undefined };
   }
   const r = await createAwgCfg(server, name);
   const device = repo.insertDevice({

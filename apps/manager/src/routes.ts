@@ -177,9 +177,13 @@ router.post('/api/public/devices', requireUserOrAdmin, async (req, res) => {
     const u = repo.getUser(targetId);
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
     if (!u.isActive) return res.status(403).json(err('disabled', 'Доступ отключён.'));
-    if (u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
-      return res.status(403).json(err('devices', 'Лимит устройств исчерпан.'));
     if (protocol !== 'xray' && protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Неизвестный протокол.'));
+    // Лимит устройств — только при создании НОВОГО конфига. Xray работает на
+    // любом числе устройств одной конфигурацией: если она уже есть, её
+    // переиспользование (та же подписка) лимитом не блокируется.
+    const reuseXray = protocol === 'xray' && !!repo.findActiveXrayDevice(u.id, String(serverId));
+    if (!reuseXray && u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
+      return res.status(403).json(err('devices', 'Лимит устройств исчерпан.'));
     const out = await issueForUser(u, String(name || 'Устройство'), String(serverId), protocol, { byAdmin: !!req.session.admin });
     res.json(out);
   } catch (e) {

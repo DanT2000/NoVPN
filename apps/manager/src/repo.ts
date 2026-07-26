@@ -167,6 +167,15 @@ export function getDeviceRow(id: string): { uuid: string | null; public_key: str
 export function countActiveDevices(userId: string): number {
   return (db.prepare('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_active = 1').get(userId) as { n: number }).n;
 }
+
+/** Активный Xray-конфиг пользователя на сервере (одна конфигурация работает на
+ *  любом числе устройств — не плодим по конфигу на устройство). null, если нет. */
+export function findActiveXrayDevice(userId: string, serverId: string): Device | null {
+  const r = db
+    .prepare("SELECT id FROM devices WHERE user_id = ? AND server_id = ? AND protocol = 'xray' AND is_active = 1 ORDER BY created_at DESC LIMIT 1")
+    .get(userId, serverId) as { id: string } | undefined;
+  return r ? getDevice(r.id) : null;
+}
 // Устройства сервера с ключами — для синхронизации трафика. Берём ВСЕ (в т.ч.
 // отозванные, но не удалённые): пользователь мог перевыпустить конфиг, а телефон
 // остался на старом пире — его трафик всё равно нужно показать.
