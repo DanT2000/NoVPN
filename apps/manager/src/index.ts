@@ -4,10 +4,11 @@ import { createApp } from './app.js';
 import { startSyncLoop } from './services/sync.js';
 import { startBot } from './services/telegram.js';
 
-// В production секрет подписи сессий обязателен — иначе панель поднялась бы на
-// известном дефолтном значении, и сессии можно было бы подделать.
-if (config.isProd && (!process.env.SESSION_SECRET || config.sessionSecret === 'dev-insecure-session-secret-change-me')) {
-  throw new Error('SESSION_SECRET не задан — обязателен в production (см. .env.example)');
+// В production секрет подписи сессий не должен быть небезопасным дефолтом: если
+// SESSION_SECRET забыли задать, config выводит стабильный секрет из ENCRYPTION_KEY.
+// Явно предупреждаем администратора задать SESSION_SECRET.
+if (config.isProd && !process.env.SESSION_SECRET) {
+  console.warn('[NoVPN] SESSION_SECRET не задан — использую производный ключ. Рекомендуется задать SESSION_SECRET явно.');
 }
 
 seedIfEmpty();
