@@ -4,7 +4,9 @@
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
 import * as repo from '../repo.js';
-import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic } from './sshServer.js';
+
+const PROXY_PROTOS = ['http', 'https', 'socks5'];
 
 let running = false;
 
@@ -24,6 +26,7 @@ export async function syncAllServers(): Promise<void> {
 
       const hasAwg = s.protocols.includes('amneziawg');
       const hasXray = s.protocols.includes('xray');
+      const hasProxy = (s.protocols as string[]).some((p) => PROXY_PROTOS.includes(p));
       const devices = repo.listServerDeviceKeys(s.id);
       const affected = new Set<string>();
       let serverBytes = 0;
@@ -100,8 +103,36 @@ export async function syncAllServers(): Promise<void> {
         }
       }
 
+      // --- Прокси (3proxy): трафик по логинам из логов, суточный файл ---
+      if (hasProxy) {
+        try {
+          const traffic = await sshReadProxyTraffic(s.id);
+          reachable = true;
+          const byLogin = new Map(traffic.map((t) => [t.login, t.bytes]));
+          const now = repo.nowIso();
+          for (const acc of repo.listServerProxyAccounts(s.id)) {
+            const raw = byLogin.get(acc.login);
+            if (raw == null) continue;
+            // raw — суммарный трафик за СЕГОДНЯ. При суточной ротации лога он
+            // падает (новый файл) → трактуем как сброс и берём весь raw.
+            const prev = repo.getProxyCounters(acc.id);
+            const delta = raw >= prev.rxRaw ? raw - prev.rxRaw : raw;
+            const total = prev.total + delta;
+            serverBytes += total;
+            repo.updateProxyAccountTraffic(acc.id, {
+              receivedBytes: total,
+              sentBytes: 0,
+              rxRaw: raw,
+              lastSeenAt: delta > 0 ? now : undefined,
+            });
+          }
+        } catch (e) {
+          repo.addJobError(s.name, `Синхронизация прокси: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
+        }
+      }
+
       // --- сервер без собираемой статистики: просто проверяем живость ---
-      if (!hasAwg && !hasXray) {
+      if (!hasAwg && !hasXray && !hasProxy) {
         try {
           await sshPing(s.id);
           reachable = true;

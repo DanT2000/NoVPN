@@ -217,6 +217,10 @@ export interface ProxyAccount {
   password: string;
   /** Готовые точки подключения (host:port) по каждому доступному типу. */
   endpoints: ProxyEndpoint[];
+  /** Суммарный трафик (ГБ) из логов 3proxy. */
+  trafficGb: number;
+  /** Когда через прокси последний раз шёл трафик. */
+  lastSeenAt: string | null;
   isActive: boolean;
   createdAt: string;
 }

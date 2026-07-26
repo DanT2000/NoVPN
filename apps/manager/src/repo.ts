@@ -196,6 +196,10 @@ interface ProxyRow {
   pass_enc: string;
   is_active: number;
   created_at: string;
+  received_bytes?: number;
+  sent_bytes?: number;
+  rx_raw?: number;
+  last_seen_at?: string | null;
 }
 
 export function findActiveProxyAccount(userId: string, serverId: string): ProxyRow | null {
@@ -225,6 +229,23 @@ export function deactivateProxyAccount(id: string): void {
 }
 export function listProxyAccountRowsOfUser(userId: string): ProxyRow[] {
   return db.prepare('SELECT * FROM proxy_accounts WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC').all(userId) as ProxyRow[];
+}
+/** Активные прокси-аккаунты сервера — для сопоставления логина с трафиком в sync. */
+export function listServerProxyAccounts(serverId: string): ProxyRow[] {
+  return db.prepare('SELECT * FROM proxy_accounts WHERE server_id = ? AND is_active = 1').all(serverId) as ProxyRow[];
+}
+export function getProxyCounters(id: string): { total: number; rxRaw: number } {
+  const r = db.prepare('SELECT received_bytes, sent_bytes, rx_raw FROM proxy_accounts WHERE id = ?').get(id) as
+    | { received_bytes: number | null; sent_bytes: number | null; rx_raw: number | null }
+    | undefined;
+  return { total: (r?.received_bytes ?? 0) + (r?.sent_bytes ?? 0), rxRaw: r?.rx_raw ?? 0 };
+}
+export function updateProxyAccountTraffic(id: string, f: { receivedBytes: number; sentBytes: number; rxRaw: number; lastSeenAt?: string }): void {
+  db.prepare(
+    'UPDATE proxy_accounts SET received_bytes = ?, sent_bytes = ?, rx_raw = ?' +
+      (f.lastSeenAt ? ', last_seen_at = ?' : '') +
+      ' WHERE id = ?',
+  ).run(...(f.lastSeenAt ? [f.receivedBytes, f.sentBytes, f.rxRaw, f.lastSeenAt, id] : [f.receivedBytes, f.sentBytes, f.rxRaw, id]));
 }
 
 /** Доступные пользователю на сервере типы прокси = разрешено пользователю ∩
@@ -258,6 +279,8 @@ export function buildProxyAccountView(row: ProxyRow): ProxyAccount | null {
     login: row.login,
     password: decryptSecret(row.pass_enc),
     endpoints,
+    trafficGb: ((row.received_bytes ?? 0) + (row.sent_bytes ?? 0)) / 1e9,
+    lastSeenAt: row.last_seen_at ?? null,
     isActive: !!row.is_active,
     createdAt: row.created_at,
   };

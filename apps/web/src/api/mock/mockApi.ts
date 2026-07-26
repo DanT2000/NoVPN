@@ -224,7 +224,8 @@ export const mockApi: ApiClient = {
     return {
       id: nextId('px'), userId: mockUserId, serverId, serverName: s?.name ?? '', serverHost: s?.host ?? 'host',
       login: 'demo' + Math.random().toString(36).slice(2, 7), password: Math.random().toString(36).slice(2, 12),
-      endpoints: [{ type: 'http', host: s?.host ?? 'host', port: 8080 }], isActive: true, createdAt: nowIso(),
+      endpoints: [{ type: 'http', host: s?.host ?? 'host', port: 8080 }], trafficGb: 0, lastSeenAt: null,
+      isActive: true, createdAt: nowIso(),
     };
   },
   async revokeProxyAccount(_id: string): Promise<Ok> {

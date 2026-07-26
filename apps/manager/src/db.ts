@@ -195,7 +195,11 @@ CREATE TABLE IF NOT EXISTS proxy_accounts (
   login TEXT NOT NULL,
   pass_enc TEXT NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  received_bytes INTEGER NOT NULL DEFAULT 0,
+  sent_bytes INTEGER NOT NULL DEFAULT 0,
+  rx_raw INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
@@ -231,6 +235,12 @@ for (const stmt of [
   'ALTER TABLE users ADD COLUMN telegram_chat_id INTEGER',
   // Типы прокси, которые пользователю разрешено выдать себе (JSON-массив).
   'ALTER TABLE users ADD COLUMN allowed_proxies TEXT',
+  // Трафик прокси-аккаунта (сумма из логов 3proxy). rx_raw — сырое показание
+  // за текущий день (для вычисления прироста; при ротации лога сбрасывается).
+  'ALTER TABLE proxy_accounts ADD COLUMN received_bytes INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE proxy_accounts ADD COLUMN sent_bytes INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE proxy_accounts ADD COLUMN rx_raw INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE proxy_accounts ADD COLUMN last_seen_at TEXT',
 ]) {
   try {
     db.exec(stmt);

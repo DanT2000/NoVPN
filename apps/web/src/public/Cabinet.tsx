@@ -209,6 +209,7 @@ export function Cabinet() {
                   <span className="mono">{e.host}:{e.port}</span>
                 </Row>
               ))}
+              <Row label="Трафик"><span>{gb(a.trafficGb)}</span></Row>
               <button
                 className="btn btn-primary btn-sm"
                 onClick={async () => {

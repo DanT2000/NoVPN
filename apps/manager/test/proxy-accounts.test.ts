@@ -49,6 +49,23 @@ test('CRUD аккаунта: insert → findActive → deactivate', () => {
   assert.equal(repo.findActiveProxyAccount(user.id, server.id), null);
 });
 
+test('учёт трафика: накопление и суточный сброс', () => {
+  const { server, user } = seed(['http']);
+  const row = repo.insertProxyAccountRow({ userId: user.id, serverId: server.id, login: 'u-traf', passEnc: encryptSecret('p') });
+  // Эмуляция цикла sync: raw — сегодняшний суммарный трафик, копим прирост.
+  function tick(raw: number) {
+    const prev = repo.getProxyCounters(row.id);
+    const delta = raw >= prev.rxRaw ? raw - prev.rxRaw : raw; // падение = ротация суток
+    repo.updateProxyAccountTraffic(row.id, { receivedBytes: prev.total + delta, sentBytes: 0, rxRaw: raw });
+  }
+  tick(1000); // первый замер
+  tick(3000); // прирост 2000
+  assert.equal(repo.getProxyCounters(row.id).total, 3000);
+  tick(500); // лог сброшен (новый день) → прибавляем весь raw
+  assert.equal(repo.getProxyCounters(row.id).total, 3500);
+  assert.equal(repo.buildProxyAccountView(repo.getProxyAccountRow(row.id)!)!.trafficGb, 3500 / 1e9);
+});
+
 test('buildProxyAccountView: пароль расшифрован, эндпоинты по правам пользователя', () => {
   const { server, user } = seed(['http', 'https']); // без socks
   const row = repo.insertProxyAccountRow({ userId: user.id, serverId: server.id, login: 'u-xyz', passEnc: encryptSecret('p@ss') });

@@ -491,10 +491,13 @@ if [ ! -x /usr/local/bin/3proxy ]; then
   cd 3proxy-src; ln -sf Makefile.Linux Makefile; make -j2 >/tmp/3p.log 2>&1
   BIN=$(find . -name 3proxy -type f -perm -u+x | head -1); install -m0755 "$BIN" /usr/local/bin/3proxy
 fi
-mkdir -p /etc/3proxy
+mkdir -p /etc/3proxy /var/log/3proxy
 {
   echo "nscache 65536"; echo "nserver 1.1.1.1"; echo "nserver 8.8.8.8"
   echo "timeouts 1 5 30 60 180 1800 15 60"
+  # Учёт трафика по пользователям: строка на закрытие соединения. D 7 — суточная
+  # ротация, хранить 7 файлов (диск ограничен). Формат: время логин байты_вх байты_исх.
+  echo "log /var/log/3proxy/3p.log D 7"; echo 'logformat "L%t %U %I %O"'
   echo "users $PUSER:CL:$PPASS"; echo "auth strong"; echo "allow $PUSER"
   ${wantHttp ? 'echo "proxy -n -a -p$HTTP_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
   ${wantSocks ? 'echo "socks -p$SOCKS_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
@@ -621,6 +624,21 @@ docker exec amnezia-xray xray api statsquery --server=127.0.0.1:10085 --reset 2>
   return res;
 }
 
+/** Собрать трафик прокси по логинам из логов 3proxy (свежий суточный файл).
+ *  Возвращает суммарные байты за текущий день на логин; накопление и обработку
+ *  суточного сброса делает вызывающий (как у AWG). Пусто, если логов нет. */
+export async function sshReadProxyTraffic(serverId: string): Promise<Array<{ login: string; bytes: number }>> {
+  // Берём самый свежий файл лога (= сегодняшний) и суммируем %I+%O по логинам.
+  const cmd = `f=$(ls -t /var/log/3proxy/3p.log.* 2>/dev/null | head -1); [ -n "$f" ] && awk '$2!="-"{t[$2]+=$3+$4} END{for(u in t)print u" "t[u]}' "$f" || true`;
+  const out = await runScript(creds(serverId), cmd, 30000);
+  const res: Array<{ login: string; bytes: number }> = [];
+  for (const line of out.split('\n')) {
+    const p = line.trim().split(/\s+/);
+    if (p.length >= 2 && p[0]) res.push({ login: p[0], bytes: Number(p[1]) || 0 });
+  }
+  return res;
+}
+
 /** Лёгкая проверка живости сервера по SSH (для серверов без AWG-статистики).
  *  Бросает, если сервер не ответил. */
 export async function sshPing(serverId: string): Promise<void> {
@@ -671,6 +689,10 @@ for ln in lines:
         header.append(s)
 if mode=='add': users[login]=passwd
 elif mode=='remove': users.pop(login,None)
+# гарантируем логирование трафика (для уже установленных серверов без него)
+if not any(h.startswith('log ') for h in header):
+    header.append('log /var/log/3proxy/3p.log D 7')
+    header.append('logformat "L%t %U %I %O"')
 out=list(header)
 if users:
     out.append('users '+' '.join('%s:CL:%s'%(u,pw) for u,pw in users.items()))
@@ -682,6 +704,7 @@ out+=services
 open(p,'w').write('\\n'.join(out)+'\\n')
 print('OK users=%d'%len(users))`;
   return `set -e
+mkdir -p /var/log/3proxy
 python3 - '${mode}' '${login}' '${pass}' <<'PY'
 ${py}
 PY
