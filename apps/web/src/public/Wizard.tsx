@@ -95,11 +95,15 @@ export function Wizard() {
     setRawStep(4);
   };
 
+  // Имя необязательно: если не задали — «Устройство N». Для Xray-подписки его
+  // и не меняют, так что заставлять придумывать имя ни к чему.
+  const defaultName = `Устройство ${data.devices.filter((d) => d.userId === user.id).length + 1}`;
+
   const doIssue = async () => {
     if (!chosenServer || !effProto || issuing) return;
     setIssuing(true);
     try {
-      const res = await issueDevice({ userId: user.id, name: name.trim(), serverId: chosenServer.id, protocol: effProto });
+      const res = await issueDevice({ userId: user.id, name: name.trim() || defaultName, serverId: chosenServer.id, protocol: effProto });
       setResult(res);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не удалось создать конфигурацию');
@@ -145,17 +149,19 @@ export function Wizard() {
         </div>
       </div>
 
-      {/* ШАГ 1 — имя */}
+      {/* ШАГ 1 — имя (необязательно) */}
       {step === 1 ? (
         <div className="stack" style={{ gap: 14 }}>
-          <p className="body small" style={{ margin: 0 }}>Назовите устройство, чтобы потом его узнать.</p>
-          <input className="input" placeholder="Например, Телефон" aria-label="Название устройства" value={name} onChange={(e) => setName(e.target.value)} />
+          <p className="body small" style={{ margin: 0 }}>
+            Можете назвать устройство, чтобы потом его узнать. Не обязательно — по умолчанию «{defaultName}».
+          </p>
+          <input className="input" placeholder={defaultName} aria-label="Название устройства" value={name} onChange={(e) => setName(e.target.value)} />
           <div className="chip-row">
             {['Телефон', 'Ноутбук', 'Планшет', 'ПК'].map((q) => (
               <button key={q} type="button" className="chip chip-sm" onClick={() => setName(q)}>{q}</button>
             ))}
           </div>
-          <button className="btn btn-primary btn-lg" disabled={!name.trim()} onClick={next}>Далее</button>
+          <button className="btn btn-primary btn-lg" onClick={next}>Далее</button>
         </div>
       ) : null}
 

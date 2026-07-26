@@ -29,7 +29,7 @@ const NAV: NavItem[] = [
 ];
 
 export function AdminShell() {
-  const { adminAuthed, nav, goAdmin, adminLogout, isMobile } = useApp();
+  const { adminAuthed, mustChangePassword, nav, goAdmin, adminLogout, isMobile } = useApp();
 
   if (!adminAuthed) return <AdminLogin />;
 
@@ -38,6 +38,21 @@ export function AdminShell() {
 
   const content = (
     <>
+      {/* Первый запуск / стандартный пароль — просим сменить, пока не сменён. */}
+      {mustChangePassword && route !== 'settings' ? (
+        <div className="notice notice-amber" style={{ marginBottom: 14 }}>
+          <b>Стандартный пароль администратора.</b> Панель доступна из интернета —
+          смените пароль в{' '}
+          <button
+            type="button"
+            onClick={() => goAdmin('settings')}
+            style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer', font: 'inherit' }}
+          >
+            Настройках
+          </button>{' '}
+          → «Доступ в панель».
+        </div>
+      ) : null}
       {route === 'dashboard' && <Dashboard />}
       {route === 'users' && <Users />}
       {route === 'user-create' && <UserCreate />}

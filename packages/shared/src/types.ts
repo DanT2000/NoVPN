@@ -162,6 +162,9 @@ export interface AppSettings {
   codeAttempts: number;
   codeCooldownMin: number;
   sessionTtlHours: number;
+  /** Автоотключение неактивных устройств: если устройство не выходило на связь
+   *  дольше N дней — отключаем его. 0 = не отключать. */
+  inactiveDisableDays: number;
 }
 
 export interface LogEntry {

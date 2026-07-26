@@ -129,7 +129,7 @@ export interface ApiClient {
   deleteDevice(deviceId: string): Promise<Ok>;
 
   // ── admin: auth ──
-  adminLogin(password: string): Promise<{ ok: boolean }>;
+  adminLogin(password: string): Promise<{ ok: boolean; mustChangePassword?: boolean }>;
   adminLogout(): Promise<Ok>;
   /** Сменить пароль администратора. */
   changeAdminPassword(current: string, next: string): Promise<Ok>;

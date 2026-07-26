@@ -64,6 +64,8 @@ interface AppContextValue {
   /** Сообщение, если вход по личной ссылке не удался. */
   linkNotice: string | null;
   adminAuthed: boolean;
+  /** Пароль админа ещё дефолтный — панель просит сменить. */
+  mustChangePassword: boolean;
   nav: NavState;
   isMobile: boolean;
 
@@ -135,6 +137,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   /** Ссылка не сработала (протухла/отозвана) — показываем это на входе. */
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const [adminAuthed, setAdminAuthed] = useState(false);
+  // Пароль администратора всё ещё стандартный («admin») — показываем предупреждение.
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [isMobile, setIsMobile] = useState(
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 860px)').matches : false,
   );
@@ -300,9 +304,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // ── admin auth ──
   const adminLogin = useCallback(async (password: string) => {
-    const { ok } = await api.adminLogin(password);
+    const { ok, mustChangePassword } = await api.adminLogin(password);
     if (ok) {
       setAdminAuthed(true);
+      setMustChangePassword(!!mustChangePassword);
       // Полные данные панели доступны только теперь — до входа сервер их не отдавал.
       await reload();
     }
@@ -448,7 +453,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<AppContextValue>(
     () => ({
-      loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, nav, isMobile,
+      loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, mustChangePassword, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin,
       setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice,
@@ -458,7 +463,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       saveTelegram, saveApps, saveSettings,
     }),
     [
-      loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, nav, isMobile,
+      loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, mustChangePassword, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,

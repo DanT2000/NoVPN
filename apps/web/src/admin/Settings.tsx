@@ -27,6 +27,7 @@ export function Settings() {
   const [messageTemplate, setMessageTemplate] = useState(s?.messageTemplate ?? '');
   const [codeAttempts, setCodeAttempts] = useState(s?.codeAttempts ?? 5);
   const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 15);
+  const [inactiveDisableDays, setInactiveDisableDays] = useState(s?.inactiveDisableDays ?? 0);
   const [saving, setSaving] = useState(false);
 
   // Пароль администратора
@@ -139,6 +140,7 @@ export function Settings() {
         messageTemplate,
         codeAttempts,
         codeCooldownMin,
+        inactiveDisableDays,
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
@@ -244,6 +246,25 @@ export function Settings() {
                 onChange={(e) => setCodeCooldownMin(numOr(e.target.value, 15))}
               />
             </Field>
+          </div>
+        </Panel>
+
+        {/* Автоотключение неактивных устройств */}
+        <Panel title="Неактивные устройства">
+          <Field label="Отключать после простоя, дней (0 — не отключать)">
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={inactiveDisableDays}
+              onChange={(e) => setInactiveDisableDays(numOr(e.target.value, 0))}
+              style={{ maxWidth: 200 }}
+            />
+          </Field>
+          <div className="body small muted" style={{ marginTop: 8 }}>
+            Если устройство не выходит на связь дольше указанного срока, оно автоматически
+            отключается. Отслеживается активность AmneziaWG; у Xray активность пока не
+            собирается, поэтому такие устройства авто-отключение не затрагивает.
           </div>
         </Panel>
 

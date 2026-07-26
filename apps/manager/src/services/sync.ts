@@ -11,6 +11,13 @@ export async function syncAllServers(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    // Автоотключение неактивных устройств (если включено в настройках).
+    try {
+      const days = Number(repo.getSettings()?.inactiveDisableDays ?? 0);
+      if (days > 0) repo.disableInactiveDevices(days);
+    } catch (e) {
+      repo.addJobError('панель', `Автоотключение устройств: ${e instanceof Error ? e.message : 'ошибка'}`);
+    }
     for (const s of repo.listServers()) {
       if (!(await sshHasSshAccess(s.id))) continue;
 

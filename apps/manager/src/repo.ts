@@ -192,6 +192,32 @@ export function getDeviceCounters(id: string): { rxTotal: number; txTotal: numbe
   };
 }
 
+/**
+ * Отключить устройства, которые не выходили на связь дольше N дней.
+ * ВАЖНО: last_seen_at пишется только для AmneziaWG (по handshake). У Xray
+ * активность пока не отслеживается, поэтому его устройства сюда не попадают —
+ * это осознанно: не отключаем то, о неактивности чего не знаем наверняка.
+ * Возвращает число отключённых.
+ */
+export function disableInactiveDevices(days: number): number {
+  if (!days || days <= 0) return 0;
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  // Только AmneziaWG: по нему у нас есть достоверная активность (handshake).
+  // Явный фильтр, а не расчёт на NULL у Xray — чтобы поведение совпадало с тем,
+  // что написано в настройках, даже если last_seen когда-то попадёт к Xray.
+  const rows = db
+    .prepare(
+      "SELECT id, user_id, name FROM devices WHERE is_active = 1 AND protocol = 'amneziawg' AND last_seen_at IS NOT NULL AND last_seen_at < ?",
+    )
+    .all(cutoff) as Array<{ id: string; user_id: string | null; name: string }>;
+  for (const r of rows) {
+    db.prepare('UPDATE devices SET is_active = 0, revoked_at = ? WHERE id = ?').run(nowIso(), r.id);
+    if (r.user_id) addHistory(r.user_id, `Устройство «${r.name}» отключено автоматически: неактивно более ${days} дн`);
+  }
+  if (rows.length) addLog(`Автоотключение неактивных устройств: ${rows.length}`);
+  return rows.length;
+}
+
 /** Пересчёт расхода трафика и последней активности пользователя из ВСЕХ его устройств. */
 export function recomputeUserUsage(userId: string): void {
   const row = db

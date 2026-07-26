@@ -20,6 +20,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   codeAttempts: 5,
   codeCooldownMin: 15,
   sessionTtlHours: 24,
+  inactiveDisableDays: 0,
 };
 
 const DEFAULT_TELEGRAM: TelegramSettings = {

@@ -56,7 +56,7 @@ export const httpApi: ApiClient = {
   revokeDevice: (id) => req<Ok>('POST', `/api/public/devices/${id}/revoke`),
   deleteDevice: (id) => req<Ok>('DELETE', `/api/public/devices/${id}`),
 
-  adminLogin: (password) => req<{ ok: boolean }>('POST', '/api/admin/login', { password }),
+  adminLogin: (password) => req<{ ok: boolean; mustChangePassword?: boolean }>('POST', '/api/admin/login', { password }),
   adminLogout: () => req<Ok>('POST', '/api/admin/logout'),
   changeAdminPassword: (current, next) => req<Ok>('POST', '/api/admin/password', { current, next }),
   restartPanel: () => req<Ok>('POST', '/api/admin/restart'),

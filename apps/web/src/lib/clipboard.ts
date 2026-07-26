@@ -78,7 +78,15 @@ export function downloadUrl(filename: string, url: string): void {
 }
 
 export function openUrl(url: string): void {
-  window.open(url, '_blank', 'noopener,noreferrer');
+  // http(s) — обычная вкладка. Кастомные схемы (vpn://, happ://, v2raytun://…)
+  // через window.open('_blank') НЕ открывают приложение: браузер молча создаёт
+  // пустую вкладку. Навигация в текущем окне отдаёт ссылку ОС, и она запускает
+  // установленное приложение (Android BROWSABLE-intent, Windows scheme-handler).
+  if (/^https?:\/\//i.test(url)) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } else {
+    window.location.href = url;
+  }
 }
 
 /** true — поделились нативно; false — Web Share недоступен (нужен fallback-copy). */
