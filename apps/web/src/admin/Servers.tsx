@@ -242,8 +242,16 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
           <Chip label="SOCKS5" size="sm" active={pxSocks} onClick={() => setPxSocks((v) => !v)} />
         </div>
         <span className="small muted">
-          3proxy (HTTP/SOCKS5) + certbot/stunnel (HTTPS). Для HTTPS нужен домен (не IP) и свободный порт 80.
+          3proxy (HTTP/SOCKS5) + certbot/stunnel (HTTPS).
         </span>
+        {pxHttps ? (
+          <div className="notice notice-amber small" style={{ marginTop: 6 }}>
+            <b>Для HTTPS-прокси нужен домен и свободный порт 80.</b> Адрес сервера должен быть
+            доменом (не IP) и указывать на этот сервер — по нему certbot выпустит TLS-сертификат.
+            На время выпуска порт <b>80</b> должен быть свободен (не занят другим веб-сервером),
+            иначе установка прервётся. HTTPS-прокси слушает порт 8443.
+          </div>
+        ) : null}
         {pxErr ? <div className="notice notice-red small">{pxErr}</div> : null}
         {pxResult ? <ProxyBox proxy={pxResult} /> : null}
         <div className="row" style={{ gap: 8, marginTop: 8 }}>
