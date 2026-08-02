@@ -68,10 +68,16 @@ router.get('/sub/:token', (req, res) => {
   if (!u || !u.isActive) return res.status(404).send('');
   if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
 
-  const links = repo
-    .listDevicesOfUser(u.id)
-    .filter((d) => d.isActive && d.protocol === 'xray' && d.link)
-    .map((d) => d.link!);
+  // Квота исчерпана — не отдаём конфиги (клиент увидит это по Subscription-Userinfo
+  // ниже и перестанет подключаться). Раньше подписка продолжала слать конфиги
+  // даже при превышении лимита трафика.
+  const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
+  const links = overQuota
+    ? []
+    : repo
+        .listDevicesOfUser(u.id)
+        .filter((d) => d.isActive && d.protocol === 'xray' && d.link)
+        .map((d) => d.link!);
 
   // Один адрес — два ответа. Браузер просит text/html: показываем страницу с
   // приложениями и инструкцией. VPN-приложение просит что угодно другое:

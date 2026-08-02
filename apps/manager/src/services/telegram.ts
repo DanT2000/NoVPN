@@ -188,8 +188,10 @@ function siteUrl(): string {
 
 const PROTO_LABEL: Record<string, string> = { xray: 'Xray (VLESS)', amneziawg: 'AmneziaWG' };
 
-function findUser(handle: string) {
-  return repo.listUsers().find((u) => u.telegram === handle);
+// Идентификация по неизменяемому chat_id (безопасно от подмены @username);
+// handle — только фолбэк для legacy-привязок без chat_id.
+function findUser(chatId: number, handle: string) {
+  return repo.findBotUser(chatId, handle);
 }
 
 function mainMenu(user: { name: string; deviceLimit: number | null; id: string }): { text: string; kb: Kb } {
@@ -222,13 +224,13 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
   const text = (msg.text as string).trim();
   const handle = handleOf(msg.from ?? {}, chatId);
   // Бэкофилл chat_id для уже привязанных (поле telegram хранит только handle).
-  { const l = findUser(handle); if (l) repo.setTelegramChatId(l.id, chatId); }
+  { const l = findUser(chatId, handle); if (l) repo.setTelegramChatId(l.id, chatId); }
 
   // Команды меню/конфига для уже привязанных. «/start <payload>» с полезной
   // нагрузкой — это привязка, её пропускаем ниже, поэтому исключаем.
   const isStartWithPayload = /^\/start\s+\S/.test(text);
   if ((/^\/(menu|config|start$)/i.test(text) || /меню|получить конфиг/i.test(text)) && !isStartWithPayload) {
-    const linked = findUser(handle);
+    const linked = findUser(chatId, handle);
     if (linked) {
       if (/config|получить конфиг/i.test(text)) return startGetConfig(chatId, linked);
       return showMenu(chatId, linked);
@@ -242,7 +244,7 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
   if (text.startsWith('/start')) {
     payload = text.replace('/start', '').trim();
     if (!payload) {
-      const linked = findUser(handle);
+      const linked = findUser(chatId, handle);
       if (linked) return showMenu(chatId, linked);
       await send(chatId, 'Привет! Чтобы привязать Telegram, откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
       return;
@@ -268,7 +270,7 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
     user = repo.getUserByAccessToken(payload);
   }
   if (!user) {
-    const linked = findUser(handle);
+    const linked = findUser(chatId, handle);
     if (linked) return showMenu(chatId, linked);
     await send(chatId, 'Не удалось привязать. Откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
     return;
@@ -289,7 +291,7 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
   } catch {
     /* игнор */
   }
-  const user = findUser(handle);
+  const user = findUser(chatId, handle);
   if (!user) {
     await send(chatId, 'Сначала привяжите Telegram: откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
     return;

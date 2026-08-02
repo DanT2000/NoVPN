@@ -71,6 +71,8 @@ export function Telegram() {
     setTestResult(null);
     try {
       setTestResult(await api.testTelegram(token.trim()));
+    } catch (e) {
+      setTestResult({ ok: false, message: e instanceof Error ? e.message : 'Не удалось проверить бота' });
     } finally {
       setTesting(false);
     }

@@ -321,7 +321,16 @@ function UserCardInner({ user }: { user: User }) {
                 Отключить
               </button>
             ) : (
-              <button className="btn btn-secondary" onClick={() => void setUserActive(user.id, true)}>
+              <button
+                className="btn btn-secondary"
+                onClick={async () => {
+                  try {
+                    await setUserActive(user.id, true);
+                  } catch (e) {
+                    showToast(e instanceof Error ? e.message : 'Не удалось включить');
+                  }
+                }}
+              >
                 Включить
               </button>
             )}
@@ -702,8 +711,12 @@ function UserCardInner({ user }: { user: User }) {
                       <button
                         className="btn btn-outline btn-sm"
                         onClick={async () => {
-                          await reissueDevice(d.id);
-                          showToast('Конфиг перевыпущен');
+                          try {
+                            await reissueDevice(d.id);
+                            showToast('Конфиг перевыпущен');
+                          } catch (e) {
+                            showToast(e instanceof Error ? e.message : 'Не удалось перевыпустить');
+                          }
                         }}
                       >
                         Перевыпустить

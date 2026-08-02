@@ -15,7 +15,7 @@ const COMPAT_OPTIONS: Array<{ value: CompatValue; label: string }> = [
   { value: 'amnezia-app', label: 'AmneziaVPN' },
   { value: 'amneziawg', label: 'AmneziaWG' },
 ];
-const MAX_APP_FILE_MB = 40;
+const MAX_APP_FILE_MB = 20;
 
 function kindLabel(compat: AppClient['compat']): string {
   if (compat.includes('xray')) return 'Xray · VLESS-ссылка + QR';
@@ -97,6 +97,11 @@ export function AppsAdmin() {
     try {
       await saveApps(localApps);
       showToast('Сохранено');
+    } catch (e) {
+      // Раньше ошибка (напр. 413 — файл больше лимита тела) терялась молча:
+      // тост «Сохранено» не показывался, но и ошибки не было видно.
+      const msg = e instanceof Error ? e.message : 'Не удалось сохранить';
+      showToast(/413|large|payload/i.test(msg) ? 'Файл слишком большой — используйте ссылку на скачивание' : msg);
     } finally {
       setSaving(false);
     }

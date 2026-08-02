@@ -168,6 +168,8 @@ export function ServerWizard() {
     setTesting(true);
     try {
       setAudit(await api.testServerConnection(buildInput()));
+    } catch (e) {
+      setAudit({ ok: false, audit: [{ name: 'Проверка соединения', ok: false, note: e instanceof Error ? e.message : 'Не удалось выполнить проверку' }] });
     } finally {
       setTesting(false);
     }

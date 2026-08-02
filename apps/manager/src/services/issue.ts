@@ -39,6 +39,10 @@ export async function issueForUser(
   if (!opts.byAdmin) {
     if (!user.isActive) throw new Error('Доступ отключён.');
     if (user.expiresAt && new Date(user.expiresAt) < new Date()) throw new Error('Срок действия доступа истёк.');
+    // Квота: раньше лимит трафика блокировал только вход, но не выпуск конфигов —
+    // вошедший с исчерпанной квотой продолжал плодить конфиги. Теперь проверяем.
+    if (user.trafficLimitGb != null && user.trafficUsedGb >= user.trafficLimitGb)
+      throw new Error('Лимит трафика исчерпан. Обратитесь к администратору.');
   }
   if (!user.allowedServers.includes(serverId)) throw new Error('Сервер недоступен для этого пользователя.');
   if (!user.allowedProtocols.includes(protocol)) throw new Error('Протокол недоступен для этого пользователя.');
@@ -119,6 +123,8 @@ export async function issueProxyForUser(user: User, serverId: string, opts: { by
   if (!opts.byAdmin) {
     if (!user.isActive) throw new Error('Доступ отключён.');
     if (user.expiresAt && new Date(user.expiresAt) < new Date()) throw new Error('Срок действия доступа истёк.');
+    if (user.trafficLimitGb != null && user.trafficUsedGb >= user.trafficLimitGb)
+      throw new Error('Лимит трафика исчерпан. Обратитесь к администратору.');
   }
   if (!user.allowedServers.includes(serverId)) throw new Error('Сервер недоступен для этого пользователя.');
   const types = repo.availableProxyTypes(user, server);

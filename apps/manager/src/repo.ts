@@ -546,6 +546,25 @@ export function setTelegramChatId(userId: string, chatId: number): void {
   );
 }
 
+/** Пользователь по НЕИЗМЕНЯЕМОМУ chat_id Telegram. */
+export function getUserByTelegramChatId(chatId: number): User | null {
+  const r = db.prepare('SELECT id FROM users WHERE telegram_chat_id = ?').get(chatId) as { id: string } | undefined;
+  return r ? getUser(r.id) : null;
+}
+
+/** Идентификация пользователя в боте. По неизменяемому chat_id (безопасно), а по
+ *  handle (@username) — ТОЛЬКО для legacy-привязок без сохранённого chat_id.
+ *  username в Telegram переиспользуемы: матчить уже привязанного (с chat_id) по
+ *  handle нельзя, иначе новый владелец чужого username захватит аккаунт. */
+export function findBotUser(chatId: number, handle: string): User | null {
+  const byChat = getUserByTelegramChatId(chatId);
+  if (byChat) return byChat;
+  const r = db.prepare('SELECT id FROM users WHERE telegram = ? AND telegram_chat_id IS NULL').get(handle) as
+    | { id: string }
+    | undefined;
+  return r ? getUser(r.id) : null;
+}
+
 /** Привязанные к Telegram пользователи с известным chat_id — цели рассылки. */
 export function listTelegramTargets(): Array<{ id: string; name: string; chatId: number }> {
   return (
@@ -574,7 +593,10 @@ export function getTelegramSafe(): TelegramSettings {
     tokenEnc?: string;
     proxyPassEnc?: string;
   };
-  return safe;
+  // linkedUserIds раньше не заполнялся (всегда []), из-за чего раздел «Привязанные
+  // пользователи» в панели был всегда пуст. Формируем из пользователей с привязкой.
+  const linkedUserIds = (db.prepare('SELECT id FROM users WHERE telegram IS NOT NULL').all() as Array<{ id: string }>).map((r) => r.id);
+  return { ...safe, linkedUserIds };
 }
 /** Зашифрованный токен сохранённого бота (для проверки соединения к текущему). */
 export function getTelegramTokenEnc(): string | null {

@@ -274,7 +274,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const issueDevice: AppContextValue['issueDevice'] = useCallback(
     async (input) => {
       const res = await api.issueDevice(input);
-      patchDevices((list) => [...list, res.device]);
+      // Upsert по id: при переиспользовании Xray-конфига сервер возвращает уже
+      // существующее устройство (тот же id) — push дал бы дубль в списке.
+      patchDevices((list) => {
+        const i = list.findIndex((d) => d.id === res.device.id);
+        if (i === -1) return [...list, res.device];
+        const next = [...list];
+        next[i] = res.device;
+        return next;
+      });
       return res;
     },
     [patchDevices],
