@@ -477,12 +477,16 @@ export async function sshInstallProxies(
   const script = `set -e
 export DEBIAN_FRONTEND=noninteractive
 HTTP_PORT=8080; SOCKS_PORT=1080; HTTPS_PORT=8443; DOMAIN=${domain}
-PUSER=novpn
-if [ -f /etc/3proxy/3proxy.cfg ]; then
-  L=$(grep -m1 '^users ' /etc/3proxy/3proxy.cfg | sed 's/^users //')
-  PUSER=\${L%%:CL:*}; PPASS=\${L##*:CL:}
-fi
+# Сохраняем ВСЕ существующие логины (novpn + выданные пользователям), иначе
+# переустановка прокси сотрёт per-user учётки из конфига.
+USERSLINE=$(grep -h '^users ' /etc/3proxy/3proxy.cfg 2>/dev/null | sed 's/^users //' | tr '\\n' ' ')
+USERSLINE=$(echo $USERSLINE)
+PUSER=$(echo "$USERSLINE" | awk '{print $1}' | cut -d: -f1)
+PPASS=$(echo "$USERSLINE" | awk '{print $1}' | sed 's/^[^:]*:CL://')
+PUSER=\${PUSER:-novpn}
 PPASS=\${PPASS:-$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)}
+if [ -z "$USERSLINE" ]; then USERSLINE="$PUSER:CL:$PPASS"; fi
+ALLOWU=$(echo "$USERSLINE" | tr ' ' '\\n' | cut -d: -f1 | tr '\\n' ' ')
 
 # --- 3proxy (http + socks) ---
 if [ ! -x /usr/local/bin/3proxy ]; then
@@ -498,7 +502,7 @@ mkdir -p /etc/3proxy /var/log/3proxy
   # Учёт трафика по пользователям: строка на закрытие соединения. D 7 — суточная
   # ротация, хранить 7 файлов (диск ограничен). Формат: время логин байты_вх байты_исх.
   echo "log /var/log/3proxy/3p.log D 7"; echo 'logformat "L%t %U %I %O"'
-  echo "users $PUSER:CL:$PPASS"; echo "auth strong"; echo "allow $PUSER"
+  echo "users $USERSLINE"; echo "auth strong"; echo "allow $ALLOWU"
   ${wantHttp ? 'echo "proxy -n -a -p$HTTP_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
   ${wantSocks ? 'echo "socks -p$SOCKS_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
 } > /etc/3proxy/3proxy.cfg
@@ -515,6 +519,12 @@ RestartSec=3
 WantedBy=multi-user.target
 SVC
 systemctl daemon-reload; systemctl enable 3proxy >/dev/null 2>&1 || true; systemctl restart 3proxy
+# Открыть порты прокси в файрволе — иначе снаружи недоступны, хотя локально
+# работают. ufw (если активен, персистентно) + iptables (немедленно).
+openp(){ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiw active; then ufw allow "$1"/tcp >/dev/null 2>&1 || true; fi; iptables -C INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null || true; }
+${wantHttp ? 'openp $HTTP_PORT' : 'true'}
+${wantSocks ? 'openp $SOCKS_PORT' : 'true'}
+${wantHttps ? 'openp $HTTPS_PORT' : 'true'}
 ${
   wantHttps
     ? `
@@ -710,6 +720,9 @@ ${py}
 PY
 chmod 600 /etc/3proxy/3proxy.cfg
 systemctl restart 3proxy
+# Открыть порты прокси в файрволе (иначе снаружи недоступны, хотя локально работают).
+openp(){ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiw active; then ufw allow "$1"/tcp >/dev/null 2>&1 || true; fi; iptables -C INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null || true; }
+openp 8080; openp 1080; openp 8443
 echo PROXY_USER_OK`;
 }
 
