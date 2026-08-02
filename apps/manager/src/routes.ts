@@ -12,7 +12,7 @@ import type {
 } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshDiagProxy } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
@@ -751,6 +751,18 @@ router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, 
     res.json({ ok: true, proxy: p, server: repo.getServer(s.id) });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки прокси.'));
+  }
+});
+
+// ВРЕМЕННО: диагностика 3proxy (отладка инцидента с прокси).
+router.get('/api/admin/servers/:id/diag', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  try {
+    const out = await sshDiagProxy(s.id);
+    res.json({ ok: true, out });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'diag error'));
   }
 });
 

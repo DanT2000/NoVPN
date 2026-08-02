@@ -651,6 +651,19 @@ export async function sshReadProxyTraffic(serverId: string): Promise<Array<{ log
   return res;
 }
 
+/** ВРЕМЕННО: диагностика 3proxy на сервере (почему не слушает 8080/1080).
+ *  Пароли в выводе маскируются. Только для отладки инцидента. */
+export async function sshDiagProxy(serverId: string): Promise<string> {
+  const cmd = `echo '== systemctl =='; systemctl status 3proxy --no-pager 2>&1 | head -14
+echo '== journal =='; journalctl -u 3proxy --no-pager -n 25 2>&1 | tail -25
+echo '== listeners =='; ss -tlnp 2>/dev/null | grep -E ':8080|:1080|:8443' || echo 'нет слушателей 8080/1080/8443'
+echo '== 3proxy bin =='; ls -la /usr/local/bin/3proxy 2>&1
+echo '== запуск в foreground (2с) =='; timeout 2 /usr/local/bin/3proxy /etc/3proxy/3proxy.cfg 2>&1 | head -10; echo "exit=$?"
+echo '== cfg =='; sed 's/:CL:[^ ]*/:CL:***/g' /etc/3proxy/3proxy.cfg 2>&1
+echo '== ufw =='; (ufw status 2>/dev/null | head -10) || echo 'no ufw'`;
+  return runScript(creds(serverId), cmd, 30000);
+}
+
 /** Лёгкая проверка живости сервера по SSH (для серверов без AWG-статистики).
  *  Бросает, если сервер не ответил. */
 export async function sshPing(serverId: string): Promise<void> {
