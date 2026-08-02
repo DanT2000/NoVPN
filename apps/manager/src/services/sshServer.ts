@@ -486,7 +486,9 @@ PPASS=$(echo "$USERSLINE" | awk '{print $1}' | sed 's/^[^:]*:CL://')
 PUSER=\${PUSER:-novpn}
 PPASS=\${PPASS:-$(head -c 12 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)}
 if [ -z "$USERSLINE" ]; then USERSLINE="$PUSER:CL:$PPASS"; fi
-ALLOWU=$(echo "$USERSLINE" | tr ' ' '\\n' | cut -d: -f1 | tr '\\n' ' ')
+# allow — логины через ЗАПЯТУЮ (в allow пробел разделяет поля users/источник/цель,
+# иначе 3proxy читает второй логин как IP и падает «Invalid IP … line»).
+ALLOWU=$(echo "$USERSLINE" | tr ' ' '\\n' | cut -d: -f1 | paste -sd, -)
 
 # --- 3proxy (http + socks) ---
 if [ ! -x /usr/local/bin/3proxy ]; then
@@ -720,9 +722,12 @@ if not any(h.startswith('log ') for h in header):
     header.append('logformat "L%t %U %I %O"')
 out=list(header)
 if users:
+    # users — через ПРОБЕЛ, а allow — через ЗАПЯТУЮ: в allow пробел разделяет
+    # ПОЛЯ (users/источник/цель), поэтому пробел между логинами 3proxy читает как
+    # IP-источник и падает («Invalid IP … line»), роняя весь прокси.
     out.append('users '+' '.join('%s:CL:%s'%(u,pw) for u,pw in users.items()))
     out.append('auth strong')
-    out.append('allow '+' '.join(users.keys()))
+    out.append('allow '+','.join(users.keys()))
 else:
     out.append('auth none')
 out+=services
