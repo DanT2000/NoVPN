@@ -499,9 +499,10 @@ mkdir -p /etc/3proxy /var/log/3proxy
 {
   echo "nscache 65536"; echo "nserver 1.1.1.1"; echo "nserver 8.8.8.8"
   echo "timeouts 1 5 30 60 180 1800 15 60"
-  # Учёт трафика по пользователям: строка на закрытие соединения. D 7 — суточная
-  # ротация, хранить 7 файлов (диск ограничен). Формат: время логин байты_вх байты_исх.
-  echo "log /var/log/3proxy/3p.log D 7"; echo 'logformat "L%t %U %I %O"'
+  # Учёт трафика по пользователям: строка на закрытие соединения. D — суточная
+  # ротация (счётчик файлов у 3proxy — отдельная директива, в аргумент log его
+  # класть нельзя). Формат: время логин байты_вх байты_исх.
+  echo "log /var/log/3proxy/3p.log D"; echo 'logformat "L%t %U %I %O"'
   echo "users $USERSLINE"; echo "auth strong"; echo "allow $ALLOWU"
   ${wantHttp ? 'echo "proxy -n -a -p$HTTP_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
   ${wantSocks ? 'echo "socks -p$SOCKS_PORT -i0.0.0.0 -e0.0.0.0"' : 'true'}
@@ -638,8 +639,9 @@ docker exec amnezia-xray xray api statsquery --server=127.0.0.1:10085 --reset 2>
  *  Возвращает суммарные байты за текущий день на логин; накопление и обработку
  *  суточного сброса делает вызывающий (как у AWG). Пусто, если логов нет. */
 export async function sshReadProxyTraffic(serverId: string): Promise<Array<{ login: string; bytes: number }>> {
-  // Берём самый свежий файл лога (= сегодняшний) и суммируем %I+%O по логинам.
-  const cmd = `f=$(ls -t /var/log/3proxy/3p.log.* 2>/dev/null | head -1); [ -n "$f" ] && awk '$2!="-"{t[$2]+=$3+$4} END{for(u in t)print u" "t[u]}' "$f" || true`;
+  // Чистим логи старше 14 дней (3proxy с суточной ротацией без счётчика копит
+  // файлы), затем берём самый свежий файл (= сегодняшний) и суммируем %I+%O.
+  const cmd = `find /var/log/3proxy -name '3p.log.*' -mtime +14 -delete 2>/dev/null; f=$(ls -t /var/log/3proxy/3p.log.* 2>/dev/null | head -1); [ -n "$f" ] && awk '$2!="-"{t[$2]+=$3+$4} END{for(u in t)print u" "t[u]}' "$f" || true`;
   const out = await runScript(creds(serverId), cmd, 30000);
   const res: Array<{ login: string; bytes: number }> = [];
   for (const line of out.split('\n')) {
@@ -701,7 +703,7 @@ if mode=='add': users[login]=passwd
 elif mode=='remove': users.pop(login,None)
 # гарантируем логирование трафика (для уже установленных серверов без него)
 if not any(h.startswith('log ') for h in header):
-    header.append('log /var/log/3proxy/3p.log D 7')
+    header.append('log /var/log/3proxy/3p.log D')
     header.append('logformat "L%t %U %I %O"')
 out=list(header)
 if users:
