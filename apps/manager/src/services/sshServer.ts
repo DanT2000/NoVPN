@@ -653,19 +653,6 @@ export async function sshReadProxyTraffic(serverId: string): Promise<Array<{ log
   return res;
 }
 
-/** ВРЕМЕННО: диагностика 3proxy на сервере (почему не слушает 8080/1080).
- *  Пароли в выводе маскируются. Только для отладки инцидента. */
-export async function sshDiagProxy(serverId: string): Promise<string> {
-  const cmd = `echo '== systemctl =='; systemctl status 3proxy --no-pager 2>&1 | head -14
-echo '== journal =='; journalctl -u 3proxy --no-pager -n 25 2>&1 | tail -25
-echo '== listeners =='; ss -tlnp 2>/dev/null | grep -E ':8080|:1080|:8443' || echo 'нет слушателей 8080/1080/8443'
-echo '== 3proxy bin =='; ls -la /usr/local/bin/3proxy 2>&1
-echo '== запуск в foreground (2с) =='; timeout 2 /usr/local/bin/3proxy /etc/3proxy/3proxy.cfg 2>&1 | head -10; echo "exit=$?"
-echo '== cfg =='; sed 's/:CL:[^ ]*/:CL:***/g' /etc/3proxy/3proxy.cfg 2>&1
-echo '== ufw =='; (ufw status 2>/dev/null | head -10) || echo 'no ufw'`;
-  return runScript(creds(serverId), cmd, 30000);
-}
-
 /** Лёгкая проверка живости сервера по SSH (для серверов без AWG-статистики).
  *  Бросает, если сервер не ответил. */
 export async function sshPing(serverId: string): Promise<void> {
@@ -688,14 +675,15 @@ echo OK`;
   await withServerLock(server.id, () => runScript(creds(server.id), script, 60000));
 }
 
-// Добавить/удалить пользователя 3proxy, НЕ затирая остальных. Конфиг
-// пересобирается детерминированно: заголовок (nscache/nserver/timeouts) →
-// одна строка users со всеми логинами → auth/allow → сохранённые сервисные
-// строки (proxy/socks с их портами). 3proxy требует auth/allow ДО сервисов.
-function buildProxyUserScript(mode: 'add' | 'remove', login: string, pass: string): string {
-  const py = `import sys
+// Пересборка /etc/3proxy/3proxy.cfg (python, запускается на сервере): читает
+// существующий конфиг, добавляет/убирает логин, НЕ затирая остальных, и пишет
+// заголовок → users (через ПРОБЕЛ) → auth/allow (логины через ЗАПЯТУЮ!) →
+// сервисные строки. Экспортируется, чтобы регресс-тест гонял ровно этот код.
+// КРИТИЧНО: в allow пробел разделяет ПОЛЯ (users/источник/цель) — пробел между
+// логинами 3proxy читает как IP-источник и падает «Invalid IP … line».
+export const PROXY_REBUILD_PY = `import sys
 mode,login,passwd=sys.argv[1],sys.argv[2],sys.argv[3]
-p='/etc/3proxy/3proxy.cfg'
+p=sys.argv[4] if len(sys.argv)>4 else '/etc/3proxy/3proxy.cfg'
 try:
     lines=open(p).read().splitlines()
 except FileNotFoundError:
@@ -716,15 +704,11 @@ for ln in lines:
         header.append(s)
 if mode=='add': users[login]=passwd
 elif mode=='remove': users.pop(login,None)
-# гарантируем логирование трафика (для уже установленных серверов без него)
 if not any(h.startswith('log ') for h in header):
     header.append('log /var/log/3proxy/3p.log D')
     header.append('logformat "L%t %U %I %O"')
 out=list(header)
 if users:
-    # users — через ПРОБЕЛ, а allow — через ЗАПЯТУЮ: в allow пробел разделяет
-    # ПОЛЯ (users/источник/цель), поэтому пробел между логинами 3proxy читает как
-    # IP-источник и падает («Invalid IP … line»), роняя весь прокси.
     out.append('users '+' '.join('%s:CL:%s'%(u,pw) for u,pw in users.items()))
     out.append('auth strong')
     out.append('allow '+','.join(users.keys()))
@@ -733,6 +717,10 @@ else:
 out+=services
 open(p,'w').write('\\n'.join(out)+'\\n')
 print('OK users=%d'%len(users))`;
+
+// Добавить/удалить пользователя 3proxy, НЕ затирая остальных.
+function buildProxyUserScript(mode: 'add' | 'remove', login: string, pass: string): string {
+  const py = PROXY_REBUILD_PY;
   return `set -e
 mkdir -p /var/log/3proxy
 python3 - '${mode}' '${login}' '${pass}' <<'PY'
