@@ -41,6 +41,8 @@ export function statusOf(user: UserStatusInput): StatusView {
 /** Статус устройства — приоритет сверху вниз. */
 export function devStatusOf(device: Device): StatusView {
   if (!device.isActive) return { key: 'disabled', label: 'Отключено', ...C.gray };
+  // Без мониторинга активность неизвестна — не выдаём «Не подключалось» за факт.
+  if (device.monitoringAvailable === false) return { key: 'monitoring_unavailable', label: 'Мониторинг недоступен', ...C.gray };
   if (!device.lastSeenAt) return { key: 'never', label: 'Не подключалось', ...C.gray };
   const days = (Date.now() - new Date(device.lastSeenAt).getTime()) / 86400000;
   if (days < 1) return { key: 'active', label: 'Активно', ...C.green };

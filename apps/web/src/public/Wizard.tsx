@@ -137,7 +137,13 @@ export function Wizard() {
   );
 
   const title =
-    step === 4 ? (mode === 'view' ? cfgName || 'Конфигурация' : 'Готово') : 'Новое устройство';
+    step === 4
+      ? mode === 'view'
+        ? cfgName || 'Конфигурация'
+        : dev
+          ? 'Готово'
+          : 'Проверьте и создайте' // ещё не выпущено — «Готово» было бы неправдой
+      : 'Новое устройство';
 
   return (
     <div className="stack" style={{ gap: 16, paddingTop: 12 }}>
@@ -217,7 +223,7 @@ export function Wizard() {
           ) : null}
           {protoOptions.includes('amneziawg') ? (
             <button className="card stack" style={{ gap: 6, textAlign: 'left', cursor: 'pointer' }} onClick={() => { setProto('amneziawg'); setRawStep(4); }}>
-              <div style={{ fontWeight: 700, fontSize: 16 }}>AmneziaVPN</div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>AmneziaWG</div>
               <span className="body small muted">
                 Отдельная конфигурация на устройство. Берите, если Xray блокируют.
               </span>

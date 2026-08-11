@@ -4,7 +4,7 @@ import type { Device } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Pill, EmptyState } from '../components/ui';
 import { CleanupDialog, RenameDialog, isInactive } from '../components/DeviceDialogs';
-import { dateShort, gb, rel } from '../lib/format';
+import { dateShort, gb, rel, plural } from '../lib/format';
 import { devStatusOf } from '../lib/status';
 
 export function Devices() {
@@ -79,7 +79,8 @@ export function Devices() {
       {inactive.length > 0 ? (
         <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
           <div className="small">
-            <b>{inactive.length}</b> {inactive.length === 1 ? 'конфиг не использовался' : 'конфигов не использовались'} более 30 дней.
+            <b>{inactive.length}</b>{' '}
+            {plural(inactive.length, 'конфиг не использовался', 'конфига не использовались', 'конфигов не использовались')} более 30 дней.
           </div>
           <button className="btn btn-outline btn-sm" onClick={() => setCleanupOpen(true)}>
             Очистить неактивные

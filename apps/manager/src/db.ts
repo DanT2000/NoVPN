@@ -241,6 +241,10 @@ for (const stmt of [
   'ALTER TABLE proxy_accounts ADD COLUMN sent_bytes INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE proxy_accounts ADD COLUMN rx_raw INTEGER NOT NULL DEFAULT 0',
   'ALTER TABLE proxy_accounts ADD COLUMN last_seen_at TEXT',
+  // Трафик удалённых устройств, «списанный» на пользователя: расход считается по
+  // сумме устройств, и физическое удаление конфига иначе уменьшало бы traffic_used_gb
+  // (можно было бы вернуть квоту, удалив/очистив конфиг). Копим отдельно.
+  'ALTER TABLE users ADD COLUMN retired_traffic_gb REAL NOT NULL DEFAULT 0',
 ]) {
   try {
     db.exec(stmt);

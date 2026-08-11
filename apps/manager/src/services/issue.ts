@@ -94,19 +94,22 @@ export async function issueForUser(
   };
 }
 
-/** Отозвать ОДНО устройство на его сервере (best-effort). Отзыв в БД делает
- *  вызывающий отдельно. Вынесено, чтобы массовая очистка и одиночный revoke
- *  использовали одну и ту же логику. */
-export async function revokeDeviceOnServer(deviceId: string): Promise<void> {
+/** Отозвать ОДНО устройство на его сервере. Возвращает true, если отзыв подтверждён
+ *  (или отзывать нечего — нет ключей), и false, если сервер был, но отозвать не
+ *  удалось (недоступен/ошибка). По false вызывающий НЕ должен физически удалять
+ *  запись, иначе живой конфиг осиротеет на сервере без возможности переотзыва. */
+export async function revokeDeviceOnServer(deviceId: string): Promise<boolean> {
   const row = repo.getDeviceRow(deviceId);
-  if (!row) return;
+  if (!row) return true;
   const server = repo.getServer(row.server_id);
-  if (!server || !(await sshHasSshAccess(server.id))) return;
+  if (!server) return true; // сервера нет — переотзывать негде, удалять запись безопасно
+  if (!(await sshHasSshAccess(server.id))) return false; // временно нет доступа — не удаляем
   try {
     if (row.protocol === 'xray' && row.uuid) await sshRevokeXray(server, row.uuid);
     else if (row.protocol === 'amneziawg' && row.public_key) await sshRevokeAwg(server, row.public_key);
+    return true;
   } catch {
-    /* best-effort: сервер недоступен — запись всё равно удалится/отзовётся в БД */
+    return false; // сервер недоступен/ошибка — оставим запись для повторного отзыва
   }
 }
 

@@ -365,13 +365,16 @@ export function disableInactiveDevices(days: number): DisabledDevice[] {
   return rows;
 }
 
-/** Пересчёт расхода трафика и последней активности пользователя из ВСЕХ его устройств. */
+/** Пересчёт расхода трафика и последней активности пользователя из ВСЕХ его
+ *  устройств ПЛЮС трафик уже удалённых конфигов (retired_traffic_gb): иначе
+ *  удаление/очистка конфига уменьшало бы расход и возвращало квоту. */
 export function recomputeUserUsage(userId: string): void {
   const row = db
     .prepare('SELECT COALESCE(SUM(traffic_gb),0) AS tg, MAX(last_seen_at) AS ls FROM devices WHERE user_id = ?')
     .get(userId) as { tg: number; ls: string | null };
+  const retired = (db.prepare('SELECT retired_traffic_gb AS r FROM users WHERE id = ?').get(userId) as { r: number } | undefined)?.r ?? 0;
   db.prepare('UPDATE users SET traffic_used_gb = @tg, last_activity_at = COALESCE(@ls, last_activity_at) WHERE id = @id').run({
-    tg: row.tg ?? 0,
+    tg: (row.tg ?? 0) + retired,
     ls: row.ls ?? null,
     id: userId,
   });
@@ -404,7 +407,19 @@ export function updateDeviceFields(id: string, fields: Record<string, unknown>):
   return getDevice(id);
 }
 export function deleteDevice(id: string): void {
-  db.prepare('DELETE FROM devices WHERE id = ?').run(id);
+  // Перед удалением «списываем» трафик устройства на пользователя, иначе расход
+  // (сумма по устройствам) уменьшился бы и вернул часть квоты. Затем пересчитываем.
+  const d = db.prepare('SELECT user_id, traffic_gb FROM devices WHERE id = ?').get(id) as
+    | { user_id: string | null; traffic_gb: number | null }
+    | undefined;
+  const tx = db.transaction(() => {
+    if (d?.user_id && d.traffic_gb) {
+      db.prepare('UPDATE users SET retired_traffic_gb = retired_traffic_gb + ? WHERE id = ?').run(d.traffic_gb, d.user_id);
+    }
+    db.prepare('DELETE FROM devices WHERE id = ?').run(id);
+  });
+  tx();
+  if (d?.user_id) recomputeUserUsage(d.user_id);
 }
 
 /** Переименовать устройство (пользователь/админ). Пустое имя не допускаем. */
@@ -415,27 +430,18 @@ export function renameDevice(id: string, name: string): Device | null {
   return getDevice(id);
 }
 
-/** Автоочистка отозванных/отключённых записей старше graceDays: конфиг уже мёртв
- *  на сервере (отозван), запись только засоряет список и включить её нельзя.
- *  Grace даёт окно на случай случайного отзыва. Возвращает число удалённых. */
+/** Автоочистка ОТДЕЛЬНО отозванных записей старше graceDays: конфиг уже мёртв
+ *  на сервере (индивидуально отозван/истёк по неактивности), запись только
+ *  засоряет список и включить её нельзя. Приостановка пользователя (setUserActive)
+ *  revoked_at НЕ ставит — её конфиги сюда не попадают и переживают паузу.
+ *  Через deleteDevice: трафик списывается, расход не «возвращается». Число удалённых. */
 export function cleanupRevokedDevices(graceDays = 3): number {
   const cutoff = new Date(Date.now() - graceDays * 86400000).toISOString();
-  const info = db
-    .prepare('DELETE FROM devices WHERE is_active = 0 AND revoked_at IS NOT NULL AND revoked_at < ?')
-    .run(cutoff);
-  return info.changes ?? 0;
-}
-
-/** Устройства пользователя, «неактивные» дольше days дней: активная запись, но
- *  последняя активность (или, если её нет, дата создания) старше порога. Кандидаты
- *  для ручной очистки — окончательное решение за пользователем (галочки в UI). */
-export function inactiveDevicesOfUser(userId: string, days = 30): Device[] {
-  const cutoffMs = Date.now() - days * 86400000;
-  return listDevicesOfUser(userId).filter((d) => {
-    if (!d.isActive) return false;
-    const ref = d.lastSeenAt ?? d.createdAt;
-    return ref ? new Date(ref).getTime() < cutoffMs : false;
-  });
+  const ids = db
+    .prepare('SELECT id FROM devices WHERE is_active = 0 AND revoked_at IS NOT NULL AND revoked_at < ?')
+    .all(cutoff) as Array<{ id: string }>;
+  for (const r of ids) deleteDevice(r.id);
+  return ids.length;
 }
 
 // ── servers ──

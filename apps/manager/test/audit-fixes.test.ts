@@ -86,6 +86,32 @@ test('listTelegramTargets: только активные, не удалённы�
   assert.equal(new Set(chatIds).size, chatIds.length);
 });
 
+test('deleteDevice: трафик не «возвращается» — списывается в retired_traffic_gb', () => {
+  const server = repo.insertServer({ name: 'S', country: null, host: 'h', protocols: ['xray'], endpointOk: true });
+  const u = mkUser({ allowed_servers: JSON.stringify([server.id]) });
+  const dev = repo.insertDevice({ userId: u.id, name: 'd', serverId: server.id, protocol: 'xray' });
+  repo.updateDeviceFields(dev.id, { traffic_gb: 5 });
+  repo.recomputeUserUsage(u.id);
+  assert.equal(repo.getUser(u.id)!.trafficUsedGb, 5);
+  // Удаление конфига НЕ должно вернуть квоту: расход сохраняется через retired.
+  repo.deleteDevice(dev.id);
+  assert.equal(repo.getUser(u.id)!.trafficUsedGb, 5);
+});
+
+test('cleanupRevokedDevices: удаляет старое отозванное, свежее (в grace) оставляет', () => {
+  const server = repo.insertServer({ name: 'S', country: null, host: 'h', protocols: ['xray'], endpointOk: true });
+  const u = mkUser({ allowed_servers: JSON.stringify([server.id]) });
+  const oldDev = repo.insertDevice({ userId: u.id, name: 'old', serverId: server.id, protocol: 'xray' });
+  const freshDev = repo.insertDevice({ userId: u.id, name: 'fresh', serverId: server.id, protocol: 'xray' });
+  const longAgo = new Date(Date.now() - 10 * 86400000).toISOString();
+  repo.updateDeviceFields(oldDev.id, { is_active: 0, revoked_at: longAgo });
+  repo.updateDeviceFields(freshDev.id, { is_active: 0, revoked_at: new Date().toISOString() });
+  const removed = repo.cleanupRevokedDevices(3);
+  assert.equal(removed, 1);
+  assert.equal(repo.getDevice(oldDev.id), null); // старое удалено
+  assert.ok(repo.getDevice(freshDev.id)); // свежее в grace — осталось
+});
+
 test('issueForUser: лимит устройств блокирует выпуск (путь бота в обход UI)', async () => {
   const server = repo.insertServer({ name: 'S', country: null, host: 'h', protocols: ['amneziawg'], endpointOk: true });
   repo.updateServerFields(server.id, { auto_issue: 1 });

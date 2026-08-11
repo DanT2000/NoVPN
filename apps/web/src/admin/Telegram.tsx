@@ -226,13 +226,6 @@ export function Telegram() {
           )}
         </Panel>
 
-        {/* Шаблон */}
-        <Panel title="Шаблон сообщений">
-          <Field label="Текст" hint="переменные: {link} — личная ссылка, {code} — код, {url} — сайт, {expires} — срок">
-            <textarea className="textarea" value={template} onChange={(e) => setTemplate(e.target.value)} />
-          </Field>
-        </Panel>
-
         {/* Привязки */}
         <Panel title="Привязанные пользователи">
           {linkedUsers.length === 0 ? (

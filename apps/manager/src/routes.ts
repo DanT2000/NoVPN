@@ -288,18 +288,30 @@ router.post('/api/public/devices/:id/rename', requireUserOrAdmin, (req, res) => 
 // для кабинета (пользователь чистит свои) и админки (админ чистит любые — ownsDevice
 // пускает admin). Клиент присылает только те id, что оставил отмеченными.
 router.post('/api/public/devices/cleanup', requireUserOrAdmin, async (req, res) => {
-  const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map(String) : [];
+  const rawIds = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map(String) : [];
+  // Ограничение: отзыв идёт по SSH последовательно, длинный список — риск таймаута.
+  const ids = rawIds.slice(0, 100);
   if (ids.length === 0) return res.json({ deleted: 0 });
   let deleted = 0;
+  let kept = 0;
   for (const id of ids) {
     const d = repo.getDevice(id);
     if (!d || !ownsDevice(req, d)) continue; // чужое/несуществующее — молча пропускаем
-    if (d.isActive) await revokeDeviceOnServer(d.id); // снять доступ на сервере (best-effort)
+    if (d.isActive) {
+      const revoked = await revokeDeviceOnServer(d.id);
+      if (!revoked) {
+        // Сервер недоступен — не удаляем физически (иначе конфиг осиротеет и будет
+        // жить на сервере). Помечаем отозванным: доступ снят в панели, отзыв повторится.
+        repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: repo.nowIso() });
+        kept += 1;
+        continue;
+      }
+    }
     repo.deleteDevice(d.id);
     if (d.userId) repo.addHistory(d.userId, `Удалён конфиг «${d.name}» (очистка)`);
     deleted += 1;
   }
-  res.json({ deleted });
+  res.json({ deleted, kept });
 });
 
 // Выдать/получить прокси-аккаунт пользователя на сервере.
@@ -487,8 +499,11 @@ router.post('/api/admin/users/:id/active', requireAdmin, async (req, res) => {
     // Сначала реально отзываем конфиги на VPN-серверах, затем помечаем в БД —
     // иначе отключённый пользователь продолжал бы пользоваться VPN.
     await revokeUserAccessOnServers(u.id);
+    // ВАЖНО: приостановка — временная. Ставим только is_active=0 и НЕ ставим
+    // revoked_at, иначе автоочистка удалила бы записи через 3 дня, и после
+    // реактивации (напр. после оплаты) пользователь потерял бы все конфиги.
     for (const d of repo.listDevices().filter((x) => x.userId === u.id && x.isActive))
-      repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: repo.nowIso() });
+      repo.updateDeviceFields(d.id, { is_active: 0 });
     repo.deactivateUserProxyAccounts(u.id);
   }
   res.json(repo.getUser(u.id));

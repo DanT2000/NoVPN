@@ -1,17 +1,32 @@
 // Диалоги управления конфигами: массовая очистка с галочками и переименование.
 // Используются одинаково в кабинете (Devices) и в админ-карточке (UserCard).
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import type { Device } from '@novpn/shared';
 import { rel, dateShort } from '../lib/format';
 
-/** Конфиг «неактивен»: активная запись, но последняя активность (или, если её нет,
- *  дата создания) старше `days` дней. Кандидат на очистку — решение за пользователем. */
+/** Закрытие модалки по Esc. */
+function useEscClose(onClose: () => void): void {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+}
+
+/** Конфиг «неактивен»: активная запись, по которой ЕСТЬ мониторинг, и активность
+ *  старше `days` дней (а если ни разу не подключался — создан давнее порога).
+ *  Без мониторинга активность неизвестна — такой конфиг НЕ помечаем неактивным,
+ *  иначе рабочие конфиги на серверах без статистики попали бы под очистку. */
 export function isInactive(d: Device, days = 30): boolean {
   if (!d.isActive) return false;
-  const ref = d.lastSeenAt ?? d.createdAt;
-  return ref ? new Date(ref).getTime() < Date.now() - days * 86400000 : false;
+  if (d.monitoringAvailable === false) return false;
+  const cutoff = Date.now() - days * 86400000;
+  if (d.lastSeenAt) return new Date(d.lastSeenAt).getTime() < cutoff;
+  return new Date(d.createdAt).getTime() < cutoff; // ни разу не подключался и создан давно
 }
 
 const overlay: React.CSSProperties = {
@@ -40,6 +55,7 @@ export function CleanupDialog({
     Object.fromEntries(devices.map((d) => [d.id, true])),
   );
   const [busy, setBusy] = useState(false);
+  useEscClose(onClose);
   const selected = devices.filter((d) => checked[d.id]).map((d) => d.id);
   const toggle = (id: string) => setChecked((c) => ({ ...c, [id]: !c[id] }));
 
@@ -113,6 +129,7 @@ export function RenameDialog({
 }) {
   const [name, setName] = useState(device.name);
   const [busy, setBusy] = useState(false);
+  useEscClose(onClose);
   const valid = name.trim().length > 0 && name.trim() !== device.name;
 
   const run = async () => {

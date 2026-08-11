@@ -40,6 +40,9 @@ export function Cabinet() {
 
   const devices = data.devices.filter((d) => d.userId === user.id);
   const active = devices.filter((d) => d.isActive).length;
+  // Подписку Xray показываем, только когда в ней реально есть конфиги: иначе новый
+  // пользователь добавил бы пустую ссылку и получил бы «нет серверов».
+  const hasActiveXray = devices.some((d) => d.isActive && d.protocol === 'xray');
   const status = statusOf(user);
   const dl = daysLeft(user.expiresAt);
 
@@ -162,7 +165,7 @@ export function Cabinet() {
 
       {/* Подписка Xray: одна ссылка на все устройства. Приложение само тянет
           конфиги и обновляет их — не нужно выпускать конфиг на каждый телефон. */}
-      {data.subLink && user.allowedProtocols.includes('xray') ? (
+      {data.subLink && user.allowedProtocols.includes('xray') && hasActiveXray ? (
         <div className="card stack" style={{ gap: 10 }}>
           <div>
             <div className="eyebrow" style={{ marginBottom: 4 }}>Подписка Xray</div>
@@ -181,9 +184,6 @@ export function Cabinet() {
               }}
             >
               Копировать подписку
-            </button>
-            <button className="btn btn-outline btn-sm" onClick={() => goPublic('wizard', { wizardMode: 'issue' })}>
-              Подключить в приложении
             </button>
             <button className="btn btn-outline btn-sm" onClick={() => goPublic('apps')}>
               Куда вставить?
