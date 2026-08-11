@@ -52,6 +52,13 @@ export async function issueForUser(
   if (!server.autoIssue && !opts.byAdmin)
     throw new Error('Самостоятельная выдача конфигов на этом сервере временно отключена. Обратитесь к администратору.');
 
+  // Лимит устройств проверяем ЗДЕСЬ, в общей функции: путь через inline-кнопку бота
+  // (`proto:*`) шёл мимо UI-проверки и позволял выпускать сверх лимита в обход. Для
+  // не-админа и только при создании НОВОГО устройства (переиспользование Xray-конфига
+  // ниже лимитом не считается — подписка одна на все устройства).
+  const atDeviceLimit = (): boolean =>
+    !opts.byAdmin && user.deviceLimit != null && repo.countActiveDevices(user.id) >= user.deviceLimit;
+
   if (protocol === 'xray') {
     // Одна Xray-конфигурация работает на любом числе устройств. Если у
     // пользователя на этом сервере уже есть активный Xray-конфиг — переиспользуем
@@ -60,11 +67,15 @@ export async function issueForUser(
     if (existing) {
       return { device: existing, link: existing.link ?? undefined, reused: true, subscriptionUrl: repo.subscriptionUrl(user.id) ?? undefined };
     }
+    if (atDeviceLimit())
+      throw new Error(`Достигнут лимит устройств (${user.deviceLimit}). Отключите старое устройство или обратитесь к администратору.`);
     const r = await createXrayCfg(server, name);
     const device = repo.insertDevice({ userId: user.id, name, serverId, protocol, uuid: r.uuid, publicKey: r.publicKey, link: r.link });
     repo.addHistory(user.id, `Выпущен конфиг «${name}» (Xray, ${server.name})`);
     return { device, link: r.link, subscriptionUrl: repo.subscriptionUrl(user.id) ?? undefined };
   }
+  if (atDeviceLimit())
+    throw new Error(`Достигнут лимит устройств (${user.deviceLimit}). Отключите старое устройство или обратитесь к администратору.`);
   const r = await createAwgCfg(server, name);
   const device = repo.insertDevice({
     userId: user.id, name, serverId, protocol, publicKey: r.publicKey,

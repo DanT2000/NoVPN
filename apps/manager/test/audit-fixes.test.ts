@@ -42,9 +42,55 @@ test('findBotUser: чужой chatId с занятым @username НЕ захва
   assert.equal(repo.findBotUser(3003, '@victim'), null);
 });
 
-test('findBotUser: legacy без chat_id матчится по handle (и только он)', () => {
+test('findBotUser: legacy по @username больше НЕ идентифицируется (защита от захвата)', () => {
+  // username в Telegram переиспользуемы: идентификация по handle позволяла бы
+  // новому владельцу @username захватить аккаунт. Теперь — только по chat_id.
   const u = mkUser({ telegram: '@legacy' }); // без setTelegramChatId
+  assert.equal(repo.findBotUser(4004, '@legacy'), null);
+  // после явной привязки (токен/код → chat_id) — резолвится нормально
+  repo.setTelegramChatId(u.id, 4004);
   assert.equal(repo.findBotUser(4004, '@legacy')?.id, u.id);
+});
+
+test('setTelegramChatId: один chat_id принадлежит ровно одному пользователю', () => {
+  const a = mkUser();
+  const b = mkUser();
+  repo.setTelegramChatId(a.id, 7007);
+  assert.equal(repo.getUserByTelegramChatId(7007)?.id, a.id);
+  // привязали тот же chat_id к b — с a он должен сняться (резолв теперь b, не a)
+  repo.setTelegramChatId(b.id, 7007);
+  assert.equal(repo.getUserByTelegramChatId(7007)?.id, b.id);
+});
+
+test('getUserByTelegramChatId: удалённый пользователь не резолвится', () => {
+  const u = mkUser();
+  repo.setTelegramChatId(u.id, 8008);
+  repo.softDeleteUser(u.id);
+  assert.equal(repo.getUserByTelegramChatId(8008), null);
+});
+
+test('listTelegramTargets: только активные, не удалённые, без дублей chat_id', () => {
+  const a = mkUser({ telegram: '@t1' });
+  const b = mkUser({ telegram: '@t2' });
+  const c = mkUser({ telegram: '@t3' });
+  repo.setTelegramChatId(a.id, 9001);
+  repo.setTelegramChatId(b.id, 9002);
+  repo.setTelegramChatId(c.id, 9003);
+  repo.updateUserFields(b.id, { is_active: 0 }); // выключен
+  repo.softDeleteUser(c.id); // удалён
+  const chatIds = repo.listTelegramTargets().map((t) => t.chatId);
+  assert.ok(chatIds.includes(9001));
+  assert.ok(!chatIds.includes(9002));
+  assert.ok(!chatIds.includes(9003));
+  // без дублей
+  assert.equal(new Set(chatIds).size, chatIds.length);
+});
+
+test('issueForUser: лимит устройств блокирует выпуск (путь бота в обход UI)', async () => {
+  const server = repo.insertServer({ name: 'S', country: null, host: 'h', protocols: ['amneziawg'], endpointOk: true });
+  repo.updateServerFields(server.id, { auto_issue: 1 });
+  const u = mkUser({ allowed_servers: JSON.stringify([server.id]), allowed_protocols: JSON.stringify(['amneziawg']), device_limit: 0 });
+  await assert.rejects(() => issueForUser(u, 'dev', server.id, 'amneziawg'), /лимит устройств/i);
 });
 
 test('linkedUserIds наполняется из привязанных пользователей', () => {

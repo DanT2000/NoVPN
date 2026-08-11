@@ -351,6 +351,8 @@ router.post('/api/admin/broadcast', requireAdmin, async (req, res) => {
     if (!text) return res.status(400).json(err('validation', 'Введите текст сообщения.'));
     if (text.length > 4000) return res.status(400).json(err('validation', 'Слишком длинное сообщение (макс. 4000 символов).'));
     const r = await broadcastToLinked(text);
+    if (r.aborted)
+      return res.json({ ...r, message: `Рассылка прервана: бот или прокси недоступны. Доставлено ${r.sent} из ${r.total}.` });
     res.json(r);
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось разослать.'));
@@ -793,7 +795,9 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
     proxyOn: !!b.proxyOn,
     proxySource: b.proxySource === 'server' ? 'server' : 'manual',
     proxyServerId: b.proxyServerId ?? null,
-    proxyType: b.proxyType === 'socks5' ? 'socks5' : b.proxyType === 'https' ? 'https' : 'http',
+    // socks5 undici ProxyAgent не умеет — раньше он молча сохранялся, а прокси
+    // отключался (прямой заблокированный коннект). Сводим к рабочему http.
+    proxyType: b.proxyType === 'https' ? 'https' : 'http',
     proxyHost: String(b.proxyHost ?? ''),
     proxyPort: String(b.proxyPort ?? ''),
     proxyLogin: String(b.proxyLogin ?? ''),
@@ -804,6 +808,10 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
     const enc = encryptSecret(String(b.token));
     (next as unknown as { tokenEnc?: string }).tokenEnc = enc; // сохранится в JSON; наружу не отдаём
     next.tokenMasked = maskTail(String(b.token));
+    // Новый токен → возможно, ДРУГОЙ бот. Сбрасываем сохранённый username, иначе
+    // deep-link «Привязать Telegram» и кнопка в кабинете вели бы на старого бота.
+    // pollLoop перечитает username через getMe.
+    (next as unknown as { botUsername?: string }).botUsername = undefined;
   }
   if (b.proxyPass) {
     (next as unknown as { proxyPassEnc?: string }).proxyPassEnc = encryptSecret(String(b.proxyPass));

@@ -36,29 +36,78 @@ export function resolveTgProxyUrl(): string | null {
   }
   if (tg.proxyHost && tg.proxyPort && (tg.proxyType === 'http' || tg.proxyType === 'https')) {
     const encPass = (tg as unknown as { proxyPassEnc?: string }).proxyPassEnc;
-    const pass = encPass ? decryptSecret(encPass) : '';
+    // decryptSecret бросает на нечитаемом шифртексте (сменился/потерялся
+    // ENCRYPTION_KEY). Это НЕ должно ронять процесс через unhandledRejection —
+    // отдаём прокси без пароля, вызывающий обработает отказ связи штатно.
+    let pass = '';
+    if (encPass) {
+      try {
+        pass = decryptSecret(encPass);
+      } catch {
+        pass = '';
+      }
+    }
     const authp = tg.proxyLogin ? `${enc(tg.proxyLogin)}:${enc(pass)}@` : '';
     return `${tg.proxyType}://${authp}${tg.proxyHost}:${tg.proxyPort}`;
   }
   return null;
 }
 
-/** Вызов Telegram Bot API через прокси. */
-export async function tgApi<T = any>(method: string, params: Record<string, unknown> = {}, tokenOverride?: string): Promise<T> {
+// Пул соединений с прокси переиспользуем: раньше на КАЖДЫЙ вызов создавался
+// новый ProxyAgent и не закрывался (~агент/25с при polling + по агенту на каждого
+// получателя рассылки) — утечка сокетов вплоть до EMFILE. Держим один агент на URL.
+let cachedProxyUrl: string | null = null;
+let cachedAgent: ProxyAgent | null = null;
+function dispatcherFor(proxyUrl: string | null): ProxyAgent | undefined {
+  if (!proxyUrl) return undefined;
+  if (proxyUrl !== cachedProxyUrl) {
+    try {
+      void cachedAgent?.close();
+    } catch {
+      /* игнор */
+    }
+    cachedAgent = new ProxyAgent(proxyUrl);
+    cachedProxyUrl = proxyUrl;
+  }
+  return cachedAgent ?? undefined;
+}
+
+/** Код ошибки Telegram (429 и т.п.) и retry_after — для корректного backoff. */
+export class TgApiError extends Error {
+  constructor(message: string, readonly code?: number, readonly retryAfter?: number) {
+    super(message);
+  }
+}
+
+/** Вызов Telegram Bot API через прокси. `signal` — внешняя отмена (стоп бота). */
+export async function tgApi<T = any>(
+  method: string,
+  params: Record<string, unknown> = {},
+  tokenOverride?: string,
+  signal?: AbortSignal,
+): Promise<T> {
   const token = tokenOverride ?? getToken();
   if (!token) throw new Error('Токен бота не задан.');
   const proxyUrl = resolveTgProxyUrl();
   const waitS = typeof params.timeout === 'number' ? params.timeout : 0;
+  const timeout = AbortSignal.timeout((waitS + 15) * 1000);
   const opts: RequestInit & { dispatcher?: ProxyAgent } = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(params),
-    signal: AbortSignal.timeout((waitS + 15) * 1000),
+    signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
   };
-  if (proxyUrl) opts.dispatcher = new ProxyAgent(proxyUrl);
+  const disp = dispatcherFor(proxyUrl);
+  if (disp) opts.dispatcher = disp;
   const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, opts);
-  const d = (await r.json()) as { ok: boolean; result?: T; description?: string };
-  if (!d.ok) throw new Error(d.description ?? 'Telegram error');
+  const d = (await r.json()) as {
+    ok: boolean;
+    result?: T;
+    description?: string;
+    error_code?: number;
+    parameters?: { retry_after?: number };
+  };
+  if (!d.ok) throw new TgApiError(d.description ?? 'Telegram error', d.error_code, d.parameters?.retry_after);
   return d.result as T;
 }
 
@@ -79,48 +128,102 @@ function linkGuard(chatId: number): boolean {
 }
 
 // ── Бот (long-polling) ──
+const RESTART_DELAY_MS = 1200;
 let running = false;
 let offset = 0;
 let loopId = 0;
+let lastTokenSig = '';
+let activeAbort: AbortController | null = null;
+
+/** Дешёвая подпись токена (не сам секрет) — чтобы заметить смену бота. */
+function tokenSig(token: string): string {
+  return `${token.slice(0, 6)}:${token.length}`;
+}
 
 function saveBotUsername(username: string | undefined): void {
   if (!username) return;
-  const cur = repo.getTelegram();
-  if ((cur as { botUsername?: string }).botUsername === username) return;
-  repo.saveTelegramRaw({ ...cur, botUsername: username });
+  try {
+    const cur = repo.getTelegram();
+    if ((cur as { botUsername?: string }).botUsername === username) return;
+    repo.saveTelegramRaw({ ...cur, botUsername: username });
+  } catch {
+    /* запись username не критична — не роняем бота */
+  }
 }
 
 export function stopBot(): void {
   running = false;
   loopId += 1; // инвалидируем текущий цикл
+  // Немедленно рвём висящий long-poll (getUpdates до 25с), иначе старый и новый
+  // циклы спорят за getUpdates и Telegram отвечает 409.
+  try {
+    activeAbort?.abort();
+  } catch {
+    /* игнор */
+  }
 }
 
 export async function startBot(): Promise<void> {
-  const tg = repo.getTelegram();
-  if (!tg?.enabled || !getToken()) return;
-  if (running) return;
-  running = true;
-  const myLoop = ++loopId;
-  // Снимаем возможный webhook (иначе getUpdates даёт 409) и узнаём username.
+  // Чтение настроек/токена может бросить (SQLITE_BUSY при бэкапе, битая БД).
+  // Не даём этому превратиться в unhandledRejection и уронить панель.
+  let token = '';
   try {
-    await tgApi('deleteWebhook', { drop_pending_updates: false });
-    const me = await tgApi<{ username?: string }>('getMe');
-    saveBotUsername(me.username);
+    const tg = repo.getTelegram();
+    token = getToken();
+    if (!tg?.enabled || !token) return;
   } catch {
-    /* сеть/прокси недоступны — попробуем в цикле */
+    return;
   }
-  void pollLoop(myLoop);
+  // Токен сменился → у нового бота своя нумерация update_id. Если оставить старый
+  // (большой) offset, getUpdates молча подтверждает все апдейты нового бота и он
+  // «мёртв» до перезапуска процесса. Сбрасываем offset при смене токена.
+  const sig = tokenSig(token);
+  if (sig !== lastTokenSig) {
+    offset = 0;
+    lastTokenSig = sig;
+  }
+  running = true;
+  void pollLoop(++loopId);
 }
 
 export function restartBot(): void {
   stopBot();
-  setTimeout(() => void startBot(), 800);
+  setTimeout(() => {
+    startBot().catch((e) => console.error('[NoVPN] restartBot:', e instanceof Error ? e.message : e));
+  }, RESTART_DELAY_MS);
 }
 
 async function pollLoop(myLoop: number): Promise<void> {
+  let webhookCleared = false;
   while (running && myLoop === loopId) {
+    const abort = new AbortController();
+    activeAbort = abort;
     try {
-      const updates = await tgApi<Array<Record<string, any>>>('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'callback_query'] });
+      // Снимаем возможный webhook (иначе getUpdates даёт 409). Повторяем, пока не
+      // выйдет: раньше это делалось один раз до цикла, и при недоступном прокси
+      // webhook так и оставался → вечный 409, бот молчал навсегда.
+      if (!webhookCleared) {
+        await tgApi('deleteWebhook', { drop_pending_updates: false }, undefined, abort.signal);
+        webhookCleared = true;
+      }
+      // Узнаём username, пока не знаем (для кнопки «Привязать Telegram» в кабинете).
+      try {
+        const cur = repo.getTelegram() as { botUsername?: string };
+        if (!cur?.botUsername) {
+          const me = await tgApi<{ username?: string }>('getMe', {}, undefined, abort.signal);
+          saveBotUsername(me.username);
+        }
+      } catch {
+        /* username узнаем на следующей итерации */
+      }
+      const updates = await tgApi<Array<Record<string, any>>>(
+        'getUpdates',
+        { offset, timeout: 25, allowed_updates: ['message', 'callback_query'] },
+        undefined,
+        abort.signal,
+      );
+      // Нас могли выключить/сменить, пока висел long-poll — не обрабатываем чужие апдейты.
+      if (!running || myLoop !== loopId) break;
       for (const u of updates) {
         offset = (u.update_id as number) + 1;
         try {
@@ -128,36 +231,87 @@ async function pollLoop(myLoop: number): Promise<void> {
         } catch {
           /* один сбойный апдейт не должен ронять цикл */
         }
+        if (!running || myLoop !== loopId) break;
       }
-    } catch {
-      // Telegram/прокси недоступны — подождём и повторим.
-      await sleep(8000);
+    } catch (e) {
+      if (!running || myLoop !== loopId) break; // отменили — тихо выходим
+      // 409 Conflict — висит другой getUpdates или остался webhook: сбросим флаг,
+      // на следующей итерации снова снимем webhook.
+      const code = e instanceof TgApiError ? e.code : undefined;
+      if (code === 409 || (e instanceof Error && /conflict/i.test(e.message))) webhookCleared = false;
+      const retryMs = e instanceof TgApiError && e.retryAfter ? e.retryAfter * 1000 : 8000;
+      await sleep(retryMs);
     }
   }
 }
 
-/** Экстренная рассылка всем привязанным пользователям (по одному сообщению).
- *  Отправляет последовательно с паузой (лимит Telegram ~30 сообщений/сек),
- *  заблокировавшие бота молча пропускаются. Возвращает счётчики. */
-export async function broadcastToLinked(text: string): Promise<{ total: number; sent: number; failed: number }> {
+// Одновременно допускаем только одну рассылку: повторное нажатие «Отправить» не
+// должно запускать вторую параллельно (кратное превышение лимитов Telegram).
+let broadcasting = false;
+const MSG_TIMEOUT_MS = 6000; // на одно сообщение (не 15с — чтобы мёртвый токен не вешал рассылку надолго)
+const CONSEC_FAIL_ABORT = 5; // подряд столько провалов ⇒ токен/прокси мертвы, прекращаем
+
+/** Экстренная рассылка всем активным привязанным пользователям (по одному сообщению).
+ *  Последовательно, с паузой (лимит Telegram ~30 сообщений/сек). Заблокировавшие бота
+ *  молча пропускаются. При мёртвом токене/прокси прекращает рано, а не висит часами. */
+export async function broadcastToLinked(text: string): Promise<{ total: number; sent: number; failed: number; aborted: boolean }> {
   const body = text.trim();
   if (!body) throw new Error('Пустое сообщение.');
   if (!getToken()) throw new Error('Бот не настроен: задайте токен в настройках Telegram.');
-  const targets = repo.listTelegramTargets();
+  let enabled = false;
+  try {
+    enabled = !!repo.getTelegram()?.enabled;
+  } catch {
+    enabled = false;
+  }
+  if (!enabled) throw new Error('Бот выключен. Включите бота в настройках Telegram и повторите.');
+  if (broadcasting) throw new Error('Рассылка уже выполняется. Дождитесь её завершения.');
+  broadcasting = true;
   let sent = 0;
   let failed = 0;
-  for (const t of targets) {
-    try {
-      await tgApi('sendMessage', { chat_id: t.chatId, text: body, disable_web_page_preview: true });
-      sent += 1;
-    } catch {
-      // Пользователь заблокировал/удалил бота или chat_id устарел — пропускаем.
-      failed += 1;
+  let consecFail = 0;
+  let aborted = false;
+  let targets: Array<{ id: string; name: string; chatId: number }> = [];
+  try {
+    // Внутри try: если чтение целей бросит (SQLITE_BUSY при бэкапе), finally снимет
+    // флаг — иначе мьютекс залип бы навсегда и все рассылки блокировались.
+    targets = repo.listTelegramTargets();
+    for (const t of targets) {
+      try {
+        await tgApi('sendMessage', { chat_id: t.chatId, text: body, disable_web_page_preview: true }, undefined, AbortSignal.timeout(MSG_TIMEOUT_MS));
+        sent += 1;
+        consecFail = 0;
+      } catch (e) {
+        // 429 — превышение частоты: подождём retry_after и повторим один раз.
+        if (e instanceof TgApiError && e.code === 429 && e.retryAfter) {
+          await sleep(Math.min(e.retryAfter * 1000, 30000));
+          try {
+            await tgApi('sendMessage', { chat_id: t.chatId, text: body, disable_web_page_preview: true }, undefined, AbortSignal.timeout(MSG_TIMEOUT_MS));
+            sent += 1;
+            consecFail = 0;
+            await sleep(60);
+            continue;
+          } catch {
+            /* повтор не удался — считаем провалом ниже */
+          }
+        }
+        // Заблокировал/удалил бота (403), устаревший chat_id — пропускаем.
+        failed += 1;
+        consecFail += 1;
+        if (consecFail >= CONSEC_FAIL_ABORT) {
+          aborted = true;
+          break;
+        }
+      }
+      await sleep(60); // ~16 сообщений/сек — с запасом под лимит Telegram
     }
-    await sleep(60); // ~16 сообщений/сек — с запасом под лимит Telegram
+  } finally {
+    broadcasting = false;
   }
-  repo.addLog(`Экстренная рассылка: отправлено ${sent} из ${targets.length}`);
-  return { total: targets.length, sent, failed };
+  repo.addLog(
+    `Экстренная рассылка: отправлено ${sent} из ${targets.length}${failed ? `, не доставлено ${failed}` : ''}${aborted ? ' (прервана: бот/прокси недоступны)' : ''}`,
+  );
+  return { total: targets.length, sent, failed, aborted };
 }
 
 type Kb = Array<Array<{ text: string; callback_data: string }>>;
@@ -179,6 +333,15 @@ async function send(chatId: number | string, text: string, opts: { markdown?: bo
 /** Идентификатор пользователя Telegram для привязки. */
 function handleOf(from: Record<string, any>, chatId: number): string {
   return from?.username ? `@${from.username}` : `id:${chatId}`;
+}
+
+/** Разбор команды бота. Учитывает суффикс @botname (Telegram добавляет его в
+ *  группах и подсказках) и отделяет полезную нагрузку. `/configfoo` командой НЕ
+ *  считается. */
+export function parseCommand(text: string): { name: 'start' | 'menu' | 'config'; payload: string } | null {
+  const m = /^\/(start|menu|config)(?:@\S+)?(?:\s+([\s\S]*))?$/i.exec(text);
+  if (!m) return null;
+  return { name: m[1]!.toLowerCase() as 'start' | 'menu' | 'config', payload: (m[2] ?? '').trim() };
 }
 
 function siteUrl(): string {
@@ -220,19 +383,21 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
   if (u.callback_query) return handleCallback(u.callback_query);
   const msg = u.message ?? u.edited_message;
   if (!msg || typeof msg.text !== 'string') return;
+  // Только личные чаты. Привязка в группе навесила бы аккаунт на весь чат: любой
+  // участник получал бы конфиги и список устройств чужого пользователя.
+  if (msg.chat?.type && msg.chat.type !== 'private') return;
   const chatId = msg.chat.id as number;
   const text = (msg.text as string).trim();
   const handle = handleOf(msg.from ?? {}, chatId);
-  // Бэкофилл chat_id для уже привязанных (поле telegram хранит только handle).
-  { const l = findUser(chatId, handle); if (l) repo.setTelegramChatId(l.id, chatId); }
 
-  // Команды меню/конфига для уже привязанных. «/start <payload>» с полезной
-  // нагрузкой — это привязка, её пропускаем ниже, поэтому исключаем.
-  const isStartWithPayload = /^\/start\s+\S/.test(text);
-  if ((/^\/(menu|config|start$)/i.test(text) || /меню|получить конфиг/i.test(text)) && !isStartWithPayload) {
+  // Команды меню/конфига для уже привязанных. Строгий разбор: «/config» — это
+  // команда (с опциональным @botname), а «/configfoo» — нет. «/start <payload>» —
+  // это привязка, обрабатываем её ниже.
+  const cmd = parseCommand(text);
+  if (cmd && cmd.name !== 'start') {
     const linked = findUser(chatId, handle);
     if (linked) {
-      if (/config|получить конфиг/i.test(text)) return startGetConfig(chatId, linked);
+      if (cmd.name === 'config') return startGetConfig(chatId, linked);
       return showMenu(chatId, linked);
     }
   }
@@ -241,16 +406,20 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
   // /start <токен>. Токен длинный и не подбирается. Короткий код тоже принимаем,
   // пока он ещё жив у мигрированных пользователей.
   let payload = '';
-  if (text.startsWith('/start')) {
-    payload = text.replace('/start', '').trim();
+  if (cmd?.name === 'start') {
+    payload = cmd.payload;
     if (!payload) {
       const linked = findUser(chatId, handle);
       if (linked) return showMenu(chatId, linked);
       await send(chatId, 'Привет! Чтобы привязать Telegram, откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
       return;
     }
+  } else if (cmd) {
+    // /menu, /config и т.п. без привязки — подсказываем, как привязаться.
+    await send(chatId, 'Сначала привяжите Telegram: откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
+    return;
   } else {
-    payload = text.trim();
+    payload = text;
   }
 
   // Привязка по 6-значному коду — только для тех, у кого вход по коду СЕЙЧАС
@@ -283,14 +452,19 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
 }
 
 async function handleCallback(cb: Record<string, any>): Promise<void> {
-  const chatId = cb.message?.chat?.id as number;
-  const data = String(cb.data ?? '');
-  const handle = handleOf(cb.from ?? {}, chatId);
+  // Всегда «гасим» кнопку, чтобы у пользователя не крутился спиннер.
   try {
     await tgApi('answerCallbackQuery', { callback_query_id: cb.id });
   } catch {
     /* игнор */
   }
+  const chat = cb.message?.chat;
+  const chatId = chat?.id as number | undefined;
+  // Устаревший callback без message (Telegram отдал только inline_message_id) или
+  // нажатие в группе — ничего сделать не можем/не должны.
+  if (typeof chatId !== 'number' || (chat?.type && chat.type !== 'private')) return;
+  const data = String(cb.data ?? '');
+  const handle = handleOf(cb.from ?? {}, chatId);
   const user = findUser(chatId, handle);
   if (!user) {
     await send(chatId, 'Сначала привяжите Telegram: откройте личный кабинет на сайте и нажмите «Привязать Telegram».');
@@ -308,13 +482,34 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
 async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> & object): Promise<void> {
   if (!user.isActive) return void send(chatId, 'Доступ отключён администратором.');
   if (user.expiresAt && new Date(user.expiresAt) < new Date()) return void send(chatId, 'Срок действия доступа истёк.');
-  if (user.deviceLimit != null && repo.countActiveDevices(user.id) >= user.deviceLimit)
-    return void send(chatId, `Достигнут лимит устройств (${user.deviceLimit}). Отключите старое устройство или обратитесь к администратору.`);
+  // Лимит устройств НЕ проверяем здесь: переиспользование существующего Xray-конфига
+  // (подписка одна на все устройства) лимитом не считается, а раньше эта пред-проверка
+  // ложно блокировала выдачу «своего же» конфига пользователю на лимите. Единый
+  // источник правды — issueForUser; для AWG он корректно откажет с понятным текстом.
   const protos = user.allowedProtocols.filter((p) => p === 'xray' || p === 'amneziawg') as Array<'xray' | 'amneziawg'>;
   if (protos.length === 0) return void send(chatId, 'Для вашего доступа не выбран протокол. Обратитесь к администратору.');
   if (protos.length === 1) return issueAndSend(chatId, user, protos[0]!);
   const kb: Kb = protos.map((p) => [{ text: PROTO_LABEL[p]!, callback_data: `proto:${p}` }]);
   await send(chatId, 'Какой протокол выпустить?', { kb });
+}
+
+/** Отправить блок с содержимым (ссылка/.conf) отдельным сообщением, безопасно.
+ *  Раньше parse_mode=Markdown молча ронял сообщение, если в тексте были символы
+ *  разметки (_ * ` [), — пользователь видел «Готово», но конфиг не приходил.
+ *  Шлём как обычный текст без parse_mode — надёжно копируется целиком. */
+async function sendBlock(chatId: number, caption: string, payload: string): Promise<boolean> {
+  await send(chatId, caption);
+  return sendRaw(chatId, payload);
+}
+
+/** Прямая отправка текста без parse_mode; возвращает успех (для диагностики). */
+async function sendRaw(chatId: number | string, text: string): Promise<boolean> {
+  try {
+    await tgApi('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & object, protocol: 'xray' | 'amneziawg'): Promise<void> {
@@ -324,14 +519,33 @@ async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & 
   await send(chatId, `Выпускаю конфиг (${PROTO_LABEL[protocol]})…`);
   try {
     const out = await issueForUser(user, 'Telegram', serverId, protocol);
-    const cfg = out.link ?? out.conf ?? '';
-    await send(chatId, `Готово! Ваш конфиг (${PROTO_LABEL[protocol]}) — скопируйте целиком:`);
-    await send(chatId, '```\n' + cfg + '\n```', { markdown: true });
-    const tip =
-      protocol === 'xray'
-        ? 'Откройте приложение (Happ / V2RayTun) → «+» → «Импорт из буфера» → вставьте ссылку → подключитесь.'
-        : 'Откройте AmneziaWG / AmneziaVPN → импортируйте .conf (текст выше сохраните как файл .conf) → активируйте.';
-    await send(chatId, `📖 ${tip}`, { kb: [[{ text: '⬇️ Приложения', callback_data: 'apps' }], [{ text: '‹ Меню', callback_data: 'menu' }]] });
+    if (protocol === 'xray') {
+      // Подписочная модель, как в кабинете: одна ссылка-подписка на ВСЕ устройства
+      // (приложение само тянет и обновляет конфиги со всех разрешённых серверов).
+      const subUrl = out.subscriptionUrl ?? repo.subscriptionUrl(user.id) ?? out.link ?? '';
+      const ok = await sendBlock(chatId, 'Готово! Ваша ссылка-подписка (одна на все устройства) — скопируйте целиком:', subUrl);
+      if (!ok) {
+        await send(chatId, 'Не удалось отправить ссылку. Откройте личный кабинет на сайте и скопируйте её там.');
+        return;
+      }
+      await send(chatId, '📖 Откройте приложение (Happ / V2RayTun) → «+» → «Добавить подписку / Импорт из буфера» → вставьте ссылку → подключитесь.', {
+        kb: [[{ text: '⬇️ Приложения', callback_data: 'apps' }], [{ text: '‹ Меню', callback_data: 'menu' }]],
+      });
+      return;
+    }
+    // AmneziaWG: .conf + ссылка vpn:// (для AmneziaVPN) — как в кабинете.
+    const conf = out.conf ?? '';
+    const ok = await sendBlock(chatId, 'Готово! Ваш конфиг AmneziaWG — сохраните текст ниже как файл .conf:', conf);
+    if (!ok) {
+      await send(chatId, 'Не удалось отправить конфиг. Откройте личный кабинет на сайте и скачайте его там.');
+      return;
+    }
+    if (out.vpnKey) {
+      await sendBlock(chatId, 'Ссылка vpn:// — для приложения AmneziaVPN (импорт в один тап):', out.vpnKey);
+    }
+    await send(chatId, '📖 AmneziaWG: импортируйте файл .conf. AmneziaVPN: откройте ссылку vpn:// выше.', {
+      kb: [[{ text: '⬇️ Приложения', callback_data: 'apps' }], [{ text: '‹ Меню', callback_data: 'menu' }]],
+    });
   } catch (e) {
     await send(chatId, 'Не удалось выпустить конфиг: ' + (e instanceof Error ? e.message : 'ошибка') + '\nПопробуйте ещё раз чуть позже.', {
       kb: [[{ text: 'Повторить', callback_data: `proto:${protocol}` }], [{ text: '‹ Меню', callback_data: 'menu' }]],

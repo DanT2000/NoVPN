@@ -260,6 +260,22 @@ try {
   /* индекс уже есть */
 }
 
+// Один chat_id Telegram = один пользователь. Сначала чистим возможные дубли из
+// старых данных (удалённые записи и «залипшие» вторые строки на тот же chat_id),
+// затем ставим ЧАСТИЧНЫЙ уникальный индекс. Без этого захват/дубли рассылки.
+try {
+  db.exec("UPDATE users SET telegram_chat_id = NULL WHERE deleted_at IS NOT NULL AND telegram_chat_id IS NOT NULL");
+  db.exec(
+    `UPDATE users SET telegram_chat_id = NULL
+      WHERE telegram_chat_id IS NOT NULL
+        AND rowid NOT IN (SELECT MAX(rowid) FROM users WHERE telegram_chat_id IS NOT NULL GROUP BY telegram_chat_id)`,
+  );
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tg_chat ON users(telegram_chat_id) WHERE telegram_chat_id IS NOT NULL');
+} catch {
+  // Индекс — усиление; при неожиданных данных не блокируем старт панели (запись
+  // всё равно защищена транзакцией в setTelegramChatId).
+}
+
 // Выдать токен подписки всем, у кого его ещё нет.
 {
   const rows = db.prepare('SELECT id FROM users WHERE sub_token IS NULL').all() as Array<{ id: string }>;

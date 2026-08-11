@@ -539,40 +539,47 @@ export function replaceApps(apps: AppClient[]): AppClient[] {
 /** Запомнить числовой chat_id привязанного пользователя (для бот-рассылки).
  *  Пишем только при изменении, чтобы не дёргать updated_at на каждом сообщении. */
 export function setTelegramChatId(userId: string, chatId: number): void {
-  db.prepare('UPDATE users SET telegram_chat_id = ? WHERE id = ? AND (telegram_chat_id IS NULL OR telegram_chat_id != ?)').run(
-    chatId,
-    userId,
-    chatId,
-  );
+  // Один chat_id принадлежит РОВНО одному пользователю. Раньше привязка обновляла
+  // только целевую строку, не снимая chat_id с других — на один Telegram оказывались
+  // навешаны две записи (напр. после удаления и пересоздания пользователя), и бот
+  // «залипал» на первой попавшейся (часто удалённой) строке. Сначала снимаем chat_id
+  // со всех остальных, затем ставим целевой — атомарно.
+  const tx = db.transaction((uid: string, cid: number) => {
+    db.prepare('UPDATE users SET telegram_chat_id = NULL WHERE telegram_chat_id = ? AND id != ?').run(cid, uid);
+    db.prepare('UPDATE users SET telegram_chat_id = ? WHERE id = ?').run(cid, uid);
+  });
+  tx(userId, chatId);
 }
 
-/** Пользователь по НЕИЗМЕНЯЕМОМУ chat_id Telegram. */
+/** Пользователь по НЕИЗМЕНЯЕМОМУ chat_id Telegram. Удалённые не резолвятся. */
 export function getUserByTelegramChatId(chatId: number): User | null {
-  const r = db.prepare('SELECT id FROM users WHERE telegram_chat_id = ?').get(chatId) as { id: string } | undefined;
+  const r = db
+    .prepare('SELECT id FROM users WHERE telegram_chat_id = ? AND deleted_at IS NULL ORDER BY rowid LIMIT 1')
+    .get(chatId) as { id: string } | undefined;
   return r ? getUser(r.id) : null;
 }
 
-/** Идентификация пользователя в боте. По неизменяемому chat_id (безопасно), а по
- *  handle (@username) — ТОЛЬКО для legacy-привязок без сохранённого chat_id.
- *  username в Telegram переиспользуемы: матчить уже привязанного (с chat_id) по
- *  handle нельзя, иначе новый владелец чужого username захватит аккаунт. */
-export function findBotUser(chatId: number, handle: string): User | null {
-  const byChat = getUserByTelegramChatId(chatId);
-  if (byChat) return byChat;
-  const r = db.prepare('SELECT id FROM users WHERE telegram = ? AND telegram_chat_id IS NULL').get(handle) as
-    | { id: string }
-    | undefined;
-  return r ? getUser(r.id) : null;
+/** Идентификация пользователя в боте — ТОЛЬКО по неизменяемому chat_id.
+ *  @username в Telegram переиспользуемы: идентификация по handle позволяла новому
+ *  владельцу чужого username захватить аккаунт (устройства, выпуск конфигов). Handle
+ *  храним лишь для отображения; для привязки нужен явный токен личной ссылки/код,
+ *  после чего chat_id зафиксирован. */
+export function findBotUser(chatId: number, _handle?: string): User | null {
+  return getUserByTelegramChatId(chatId);
 }
 
-/** Привязанные к Telegram пользователи с известным chat_id — цели рассылки. */
+/** Привязанные к Telegram пользователи — цели экстренной рассылки. Только активные,
+ *  не удалённые, каждый chat_id один раз (иначе дубль сообщений и двойной расход лимита). */
 export function listTelegramTargets(): Array<{ id: string; name: string; chatId: number }> {
   return (
-    db.prepare('SELECT id, name, telegram_chat_id AS chatId FROM users WHERE telegram_chat_id IS NOT NULL').all() as Array<{
-      id: string;
-      name: string;
-      chatId: number;
-    }>
+    db
+      .prepare(
+        `SELECT MIN(id) AS id, MIN(name) AS name, telegram_chat_id AS chatId
+           FROM users
+          WHERE telegram_chat_id IS NOT NULL AND deleted_at IS NULL AND is_active = 1
+          GROUP BY telegram_chat_id`,
+      )
+      .all() as Array<{ id: string; name: string; chatId: number }>
   ).map((r) => ({ id: r.id, name: r.name, chatId: r.chatId }));
 }
 
@@ -595,7 +602,9 @@ export function getTelegramSafe(): TelegramSettings {
   };
   // linkedUserIds раньше не заполнялся (всегда []), из-за чего раздел «Привязанные
   // пользователи» в панели был всегда пуст. Формируем из пользователей с привязкой.
-  const linkedUserIds = (db.prepare('SELECT id FROM users WHERE telegram IS NOT NULL').all() as Array<{ id: string }>).map((r) => r.id);
+  const linkedUserIds = (
+    db.prepare('SELECT id FROM users WHERE telegram IS NOT NULL AND deleted_at IS NULL').all() as Array<{ id: string }>
+  ).map((r) => r.id);
   return { ...safe, linkedUserIds };
 }
 /** Зашифрованный токен сохранённого бота (для проверки соединения к текущему). */

@@ -1,7 +1,7 @@
 // A8 — Telegram. Настройки бота, прокси, шаблон сообщений и привязки.
 
-import { useState } from 'react';
-import type { TelegramMode, ProxyType } from '@novpn/shared';
+import { useEffect, useState } from 'react';
+import type { ProxyType } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import type { SaveTelegramInput } from '../api/types';
@@ -13,7 +13,6 @@ export function Telegram() {
 
   const [enabled, setEnabled] = useState(tg?.enabled ?? false);
   const [token, setToken] = useState('');
-  const [mode, setMode] = useState<TelegramMode>(tg?.mode ?? 'polling');
   const [proxyOn, setProxyOn] = useState(tg?.proxyOn ?? false);
   const [proxySource, setProxySource] = useState<'server' | 'manual'>(tg?.proxySource ?? 'manual');
   const [proxyServerId, setProxyServerId] = useState<string | null>(tg?.proxyServerId ?? null);
@@ -32,6 +31,27 @@ export function Telegram() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  // Ресинк формы с сервером. Раньше useState-инициализация происходила ДО прихода
+  // data (компонент монтировался с data=null после входа), поля фиксировались
+  // пустыми, и «Сохранить» затирало реальные настройки (бот выкл, прокси/шаблон
+  // стёрты). Пересобираем локальный стейт при каждом изменении сохранённых настроек.
+  const tgSig = tg
+    ? JSON.stringify([tg.enabled, tg.proxyOn, tg.proxySource, tg.proxyServerId, tg.proxyType, tg.proxyHost, tg.proxyPort, tg.proxyLogin, tg.template, tg.tokenMasked])
+    : '';
+  useEffect(() => {
+    if (!tg) return;
+    setEnabled(tg.enabled ?? false);
+    setProxyOn(tg.proxyOn ?? false);
+    setProxySource(tg.proxySource ?? 'manual');
+    setProxyServerId(tg.proxyServerId ?? null);
+    setProxyType(tg.proxyType === 'https' ? 'https' : 'http');
+    setProxyHost(tg.proxyHost ?? '');
+    setProxyPort(tg.proxyPort ?? '');
+    setProxyLogin(tg.proxyLogin ?? '');
+    setTemplate(tg.template ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tgSig]);
+
   if (!data) return null;
 
   const savedMasked = data.telegram.tokenMasked;
@@ -46,7 +66,7 @@ export function Telegram() {
       const input: SaveTelegramInput = {
         enabled,
         token: token.trim() ? token.trim() : undefined,
-        mode,
+        mode: 'polling', // webhook не реализован — всегда long-polling
         proxyOn,
         proxySource,
         proxyServerId: proxySource === 'server' ? proxyServerId : null,
@@ -61,6 +81,8 @@ export function Telegram() {
       setToken('');
       setProxyPass('');
       showToast('Настройки Telegram сохранены');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось сохранить настройки Telegram');
     } finally {
       setSaving(false);
     }
