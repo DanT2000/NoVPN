@@ -3,6 +3,7 @@ import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { Dot } from '../components/ui';
+import { Qr } from '../components/Qr';
 import { dateShort, daysLeft, gb, plural } from '../lib/format';
 import { statusOf } from '../lib/status';
 import { copyText, openUrl } from '../lib/clipboard';
@@ -170,6 +171,7 @@ export function Cabinet() {
               конфигурации и будет держать их актуальными.
             </div>
           </div>
+          <Qr text={data.subLink} caption="Отсканируйте в приложении" />
           <input className="input mono" readOnly value={data.subLink} style={{ fontSize: 12 }} />
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button
@@ -179,6 +181,9 @@ export function Cabinet() {
               }}
             >
               Копировать подписку
+            </button>
+            <button className="btn btn-outline btn-sm" onClick={() => goPublic('wizard', { wizardMode: 'issue' })}>
+              Подключить в приложении
             </button>
             <button className="btn btn-outline btn-sm" onClick={() => goPublic('apps')}>
               Куда вставить?
