@@ -1,17 +1,22 @@
+import { useState } from 'react';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import type { Device } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Pill, EmptyState } from '../components/ui';
+import { CleanupDialog, RenameDialog, isInactive } from '../components/DeviceDialogs';
 import { dateShort, gb, rel } from '../lib/format';
 import { devStatusOf } from '../lib/status';
 
 export function Devices() {
-  const { publicUser: user, publicData: data, goPublic, showConfirm, showToast, reissueDevice, revokeDevice, deleteDevice } = useApp();
+  const { publicUser: user, publicData: data, goPublic, showConfirm, showToast, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices } = useApp();
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Device | null>(null);
   if (!user || !data) return null;
 
   const devices = data.devices.filter((d) => d.userId === user.id);
   const active = devices.filter((d) => d.isActive).length;
   const uDevBig = user.deviceLimit == null ? String(active) : `${active} из ${user.deviceLimit}`;
+  const inactive = devices.filter((d) => isInactive(d));
 
   const serverName = (id: string) => data.servers.find((s) => s.id === id)?.name ?? id;
 
@@ -52,6 +57,15 @@ export function Devices() {
       },
     });
 
+  const doCleanup = async (ids: string[]) => {
+    const n = await cleanupDevices(ids);
+    showToast(n ? `Удалено конфигов: ${n}` : 'Ничего не удалено');
+  };
+  const doRename = async (id: string, name: string) => {
+    await renameDevice(id, name);
+    showToast('Название изменено');
+  };
+
   return (
     <div className="stack" style={{ gap: 14, paddingTop: 12 }}>
       <div className="row-between">
@@ -61,6 +75,17 @@ export function Devices() {
         </div>
         <span className="mono muted" style={{ fontSize: 13 }}>{uDevBig}</span>
       </div>
+
+      {inactive.length > 0 ? (
+        <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <div className="small">
+            <b>{inactive.length}</b> {inactive.length === 1 ? 'конфиг не использовался' : 'конфигов не использовались'} более 30 дней.
+          </div>
+          <button className="btn btn-outline btn-sm" onClick={() => setCleanupOpen(true)}>
+            Очистить неактивные
+          </button>
+        </div>
+      ) : null}
 
       {devices.length === 0 ? (
         <EmptyState
@@ -101,6 +126,9 @@ export function Devices() {
                     <button className="btn btn-outline btn-sm" onClick={() => onReissue(d)}>
                       Перевыпуск
                     </button>
+                    <button className="btn btn-outline btn-sm" onClick={() => setRenameTarget(d)}>
+                      Переименовать
+                    </button>
                     <button className="btn btn-danger-outline btn-sm" onClick={() => onRevoke(d)}>
                       Отключить
                     </button>
@@ -115,6 +143,22 @@ export function Devices() {
           );
         })
       )}
+
+      {cleanupOpen ? (
+        <CleanupDialog
+          devices={inactive}
+          serverName={serverName}
+          onClose={() => setCleanupOpen(false)}
+          onCleanup={doCleanup}
+        />
+      ) : null}
+      {renameTarget ? (
+        <RenameDialog
+          device={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onRename={(name) => doRename(renameTarget.id, name)}
+        />
+      ) : null}
     </div>
   );
 }

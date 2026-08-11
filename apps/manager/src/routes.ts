@@ -16,7 +16,7 @@ import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeA
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
-import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser, revokeUserAccessOnServers } from './services/issue.js';
+import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser, revokeUserAccessOnServers, revokeDeviceOnServer } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { renderSubPage } from './services/subPage.js';
@@ -272,6 +272,34 @@ router.delete('/api/public/devices/:id', requireUserOrAdmin, (req, res) => {
   if (!d || !ownsDevice(req, d)) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
   repo.deleteDevice(req.params.id!);
   res.json({ ok: true });
+});
+
+// Переименовать конфиг (пользователь в кабинете или админ из карточки).
+router.post('/api/public/devices/:id/rename', requireUserOrAdmin, (req, res) => {
+  const d = repo.getDevice(req.params.id!);
+  if (!d || !ownsDevice(req, d)) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
+  const name = String(req.body?.name ?? '').trim();
+  if (!name) return res.status(400).json(err('validation', 'Укажите название.'));
+  const updated = repo.renameDevice(d.id, name);
+  res.json(updated);
+});
+
+// Массовая очистка конфигов: отзываем на сервере и удаляем записи. Идентичный путь
+// для кабинета (пользователь чистит свои) и админки (админ чистит любые — ownsDevice
+// пускает admin). Клиент присылает только те id, что оставил отмеченными.
+router.post('/api/public/devices/cleanup', requireUserOrAdmin, async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map(String) : [];
+  if (ids.length === 0) return res.json({ deleted: 0 });
+  let deleted = 0;
+  for (const id of ids) {
+    const d = repo.getDevice(id);
+    if (!d || !ownsDevice(req, d)) continue; // чужое/несуществующее — молча пропускаем
+    if (d.isActive) await revokeDeviceOnServer(d.id); // снять доступ на сервере (best-effort)
+    repo.deleteDevice(d.id);
+    if (d.userId) repo.addHistory(d.userId, `Удалён конфиг «${d.name}» (очистка)`);
+    deleted += 1;
+  }
+  res.json({ deleted });
 });
 
 // Выдать/получить прокси-аккаунт пользователя на сервере.

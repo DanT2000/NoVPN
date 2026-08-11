@@ -14,6 +14,14 @@ export async function syncAllServers(): Promise<void> {
   if (running) return;
   running = true;
   try {
+    // Автоочистка отозванных/отключённых записей старше grace: конфиг на сервере
+    // уже мёртв, запись только засоряет список пользователя и включить её нельзя.
+    try {
+      const removed = repo.cleanupRevokedDevices();
+      if (removed) repo.addLog(`Автоочистка отозванных конфигов: ${removed}`);
+    } catch (e) {
+      repo.addJobError('панель', `Автоочистка отозванных: ${e instanceof Error ? e.message : 'ошибка'}`);
+    }
     // Автоотключение неактивных устройств (если включено в настройках) — и
     // реальный отзыв на сервере, иначе отключённый конфиг продолжал бы работать.
     try {

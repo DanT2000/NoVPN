@@ -132,6 +132,10 @@ export interface ApiClient {
   reissueDevice(deviceId: string): Promise<IssueDeviceResult>;
   revokeDevice(deviceId: string): Promise<Ok>;
   deleteDevice(deviceId: string): Promise<Ok>;
+  /** Переименовать конфиг (пользователь или админ). */
+  renameDevice(deviceId: string, name: string): Promise<Device>;
+  /** Массовая очистка: отозвать на сервере и удалить выбранные конфиги. */
+  cleanupDevices(ids: string[]): Promise<{ deleted: number }>;
   /** Выдать/получить прокси-аккаунт на сервере (для текущего пользователя; админ
    *  может передать userId, чтобы выдать за пользователя). */
   issueProxy(serverId: string, userId?: string): Promise<ProxyAccount>;

@@ -407,6 +407,37 @@ export function deleteDevice(id: string): void {
   db.prepare('DELETE FROM devices WHERE id = ?').run(id);
 }
 
+/** Переименовать устройство (пользователь/админ). Пустое имя не допускаем. */
+export function renameDevice(id: string, name: string): Device | null {
+  const n = name.trim().slice(0, 60);
+  if (!n) return getDevice(id);
+  db.prepare('UPDATE devices SET name = ? WHERE id = ?').run(n, id);
+  return getDevice(id);
+}
+
+/** Автоочистка отозванных/отключённых записей старше graceDays: конфиг уже мёртв
+ *  на сервере (отозван), запись только засоряет список и включить её нельзя.
+ *  Grace даёт окно на случай случайного отзыва. Возвращает число удалённых. */
+export function cleanupRevokedDevices(graceDays = 3): number {
+  const cutoff = new Date(Date.now() - graceDays * 86400000).toISOString();
+  const info = db
+    .prepare('DELETE FROM devices WHERE is_active = 0 AND revoked_at IS NOT NULL AND revoked_at < ?')
+    .run(cutoff);
+  return info.changes ?? 0;
+}
+
+/** Устройства пользователя, «неактивные» дольше days дней: активная запись, но
+ *  последняя активность (или, если её нет, дата создания) старше порога. Кандидаты
+ *  для ручной очистки — окончательное решение за пользователем (галочки в UI). */
+export function inactiveDevicesOfUser(userId: string, days = 30): Device[] {
+  const cutoffMs = Date.now() - days * 86400000;
+  return listDevicesOfUser(userId).filter((d) => {
+    if (!d.isActive) return false;
+    const ref = d.lastSeenAt ?? d.createdAt;
+    return ref ? new Date(ref).getTime() < cutoffMs : false;
+  });
+}
+
 // ── servers ──
 export function listServers(): Server[] {
   // «Пользователи» считаем реально: сколько живых пользователей имеют активный

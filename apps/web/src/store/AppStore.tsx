@@ -86,6 +86,8 @@ interface AppContextValue {
   reissueDevice(deviceId: string): Promise<IssueDeviceResult>;
   revokeDevice(deviceId: string): Promise<void>;
   deleteDevice(deviceId: string): Promise<void>;
+  renameDevice(deviceId: string, name: string): Promise<void>;
+  cleanupDevices(ids: string[]): Promise<number>;
 
   // admin auth
   adminLogin(password: string): Promise<boolean>;
@@ -309,6 +311,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [patchDevices],
   );
+  const renameDevice = useCallback(
+    async (deviceId: string, name: string) => {
+      const d = await api.renameDevice(deviceId, name);
+      patchDevices((list) => list.map((x) => (x.id === deviceId ? { ...x, name: d.name } : x)));
+    },
+    [patchDevices],
+  );
+  const cleanupDevices = useCallback(
+    async (ids: string[]) => {
+      const { deleted } = await api.cleanupDevices(ids);
+      patchDevices((list) => list.filter((x) => !ids.includes(x.id)));
+      return deleted;
+    },
+    [patchDevices],
+  );
 
   // ── admin auth ──
   const adminLogin = useCallback(async (password: string) => {
@@ -464,7 +481,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, mustChangePassword, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin,
       setPublicUser, logoutPublic,
-      issueDevice, reissueDevice, revokeDevice, deleteDevice,
+      issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices,
       adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer,
@@ -473,7 +490,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [
       loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, mustChangePassword, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
-      issueDevice, reissueDevice, revokeDevice, deleteDevice, adminLogin, adminLogout,
+      issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices, adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],

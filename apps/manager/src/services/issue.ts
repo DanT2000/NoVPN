@@ -94,6 +94,22 @@ export async function issueForUser(
   };
 }
 
+/** Отозвать ОДНО устройство на его сервере (best-effort). Отзыв в БД делает
+ *  вызывающий отдельно. Вынесено, чтобы массовая очистка и одиночный revoke
+ *  использовали одну и ту же логику. */
+export async function revokeDeviceOnServer(deviceId: string): Promise<void> {
+  const row = repo.getDeviceRow(deviceId);
+  if (!row) return;
+  const server = repo.getServer(row.server_id);
+  if (!server || !(await sshHasSshAccess(server.id))) return;
+  try {
+    if (row.protocol === 'xray' && row.uuid) await sshRevokeXray(server, row.uuid);
+    else if (row.protocol === 'amneziawg' && row.public_key) await sshRevokeAwg(server, row.public_key);
+  } catch {
+    /* best-effort: сервер недоступен — запись всё равно удалится/отзовётся в БД */
+  }
+}
+
 /** Отозвать ВСЕ активные конфиги/прокси пользователя на серверах — при отключении,
  *  удалении или истечении доступа. Иначе уже импортированный конфиг продолжал бы
  *  работать на VPN-сервере бессрочно. Best-effort: сбой одного сервера не мешает

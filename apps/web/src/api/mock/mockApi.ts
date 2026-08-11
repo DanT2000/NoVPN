@@ -195,6 +195,20 @@ export const mockApi: ApiClient = {
     return { ok: true };
   },
 
+  async renameDevice(deviceId: string, name: string): Promise<Device> {
+    await wait(200);
+    const d = state.devices.find((x) => x.id === deviceId)!;
+    d.name = name.trim().slice(0, 60) || d.name;
+    return d;
+  },
+
+  async cleanupDevices(ids: string[]): Promise<{ deleted: number }> {
+    await wait(400);
+    const before = state.devices.length;
+    state.devices = state.devices.filter((d) => !ids.includes(d.id));
+    return { deleted: before - state.devices.length };
+  },
+
   async adminLogin(password: string): Promise<{ ok: boolean }> {
     await wait(400);
     const ok = password === 'admin';

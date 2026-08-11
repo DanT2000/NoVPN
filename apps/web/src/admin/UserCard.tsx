@@ -2,10 +2,11 @@
 // выпуск конфигов, устройства, история.
 
 import { useState } from 'react';
-import type { IssueDeviceResult, Protocol, ProxyType, Server, User } from '@novpn/shared';
+import type { Device, IssueDeviceResult, Protocol, ProxyType, Server, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { CategoryPicker, Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader, Toggle } from '../components/ui';
+import { CleanupDialog, RenameDialog, isInactive } from '../components/DeviceDialogs';
 import { Qr } from '../components/Qr';
 import { dateShort, daysLeft, gb, rel, DAY_MS } from '../lib/format';
 import { countActiveDevices, devStatusOf, serverAgentView, statusOf } from '../lib/status';
@@ -77,7 +78,7 @@ function UserCardInner({ user }: { user: User }) {
   const {
     data, isMobile, goAdmin, showToast, showConfirm,
     updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
-    reissueDevice, revokeDevice, issueDevice,
+    reissueDevice, revokeDevice, issueDevice, renameDevice, cleanupDevices,
   } = useApp();
 
   const servers = data?.servers ?? [];
@@ -143,12 +144,15 @@ function UserCardInner({ user }: { user: User }) {
   const [issuing, setIssuing] = useState(false);
   const [issued, setIssued] = useState<IssueDeviceResult | null>(null);
   const [issErr, setIssErr] = useState<string | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Device | null>(null);
 
   if (!data) return null;
 
   const isAdmin = category === 'Админ';
   const activeDevices = countActiveDevices(user.id, data.devices);
   const userDevices = data.devices.filter((d) => d.userId === user.id);
+  const inactiveDevices = userDevices.filter((d) => isInactive(d));
   const history = data.history[user.id] ?? [];
   const usagePct = user.trafficLimitGb ? Math.min(100, (user.trafficUsedGb / user.trafficLimitGb) * 100) : 0;
   const selectedServers = servers.filter((s) => allowedServers.includes(s.id));
@@ -598,16 +602,23 @@ function UserCardInner({ user }: { user: User }) {
       <Panel
         title="Устройства и конфиги"
         extra={
-          <button
-            className="btn btn-outline btn-sm"
-            onClick={() => {
-              setIssueOpen((v) => !v);
-              setIssued(null);
-              setIssErr(null);
-            }}
-          >
-            {issueOpen ? 'Закрыть' : '+ Выпустить конфиг'}
-          </button>
+          <div className="row" style={{ gap: 8 }}>
+            {inactiveDevices.length > 0 ? (
+              <button className="btn btn-outline btn-sm" onClick={() => setCleanupOpen(true)}>
+                Очистить неактивные ({inactiveDevices.length})
+              </button>
+            ) : null}
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => {
+                setIssueOpen((v) => !v);
+                setIssued(null);
+                setIssErr(null);
+              }}
+            >
+              {issueOpen ? 'Закрыть' : '+ Выпустить конфиг'}
+            </button>
+          </div>
         }
       >
         {issueOpen ? (
@@ -721,6 +732,9 @@ function UserCardInner({ user }: { user: User }) {
                       >
                         Перевыпустить
                       </button>
+                      <button className="btn btn-outline btn-sm" onClick={() => setRenameTarget(d)}>
+                        Переименовать
+                      </button>
                       <button className="btn btn-danger-outline btn-sm" onClick={() => confirmRevoke(d.id, d.name)}>
                         Отключить
                       </button>
@@ -732,6 +746,28 @@ function UserCardInner({ user }: { user: User }) {
           })
         )}
       </Panel>
+
+      {cleanupOpen ? (
+        <CleanupDialog
+          devices={inactiveDevices}
+          serverName={(id) => servers.find((s) => s.id === id)?.name ?? id}
+          onClose={() => setCleanupOpen(false)}
+          onCleanup={async (ids) => {
+            const n = await cleanupDevices(ids);
+            showToast(n ? `Удалено конфигов: ${n}` : 'Ничего не удалено');
+          }}
+        />
+      ) : null}
+      {renameTarget ? (
+        <RenameDialog
+          device={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onRename={async (name) => {
+            await renameDevice(renameTarget.id, name);
+            showToast('Название изменено');
+          }}
+        />
+      ) : null}
 
       <Panel title="Telegram">
         <div>{user.telegram ? `Привязан: ${user.telegram}` : 'Не привязан'}</div>
