@@ -10,6 +10,7 @@ import type {
   TelegramSettings,
   User,
 } from '@novpn/shared';
+import { buildWhitelistXrayConfig } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, REALITY_SNI } from './services/sshServer.js';
@@ -104,6 +105,22 @@ router.get('/sub/:token', (req, res) => {
     res.setHeader('Subscription-Userinfo', `upload=0; download=${used}; total=${total}; expire=${expire}`);
   }
   res.send(Buffer.from(links.join('\n'), 'utf8').toString('base64'));
+});
+
+// Полный Xray-конфиг с обходом «белых списков»: RU-домены напрямую, остальное —
+// через reality-прокси. Для V2RayNG/Xray-core (импорт как «свой конфиг»). Тот же
+// токен подписки. Отдаём JSON-файлом.
+router.get('/sub/:token/full', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).send('');
+  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
+  const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
+  const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
+  if (links.length === 0) return res.status(404).send('');
+  const json = buildWhitelistXrayConfig(links, config.appName);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${config.appName}-whitelist.json"`);
+  res.send(json);
 });
 
 // ── bootstrap ──

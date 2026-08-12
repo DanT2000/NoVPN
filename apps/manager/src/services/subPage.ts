@@ -138,6 +138,16 @@ export function renderSubPage(opts: {
     </div>
   </div>
 
+  ${
+    configCount > 0
+      ? `<div class="card">
+    <div class="lbl">Обход белых списков (V2RayNG / Xray)</div>
+    <div class="app-i" style="margin-bottom:10px">Полный конфиг: российские сайты (госуслуги, банки, VK, Яндекс, Ozon…) идут напрямую и работают даже в режиме «белого списка», остальное — через VPN. Импортируйте в V2RayNG как «свой конфиг».</div>
+    <a class="btn btn-primary btn-wide" href="${esc(subUrl)}/full">Скачать конфиг с обходом</a>
+  </div>`
+      : ''
+  }
+
   <div class="step">Выберите вашу систему — покажем, что установить.</div>
   <div class="tabs">${tabs}</div>
   ${cards}
