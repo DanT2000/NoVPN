@@ -12,7 +12,7 @@ import type {
 } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
@@ -758,6 +758,23 @@ router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) =
 
 router.get('/api/admin/servers/:id/provision-status', requireAdmin, (req, res) => {
   res.json(provisionStatus.get(req.params.id!) ?? { state: 'idle', message: '' });
+});
+
+// Сменить reality-SNI на сервере (без переустановки). vk.com режется DPI —
+// переводим на cdn.dodostatic.net. Ключи не трогаются, UUID остаются валидными;
+// клиентские ссылки обновляет миграция БД.
+router.post('/api/admin/servers/:id/reality-sni', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  try {
+    await sshSetXraySni(s);
+    saveServerKeys(s.host, { xraySni: REALITY_SNI });
+    repo.addLog(`reality-SNI на «${s.name}» → ${REALITY_SNI}`);
+    res.json({ ok: true, sni: REALITY_SNI });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось сменить SNI.'));
+  }
 });
 
 // Полное удаление ПО с сервера (xray/awg/прокси). Пользователи и подписки в панели не трогаются.

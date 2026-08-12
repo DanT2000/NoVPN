@@ -293,6 +293,28 @@ try {
   }
 }
 
+// Миграция reality-SNI: vk.com заезжен reality-серверами и режется российским DPI
+// (проверено на реальной сети). Переводим на cdn.dodostatic.net + fp=edge + spx=/.
+// Обновляем СОХРАНЁННЫЙ SNI серверов (чтобы переустановка восстановила новый) и
+// перегенерируем существующие xray-ссылки (uuid/pbk/sid не трогаем — только маскировку).
+// Серверный server.json меняется отдельно переустановкой сервера из панели.
+try {
+  const changed = db.prepare("UPDATE server_keys SET xray_sni = 'cdn.dodostatic.net' WHERE xray_sni = 'vk.com'").run().changes ?? 0;
+  const rows = db.prepare("SELECT id, link FROM devices WHERE protocol = 'xray' AND link LIKE '%sni=vk.com%'").all() as Array<{ id: string; link: string }>;
+  const upd = db.prepare('UPDATE devices SET link = ? WHERE id = ?');
+  const tx = db.transaction((list: Array<{ id: string; link: string }>) => {
+    for (const r of list) {
+      let link = r.link.replace('sni=vk.com', 'sni=cdn.dodostatic.net').replace('fp=chrome', 'fp=edge');
+      if (!/[?&]spx=/.test(link)) link = link.replace('&flow=', '&spx=%2F&flow=');
+      upd.run(link, r.id);
+    }
+  });
+  tx(rows);
+  if (changed || rows.length) console.log(`[migrate] reality SNI → cdn.dodostatic.net: серверов ${changed}, ссылок ${rows.length}`);
+} catch {
+  /* не критично — не блокируем старт */
+}
+
 // До перехода на накопительный учёт received_bytes/sent_bytes хранили СЫРОЕ
 // показание счётчика сервера. Переносим его в rx_raw/tx_raw как «уже учтённое»,
 // иначе первая же синхронизация посчитает весь прошлый трафик приростом и

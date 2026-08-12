@@ -8,6 +8,14 @@ import { decryptSecret } from '../lib/crypto.js';
 import { getServerSsh } from '../repo.js';
 import { getServerKeys } from './keyvault.js';
 
+// Параметры маскировки Xray-reality. SNI vk.com оказался заезжен reality-серверами
+// и режется российским DPI (проверено на реальной сети: vk.com виснет, а
+// cdn.dodostatic.net проходит). fingerprint edge + spiderX '/' — как в рабочих
+// конфигах. dest (reality-стил) указывает на тот же домен, он отдаёт TLS 1.3.
+export const REALITY_SNI = 'cdn.dodostatic.net';
+export const REALITY_FP = 'edge';
+export const REALITY_SPX = '/';
+
 function creds(serverId: string) {
   const s = getServerSsh(serverId);
   if (!s) throw new Error('Сервер не найден.');
@@ -251,7 +259,7 @@ export async function sshInstallServer(
   opts: { xray: boolean; awg: boolean; sni?: string; realityPriv?: string; shortId?: string; awgPriv?: string; awgParams: AwgParams },
 ): Promise<{ realityPriv?: string; realityPub?: string; shortId?: string; sni?: string; awgPriv?: string; awgPub?: string }> {
   const script = buildInstallScript({
-    sni: opts.sni || 'vk.com',
+    sni: opts.sni || REALITY_SNI,
     realityPriv: opts.realityPriv || '',
     shortId: opts.shortId || '',
     awgPriv: opts.awgPriv || '',
@@ -398,8 +406,35 @@ echo "UUID=$UUID"`;
   if (!uuid) throw new Error('Не удалось создать Xray-клиента на сервере.');
   const link =
     `vless://${uuid}@${server.host}:443?type=tcp&security=reality&pbk=${pbk}` +
-    `&fp=chrome&sni=${encodeURIComponent(sni)}&sid=${sid}&flow=xtls-rprx-vision&encryption=none#NoVPN-${encodeURIComponent(nm)}`;
+    `&fp=${REALITY_FP}&sni=${encodeURIComponent(sni)}&sid=${sid}&spx=${encodeURIComponent(REALITY_SPX)}` +
+    `&flow=xtls-rprx-vision&encryption=none#NoVPN-${encodeURIComponent(nm)}`;
   return { uuid, link, publicKey: pbk };
+}
+
+/** Сменить reality-SNI на сервере БЕЗ переустановки: правим serverNames+dest в
+ *  server.json и перезапускаем Xray. Ключи (privateKey/shortIds) не трогаем — уже
+ *  выданные UUID остаются валидными, меняется только маскировка. Клиентские ссылки
+ *  обновляет отдельная миграция БД. */
+export async function sshSetXraySni(server: Server, sni: string = REALITY_SNI): Promise<void> {
+  const out = await withServerLock(server.id, () => {
+    const script = `set -e
+for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
+python3 - '${sni}' <<'PY'
+import json,sys
+sni=sys.argv[1]
+p='/opt/amnezia/xray/server.json'
+c=json.load(open(p))
+rs=c['inbounds'][0]['streamSettings']['realitySettings']
+rs['serverNames']=[sni]
+rs['dest']=sni+':443'
+json.dump(c,open(p,'w'),indent=2)
+PY
+docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null
+docker restart amnezia-xray >/dev/null
+echo SNI_SET`;
+    return runScript(creds(server.id), script, 120000);
+  });
+  if (!/SNI_SET/.test(out)) throw new Error('Не удалось сменить SNI на сервере: ' + out.slice(-200));
 }
 
 export async function sshCreateAwg(
