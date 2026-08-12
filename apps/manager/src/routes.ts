@@ -184,8 +184,8 @@ router.post('/api/public/check-code', (req, res) => {
   }
   const bad = accessError(u);
   if (bad) return res.json(err(bad.type, bad.message));
-  if (u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
-    return res.json(err('devices', 'Лимит устройств по этому коду исчерпан.'));
+  // Вход по коду числом устройств НЕ ограничиваем: лимит относится к выпуску
+  // AmneziaWG-устройств и проверяется при выдаче, а не при входе.
 
   guard.noteSuccess(ip);
   // Код принят — это и есть вход. Дальше личность берётся из сессии, а не из тела запроса.
@@ -223,12 +223,8 @@ router.post('/api/public/devices', requireUserOrAdmin, async (req, res) => {
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
     if (!u.isActive) return res.status(403).json(err('disabled', 'Доступ отключён.'));
     if (protocol !== 'xray' && protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Неизвестный протокол.'));
-    // Лимит устройств — только при создании НОВОГО конфига. Xray работает на
-    // любом числе устройств одной конфигурацией: если она уже есть, её
-    // переиспользование (та же подписка) лимитом не блокируется.
-    const reuseXray = protocol === 'xray' && !!repo.findActiveXrayDevice(u.id, String(serverId));
-    if (!reuseXray && u.deviceLimit != null && repo.countActiveDevices(u.id) >= u.deviceLimit)
-      return res.status(403).json(err('devices', 'Лимит устройств исчерпан.'));
+    // Лимит устройств (только AmneziaWG) и все проверки — внутри issueForUser,
+    // единый источник правды. Дублирующая пред-проверка убрана, чтобы не расходиться.
     const out = await issueForUser(u, String(name || 'Устройство'), String(serverId), protocol, { byAdmin: !!req.session.admin });
     res.json(out);
   } catch (e) {

@@ -358,10 +358,14 @@ function findUser(chatId: number, handle: string) {
 }
 
 function mainMenu(user: { name: string; deviceLimit: number | null; id: string }): { text: string; kb: Kb } {
-  const active = repo.countActiveDevices(user.id);
+  // Лимит устройств относится к AmneziaWG (у каждого свои ключи). Xray — одна общая
+  // подписка на любое число устройств, лимитом устройств не считается.
+  const awg = repo.countActiveDevices(user.id, 'amneziawg');
+  const hasXray = repo.countActiveDevices(user.id, 'xray') > 0;
   const text =
     `Меню — ${user.name}\n` +
-    `Устройств: ${active}${user.deviceLimit != null ? ` из ${user.deviceLimit}` : ' (без лимита)'}\n\n` +
+    (hasXray ? 'Xray-подписка: активна (на все устройства)\n' : '') +
+    `Устройств AmneziaWG: ${awg}${user.deviceLimit != null ? ` из ${user.deviceLimit}` : ' (без лимита)'}\n\n` +
     `Выберите действие:`;
   const kb: Kb = [
     [{ text: '➕ Получить конфиг', callback_data: 'getcfg' }],
@@ -554,7 +558,7 @@ async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & 
 }
 
 async function sendDevices(chatId: number, user: ReturnType<typeof findUser> & object): Promise<void> {
-  const devices = repo.listDevices().filter((d) => d.userId === user.id && d.isActive);
+  const devices = repo.listDevicesOfUser(user.id).filter((d) => d.isActive);
   if (devices.length === 0) {
     await send(chatId, 'У вас пока нет активных конфигов.', { kb: [[{ text: '➕ Получить конфиг', callback_data: 'getcfg' }], [{ text: '‹ Меню', callback_data: 'menu' }]] });
     return;
