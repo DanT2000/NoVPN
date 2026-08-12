@@ -46,6 +46,14 @@ try {
   console.error('[NoVPN] шифрование conf:', e instanceof Error ? e.message : e);
 }
 
+// Каталог файлов приложений + чистка осиротевших файлов (без ссылок в каталоге).
+import('./services/appFiles.js')
+  .then((af) => {
+    const removed = af.cleanupOrphans();
+    if (removed) console.log(`[NoVPN] удалено осиротевших файлов приложений: ${removed}`);
+  })
+  .catch((e) => console.error('[NoVPN] чистка файлов приложений:', e instanceof Error ? e.message : e));
+
 const app = createApp();
 app.listen(config.port, () => {
   console.log(`[NoVPN] панель слушает :${config.port}`);

@@ -476,6 +476,23 @@ export const mockApi: ApiClient = {
     return clone(state.apps);
   },
 
+  async uploadAppFile(appId: string, platform: string, file: File): Promise<AppClient> {
+    await wait(300);
+    const app = state.apps.find((a) => a.id === appId)!;
+    const entry = app.platforms.find((p) => p.platform === platform)!;
+    entry.downloadName = file.name;
+    entry.downloadSize = file.size;
+    return clone(app);
+  },
+  async deleteAppFile(appId: string, platform: string): Promise<AppClient> {
+    await wait(150);
+    const app = state.apps.find((a) => a.id === appId)!;
+    const entry = app.platforms.find((p) => p.platform === platform)!;
+    entry.downloadName = null;
+    entry.downloadSize = null;
+    return clone(app);
+  },
+
   async saveSettings(input: AppSettings): Promise<AppSettings> {
     await wait(300);
     state.settings = clone(input);

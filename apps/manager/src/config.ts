@@ -49,6 +49,9 @@ export const config = {
   trustProxyHops: int('TRUST_PROXY_HOPS', 2),
 
   databasePath: env('DATABASE_PATH', path.join(__dirname, '../data/database.sqlite')),
+  // Файлы приложений (APK/EXE/AppImage) храним на диске рядом с базой (постоянный
+  // том), а НЕ в SQLite: инсталляторы бывают по 60–120 МБ, base64 раздул бы базу.
+  appsDir: env('APPS_DIR', path.join(path.dirname(env('DATABASE_PATH', path.join(__dirname, '../data/database.sqlite'))), 'apps')),
   // Каталог собранного фронтенда (в проде копируется в образ).
   webDist: env('WEB_DIST', path.join(__dirname, '../../web/dist')),
 

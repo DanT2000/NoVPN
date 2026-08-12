@@ -189,6 +189,10 @@ export interface ApiClient {
 
   // ── admin: apps catalog ──
   saveApps(apps: AppClient[]): Promise<AppClient[]>;
+  /** Стрим-загрузка файла приложения на диск сервера (APK/EXE/AppImage). */
+  uploadAppFile(appId: string, platform: string, file: File): Promise<AppClient>;
+  /** Снять файл с платформы (удалить с диска). */
+  deleteAppFile(appId: string, platform: string): Promise<AppClient>;
 
   // ── admin: settings ──
   saveSettings(input: AppSettings): Promise<AppSettings>;

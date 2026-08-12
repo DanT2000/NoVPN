@@ -67,3 +67,18 @@ Thumbs.db
 coverage/
 .cache/
 info.txt
+
+# Локальные файлы приложений (заливаются в панель, НЕ в репозиторий)
+*.apk
+*.exe
+*.AppImage
+*.deb
+*.ipa
+*.dmg
+v2rayTUN.webp
+*.zip
+*.msi
+*.pkg
+*.tar
+*.tar.gz
+*.7z

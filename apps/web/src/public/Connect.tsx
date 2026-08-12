@@ -11,7 +11,9 @@ import { useState } from 'react';
 import type { AppClient, AppPlatform } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Chip, EmptyState } from '../components/ui';
-import { copyText, downloadUrl, isDataFile, dataFileName, openUrl } from '../lib/clipboard';
+import { copyText, openUrl } from '../lib/clipboard';
+
+const mb = (bytes: number): string => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(0)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`);
 
 const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
 
@@ -181,7 +183,7 @@ function AppList({
   subUrl,
   showToast,
 }: {
-  items: Array<{ app: AppClient; entry: { platform: AppPlatform; url?: string | null; file?: string | null } }>;
+  items: Array<{ app: AppClient; entry: { platform: AppPlatform; url?: string | null; downloadName?: string | null; downloadSize?: number | null } }>;
   subUrl: string;
   showToast: (t: string) => void;
 }) {
@@ -225,42 +227,26 @@ function AppList({
             </div>
 
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              {entry.url ? (
+              {/* Скачать прямо с нашего сервера (файл залит в админке) — работает
+                  даже когда офиц. сайт заблокирован в РФ. Иначе — ссылка в магазин. */}
+              {entry.downloadName ? (
+                <a className="btn btn-primary btn-sm" href={`/apps/file/${app.id}/${encodeURIComponent(entry.platform)}`}>
+                  ⬇ Скачать{entry.downloadSize ? ` · ${mb(entry.downloadSize)}` : ''}
+                </a>
+              ) : entry.url ? (
                 <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
-                  {store ? `Установить · ${store}` : 'Установить'}
+                  {store ?? 'Установить'}
                 </button>
               ) : null}
-              {entry.file ? (
-                <button
-                  className="btn btn-outline btn-sm"
-                  onClick={() =>
-                    downloadUrl(isDataFile(entry.file!) ? dataFileName(entry.file!) : 'app', entry.file!)
-                  }
-                >
-                  ⬇ Скачать с сайта
+              {/* Магазин доступен и при наличии файла — для iOS и тех, кто хочет из стора. */}
+              {entry.downloadName && store ? (
+                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
+                  {store}
                 </button>
               ) : null}
               {oneTap ? (
                 <button className="btn btn-secondary btn-sm" onClick={() => openUrl(oneTap)}>
                   Добавить подписку
-                </button>
-              ) : subUrl ? (
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={async () => {
-                    showToast(
-                      (await copyText(subUrl))
-                        ? 'Ссылка скопирована — вставьте её в приложении: «+» → добавить подписку'
-                        : 'Не удалось скопировать',
-                    );
-                  }}
-                >
-                  Копировать подписку
-                </button>
-              ) : null}
-              {app.source ? (
-                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(app.source))}>
-                  🌐 Сайт
                 </button>
               ) : null}
             </div>

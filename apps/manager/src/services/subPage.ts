@@ -60,21 +60,17 @@ export function renderSubPage(opts: {
         const icon = a.icon
           ? `<img class="ico" src="${esc(a.icon)}" alt="">`
           : `<div class="ico ph">${esc(a.client.slice(0, 1))}</div>`;
+        // Скачать прямо с сервера (файл на диске) — приоритетно; иначе ссылка в магазин.
+        const dl = e!.downloadName
+          ? `<a class="btn btn-primary" href="/apps/file/${encodeURIComponent(a.id)}/${encodeURIComponent(e!.platform)}">⬇ Скачать</a>`
+          : '';
         const install = e!.url
-          ? `<a class="btn btn-primary" href="${esc(normUrl(e!.url))}" target="_blank" rel="noopener">${esc(storeLabel(e!.url))}</a>`
+          ? `<a class="btn ${dl ? 'btn-sec' : 'btn-primary'}" href="${esc(normUrl(e!.url))}" target="_blank" rel="noopener">${esc(storeLabel(e!.url))}</a>`
           : '';
-        const add = tap
-          ? `<a class="btn btn-sec" href="${esc(tap)}">Добавить подписку</a>`
-          : `<button class="btn btn-sec" data-copy>Копировать ссылку</button>`;
-        // Файл приложения (data-URL) не встраиваем в серверный HTML — он раздул бы
-        // страницу на мегабайты; скачивание с сайта живёт в кабинете (SPA). Здесь —
-        // ссылка на официальный сайт (глобус), лёгкая.
-        const site = a.source
-          ? `<a class="btn btn-sec" href="${esc(normUrl(a.source))}" target="_blank" rel="noopener">🌐 Сайт</a>`
-          : '';
+        const add = tap ? `<a class="btn btn-sec" href="${esc(tap)}">Добавить подписку</a>` : '';
         return `<div class="app">${icon}<div class="app-b"><div class="app-n">${esc(a.client)}</div>${
           a.instruction ? `<div class="app-i">${esc(a.instruction)}</div>` : ''
-        }<div class="row">${install}${add}${site}</div></div></div>`;
+        }<div class="row">${dl}${install}${add}</div></div></div>`;
       })
       .join('');
     return `<section class="plat" data-plat="${esc(plat)}" hidden>${items}</section>`;

@@ -115,5 +115,19 @@ export const httpApi: ApiClient = {
   testTelegram: (token) => req<TestTelegramResult>('POST', '/api/admin/telegram/test', { token }),
 
   saveApps: (apps: AppClient[]) => req<AppClient[]>('PUT', '/api/admin/apps', { apps }),
+  uploadAppFile: async (appId, platform, file) => {
+    // Стримим файл как есть (octet-stream) — без base64, без лимита памяти/размера.
+    const res = await fetch(`${BASE}/api/admin/apps/${appId}/${encodeURIComponent(platform)}/file?name=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      credentials: 'include',
+      body: file,
+    });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!res.ok) throw new Error((data && (data.error?.message || data.message)) || `Ошибка ${res.status}`);
+    return data as AppClient;
+  },
+  deleteAppFile: (appId, platform) => req<AppClient>('DELETE', `/api/admin/apps/${appId}/${encodeURIComponent(platform)}/file`),
   saveSettings: (input: AppSettings) => req<AppSettings>('PUT', '/api/admin/settings', input),
 };

@@ -22,6 +22,7 @@ import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser, revokeUse
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { renderSubPage } from './services/subPage.js';
+import * as appFiles from './services/appFiles.js';
 import { resolveTgProxyUrl, restartBot, tgApi, broadcastToLinked } from './services/telegram.js';
 import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
@@ -989,7 +990,53 @@ router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
 // ── admin: apps ──
 router.put('/api/admin/apps', requireAdmin, (req, res) => {
   const apps = Array.isArray(req.body?.apps) ? req.body.apps : [];
-  res.json(repo.replaceApps(apps));
+  const saved = repo.replaceApps(apps);
+  // Файлы, на которые больше нет ссылок в каталоге, удаляем с диска.
+  try {
+    appFiles.cleanupOrphans();
+  } catch {
+    /* чистка файлов не критична для сохранения каталога */
+  }
+  res.json(saved);
+});
+
+// Стрим-загрузка файла приложения на диск (Content-Type: application/octet-stream,
+// тело = сырые байты; express.json его не трогает). Имя оригинала — в ?name=.
+router.post('/api/admin/apps/:id/:platform/file', requireAdmin, async (req, res) => {
+  const app = repo.getApp(String(req.params.id));
+  if (!app) return res.status(404).json(err('not_found', 'Приложение не найдено.'));
+  const platform = String(req.params.platform);
+  if (!app.platforms.some((p) => p.platform === platform))
+    return res.status(400).json(err('validation', 'У приложения нет такой платформы.'));
+  const origName = String(req.query.name ?? '').trim() || `${app.id}-${platform}`;
+  try {
+    const { name, size } = await appFiles.saveUpload(app.id, platform, origName, req);
+    const updated = repo.setAppDownload(app.id, platform, name, size);
+    repo.addLog(`Загружен файл приложения «${app.client}» (${platform}, ${(size / 1048576).toFixed(1)} МБ)`);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json(err('server', e instanceof Error ? e.message : 'Не удалось сохранить файл.'));
+  }
+});
+
+// Снять файл с платформы (удалить с диска + из каталога).
+router.delete('/api/admin/apps/:id/:platform/file', requireAdmin, (req, res) => {
+  const appId = String(req.params.id);
+  const platform = String(req.params.platform);
+  appFiles.removeFiles(appId, platform);
+  const updated = repo.setAppDownload(appId, platform, null, null);
+  res.json(updated ?? { ok: true });
+});
+
+// Публичное скачивание файла приложения (стримом с диска). Файлы — общедоступный
+// софт (Happ/NekoBox/…), секретов нет; отдаём без авторизации, как страницу подписки.
+router.get('/apps/file/:appId/:platform', (req, res) => {
+  const app = repo.getApp(String(req.params.appId));
+  const entry = app?.platforms.find((p) => p.platform === String(req.params.platform));
+  if (!app || !entry?.downloadName) return res.status(404).send('');
+  const full = appFiles.filePath(app.id, entry.platform, entry.downloadName);
+  if (!full) return res.status(404).send('');
+  appFiles.streamDownload(res, full, entry.downloadName);
 });
 
 // ── admin: settings ──

@@ -5,7 +5,10 @@ import { useState } from 'react';
 import type { AppClient, AppPlatform, AppPlatformEntry } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { Chip, EmptyState, Field, ScreenHeader, Toggle } from '../components/ui';
-import { readFileAsDataUrl, dataUrlWithName, isDataFile, dataFileName, dataFileSizeKb } from '../lib/clipboard';
+import { readFileAsDataUrl } from '../lib/clipboard';
+import { api } from '../api';
+
+const mbFmt = (bytes: number): string => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`);
 
 type CompatValue = AppClient['compat'][number];
 
@@ -15,7 +18,7 @@ const COMPAT_OPTIONS: Array<{ value: CompatValue; label: string }> = [
   { value: 'amnezia-app', label: 'AmneziaVPN' },
   { value: 'amneziawg', label: 'AmneziaWG' },
 ];
-const MAX_APP_FILE_MB = 20;
+const MAX_APP_FILE_MB = 300; // файлы стримятся на диск, не в базу — можно крупные инсталляторы
 
 function kindLabel(compat: AppClient['compat']): string {
   if (compat.includes('xray')) return 'Xray · VLESS-ссылка + QR';
@@ -30,8 +33,36 @@ export function AppsAdmin() {
     data ? data.apps.map((a) => ({ ...a, compat: [...a.compat], platforms: a.platforms.map((p) => ({ ...p })) })) : [],
   );
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState<string | null>(null); // ключ `${appId}:${platform}` пока идёт загрузка
 
   if (!data) return null;
+
+  // Загрузка файла приложения стримом на сервер. Приложение должно уже существовать
+  // на сервере (иначе привязывать файл не к чему), поэтому сперва сохраняем каталог.
+  const uploadFile = async (app: AppClient, platform: AppPlatform, file: File) => {
+    const key = `${app.id}:${platform}`;
+    if (file.size > MAX_APP_FILE_MB * 1024 * 1024) return showToast(`Файл больше ${MAX_APP_FILE_MB} МБ`);
+    setUploading(key);
+    try {
+      await saveApps(localApps); // персистим каталог, чтобы (app, platform) существовали на сервере
+      const updated = await api.uploadAppFile(app.id, platform, file);
+      const e = updated.platforms.find((p) => p.platform === platform);
+      patchPlatform(app, platform, { downloadName: e?.downloadName ?? file.name, downloadSize: e?.downloadSize ?? file.size, file: null });
+      showToast('Файл загружен');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Не удалось загрузить файл');
+    } finally {
+      setUploading(null);
+    }
+  };
+  const removeFile = async (app: AppClient, platform: AppPlatform) => {
+    try {
+      await api.deleteAppFile(app.id, platform);
+      patchPlatform(app, platform, { downloadName: null, downloadSize: null, file: null });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Не удалось удалить файл');
+    }
+  };
 
   const patchApp = (id: string, patch: Partial<AppClient>) =>
     setLocalApps((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
@@ -222,35 +253,31 @@ export function AppsAdmin() {
                           <div className="row-between" style={{ gap: 8, flexWrap: 'wrap' }}>
                             <span style={{ fontWeight: 700 }}>{p}</span>
                             <span className="small muted mono">
-                              {entry.file ? `файл: ${dataFileName(entry.file)}${isDataFile(entry.file) ? ` (${dataFileSizeKb(entry.file)} КБ)` : ''}` : 'файл не загружен'}
+                              {entry.downloadName ? `файл: ${entry.downloadName}${entry.downloadSize ? ` (${mbFmt(entry.downloadSize)})` : ''}` : 'файл не загружен'}
                             </span>
                           </div>
                           <input
                             className="input"
-                            placeholder="Ссылка: стор / сайт / прямая на .apk/.exe/.zip"
+                            placeholder="Ссылка: стор (App Store / Google Play) — на случай, когда файла нет"
                             value={entry.url ?? ''}
                             onChange={(e) => patchPlatform(app, p, { url: e.target.value || null })}
                           />
                           <div className="row" style={{ gap: 8 }}>
-                            <label className="btn btn-outline btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
-                              {entry.file ? 'Заменить файл' : 'Загрузить файл'}
+                            <label className={`btn btn-outline btn-sm ${uploading === `${app.id}:${p}` ? 'disabled' : ''}`} style={{ cursor: 'pointer', margin: 0 }}>
+                              {uploading === `${app.id}:${p}` ? 'Загрузка…' : entry.downloadName ? 'Заменить файл' : 'Загрузить файл (APK/EXE/AppImage)'}
                               <input
                                 type="file"
                                 style={{ display: 'none' }}
-                                onChange={async (e) => {
+                                disabled={uploading === `${app.id}:${p}`}
+                                onChange={(e) => {
                                   const file = e.target.files?.[0];
                                   e.target.value = '';
-                                  if (!file) return;
-                                  if (file.size > MAX_APP_FILE_MB * 1024 * 1024) {
-                                    showToast(`Файл больше ${MAX_APP_FILE_MB} МБ — используйте ссылку`);
-                                    return;
-                                  }
-                                  patchPlatform(app, p, { file: dataUrlWithName(await readFileAsDataUrl(file), file.name) });
+                                  if (file) void uploadFile(app, p, file);
                                 }}
                               />
                             </label>
-                            {entry.file ? (
-                              <button className="btn btn-outline btn-sm" onClick={() => patchPlatform(app, p, { file: null })}>Убрать файл</button>
+                            {entry.downloadName ? (
+                              <button className="btn btn-outline btn-sm" onClick={() => void removeFile(app, p)}>Убрать файл</button>
                             ) : null}
                           </div>
                         </div>

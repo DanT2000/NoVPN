@@ -646,6 +646,28 @@ export function replaceApps(apps: AppClient[]): AppClient[] {
   tx();
   return listApps();
 }
+export function getApp(id: string): AppClient | null {
+  const r = db.prepare('SELECT id, data FROM app_clients WHERE id = ?').get(id) as any;
+  return r ? rowToApp(r) : null;
+}
+/** Привязать/снять файл на диске к платформе приложения (после стрим-загрузки). */
+export function setAppDownload(appId: string, platform: string, name: string | null, size: number | null): AppClient | null {
+  const app = getApp(appId);
+  if (!app) return null;
+  const entry = app.platforms.find((p) => p.platform === platform);
+  if (!entry) return null;
+  entry.downloadName = name;
+  entry.downloadSize = size;
+  db.prepare('UPDATE app_clients SET data = ? WHERE id = ?').run(JSON.stringify(app), appId);
+  return app;
+}
+/** Все привязки файлов (appId+platform+имя) — для нахождения/чистки файлов на диске. */
+export function allDownloadRefs(): Array<{ appId: string; platform: string; name: string }> {
+  const out: Array<{ appId: string; platform: string; name: string }> = [];
+  for (const a of listApps())
+    for (const p of a.platforms) if (p.downloadName) out.push({ appId: a.id, platform: p.platform, name: p.downloadName });
+  return out;
+}
 
 /** Запомнить числовой chat_id привязанного пользователя (для бот-рассылки).
  *  Пишем только при изменении, чтобы не дёргать updated_at на каждом сообщении. */
