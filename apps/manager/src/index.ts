@@ -3,6 +3,7 @@ import { seedIfEmpty } from './seed.js';
 import { createApp } from './app.js';
 import { startSyncLoop } from './services/sync.js';
 import { startBot } from './services/telegram.js';
+import * as repo from './repo.js';
 
 // Панель — долгоживущий сервис управления доступами: одна необработанная ошибка
 // в фоновой корутине (бот, синк, таймер) не должна ронять весь процесс и отрубать
@@ -36,6 +37,14 @@ if (config.isProd && !process.env.SESSION_SECRET) {
 }
 
 seedIfEmpty();
+
+// Одноразово шифруем открытые .conf в БД (AmneziaWG приватный ключ). Идемпотентно.
+try {
+  const n = repo.migrateEncryptConfs();
+  if (n) console.log(`[NoVPN] зашифровано .conf в покое: ${n}`);
+} catch (e) {
+  console.error('[NoVPN] шифрование conf:', e instanceof Error ? e.message : e);
+}
 
 const app = createApp();
 app.listen(config.port, () => {

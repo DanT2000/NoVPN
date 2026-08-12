@@ -2,6 +2,7 @@ import { useApp } from '../store/AppStore';
 import type { AdminRoute } from '../store/AppStore';
 import { Wordmark } from '../components/ui';
 import { AdminLogin } from './AdminLogin';
+import { ForcePasswordChange } from './ForcePasswordChange';
 import { Dashboard } from './Dashboard';
 import { Users } from './Users';
 import { UserCreate } from './UserCreate';
@@ -32,6 +33,9 @@ export function AdminShell() {
   const { adminAuthed, mustChangePassword, nav, goAdmin, adminLogout, isMobile, data } = useApp();
 
   if (!adminAuthed) return <AdminLogin />;
+  // Пока пароль дефолтный — панель заблокирована экраном обязательной смены (бэкенд
+  // тоже блокирует мутации до смены). Это единственный шаг после первого входа.
+  if (mustChangePassword) return <ForcePasswordChange />;
 
   const dbRisky = data?.dbHealth?.risky === true;
 
@@ -53,21 +57,6 @@ export function AdminShell() {
             раз — если данные сохранятся, предупреждение исчезнет само. Сделайте это до того,
             как заведёте пользователей.
           </div>
-        </div>
-      ) : null}
-      {/* Первый запуск / стандартный пароль — просим сменить, пока не сменён. */}
-      {mustChangePassword && route !== 'settings' ? (
-        <div className="notice notice-amber" style={{ marginBottom: 14 }}>
-          <b>Стандартный пароль администратора.</b> Панель доступна из интернета —
-          смените пароль в{' '}
-          <button
-            type="button"
-            onClick={() => goAdmin('settings')}
-            style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer', font: 'inherit' }}
-          >
-            Настройках
-          </button>{' '}
-          → «Доступ в панель».
         </div>
       ) : null}
       {route === 'dashboard' && <Dashboard />}

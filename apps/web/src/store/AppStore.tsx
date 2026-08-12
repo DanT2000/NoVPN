@@ -162,7 +162,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     setLoadError(null);
     try {
-      setData(await api.getInitialData());
+      const d = await api.getInitialData();
+      setData(d);
+      // Флаг обязательной смены переживает перезагрузку страницы (не только вход).
+      setMustChangePassword(!!d.mustChangePassword);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Не удалось загрузить данные');
     } finally {

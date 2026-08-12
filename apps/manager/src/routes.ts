@@ -17,7 +17,7 @@ import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
-import { decryptSecret, encryptSecret, maskTail, randomToken } from './lib/crypto.js';
+import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
 import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser, revokeUserAccessOnServers, revokeDeviceOnServer } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
@@ -278,7 +278,7 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
       const r = await createAwgCfg(server, d.name);
       const device = repo.updateDeviceFields(d.id, {
         is_active: 1, revoked_at: null, revoke_pending: 0, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
-        preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: r.conf, link: null,
+        preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: encConf(r.conf), link: null,
       })!;
       const vk = vpnLinkFromConf(r.conf, `${config.appName} — ${server.name}`);
       out = { device, conf: r.conf, vpnKeyAvailable: !!vk, vpnKey: vk ?? undefined };
@@ -420,7 +420,11 @@ router.post('/api/admin/login', (req, res) => {
 router.post('/api/admin/password', requireAdmin, (req, res) => {
   const current = String(req.body?.current ?? '');
   const next = String(req.body?.next ?? '');
-  if (!verifyAdminPassword(current)) return res.status(400).json(err('validation', 'Текущий пароль неверен.'));
+  // При первой обязательной смене (пароль ещё дефолтный) текущий НЕ спрашиваем:
+  // сессия уже подтверждает админа, а дефолт и так известен — это лишняя преграда.
+  // В обычной смене (пароль уже задан) текущий проверяем.
+  if (!isDefaultAdminPassword() && !verifyAdminPassword(current))
+    return res.status(400).json(err('validation', 'Текущий пароль неверен.'));
   if (next.length < 6) return res.status(400).json(err('validation', 'Новый пароль — минимум 6 символов.'));
   setAdminPassword(next);
   repo.addLog('Изменён пароль администратора');

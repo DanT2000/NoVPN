@@ -19,10 +19,11 @@ import type {
 } from '@novpn/shared';
 import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
-import { decryptSecret } from './lib/crypto.js';
+import { decryptSecret, encConf } from './lib/crypto.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { checkDbIsolation } from './services/dbHealth.js';
+import { isDefaultAdminPassword } from './services/adminAuth.js';
 import { getServerProxy } from './services/keyvault.js';
 
 export const nowIso = () => new Date().toISOString();
@@ -450,7 +451,7 @@ export function insertDevice(d: {
     id, user_id: d.userId, name: d.name, server_id: d.serverId, protocol: d.protocol, created_at: nowIso(),
     uuid: d.uuid ?? null, public_key: d.publicKey ?? null, private_key_enc: d.privateKeyEnc ?? null,
     preshared_key_enc: d.presharedKeyEnc ?? null, client_ip: d.clientIp ?? null, link: d.link ?? null,
-    conf: d.conf ?? null, source: d.source ?? 'managed', management_level: d.managementLevel ?? 'managed',
+    conf: encConf(d.conf), source: d.source ?? 'managed', management_level: d.managementLevel ?? 'managed',
   });
   return getDevice(id)!;
 }
@@ -462,6 +463,21 @@ export function updateDeviceFields(id: string, fields: Record<string, unknown>):
   }
   return getDevice(id);
 }
+/** Одноразово шифрует существующие открытые .conf (AmneziaWG) в БД. Идемпотентно:
+ *  уже зашифрованные (префикс v1.) пропускаются. Вызывается при старте. */
+export function migrateEncryptConfs(): number {
+  const rows = db
+    .prepare("SELECT id, conf FROM devices WHERE conf IS NOT NULL AND conf <> '' AND conf NOT LIKE 'v1.%'")
+    .all() as Array<{ id: string; conf: string }>;
+  if (!rows.length) return 0;
+  const upd = db.prepare('UPDATE devices SET conf = ? WHERE id = ?');
+  const tx = db.transaction(() => {
+    for (const r of rows) upd.run(encConf(r.conf), r.id);
+  });
+  tx();
+  return rows.length;
+}
+
 export function deleteDevice(id: string): void {
   // Перед удалением «списываем» трафик устройства на пользователя, иначе расход
   // (сумма по устройствам) уменьшился бы и вернул часть квоты. Затем пересчитываем.
@@ -765,6 +781,7 @@ export function buildBootstrap(): BootstrapData {
     jobErrors: listJobErrors(),
     history: allHistory(),
     dbHealth: checkDbIsolation(earliestDataIso()),
+    mustChangePassword: isDefaultAdminPassword(),
   };
 }
 

@@ -45,6 +45,26 @@ export function decryptSecret(payload: string): string {
   return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
 
+// AmneziaWG .conf содержит приватный ключ. В БД храним его ЗАШИФРОВАННЫМ, но при
+// выдаче пользователю расшифровываем — копирование/скачивание работают прозрачно.
+// Обратная совместимость: старый conf в открытом виде (WireGuard-конфиг начинается
+// с «[Interface]», не с «v1.») читается как есть; миграция дошифрует такие записи.
+export function encConf(plain: string | null | undefined): string | null {
+  if (!plain) return plain ?? null;
+  if (plain.startsWith('v1.')) return plain; // уже зашифрован — не шифруем повторно
+  return encryptSecret(plain);
+}
+export function decConf(stored: string | null | undefined): string | null {
+  if (!stored) return stored ?? null;
+  if (!stored.startsWith('v1.')) return stored; // старый открытый conf — отдаём как есть
+  try {
+    return decryptSecret(stored);
+  } catch {
+    // Неверный ключ/повреждение — не роняем чтение устройства; пользователь перевыпустит.
+    return null;
+  }
+}
+
 export function maskTail(secret: string, keep = 4): string {
   if (!secret) return '';
   return `••••${secret.slice(-keep)}`;

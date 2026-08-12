@@ -9,7 +9,7 @@
 import Database from 'better-sqlite3';
 import { db } from '../db.js';
 import { seedIfEmpty } from '../seed.js';
-import { encryptSecret } from '../lib/crypto.js';
+import { encryptSecret, encConf } from '../lib/crypto.js';
 import { newId, nowIso } from '../repo.js';
 
 export interface ImportResult {
@@ -142,7 +142,7 @@ export function importLegacy(oldDbPath: string): ImportResult {
         is_active: d.is_active ?? 1, last_seen_at: d.last_handshake ?? null, traffic_gb: (rb + sb) / 1e9,
         created_at: d.created_at ?? nowIso(), revoked_at: d.revoked_at ?? null,
         uuid: d.uuid ?? null, public_key: d.public_key ?? null, private_key_enc: privEnc, preshared_key_enc: pskEnc,
-        client_ip: d.client_ip ?? null, link: d.link_text ?? null, conf: d.config_text ?? null,
+        client_ip: d.client_ip ?? null, link: d.link_text ?? null, conf: encConf(d.config_text ?? null),
         received_bytes: rb, sent_bytes: sb, monitoring_available: monitoring, legacy_id: d.id,
       };
 

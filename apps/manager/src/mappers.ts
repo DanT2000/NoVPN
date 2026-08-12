@@ -1,6 +1,7 @@
 // Преобразование строк БД ↔ доменные типы @novpn/shared.
 
 import type { AppClient, Device, Server, User } from '@novpn/shared';
+import { decConf } from './lib/crypto.js';
 
 const j = <T>(s: unknown, fallback: T): T => {
   if (typeof s !== 'string') return fallback;
@@ -54,7 +55,9 @@ export function rowToDevice(r: any): Device {
     managementLevel: r.management_level ?? 'managed',
     monitoringAvailable: b(r.monitoring_available),
     link: r.link ?? null,
-    conf: r.conf ?? null,
+    // conf хранится в БД зашифрованным (AES-GCM) — расшифровываем при чтении, чтобы
+    // кабинет/бот копировали и скачивали обычный текст. Старый открытый conf — как есть.
+    conf: decConf(r.conf),
   };
 }
 
