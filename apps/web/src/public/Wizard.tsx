@@ -46,7 +46,18 @@ export function Wizard() {
   const [serverId, setServerId] = useState<string | null>(null);
   const [proto, setProto] = useState<Proto | null>(null);
   const [platform, setPlatform] = useState<Platform>(detectPlatform());
-  const [rawStep, setRawStep] = useState<1 | 2 | 3 | 4>(1);
+  // Стартовый шаг (без отдельного шага имени): сервер(2), если их несколько; иначе
+  // протокол(3), если их несколько; иначе сразу результат(4). Имя спрашиваем только
+  // для AmneziaWG уже на шаге результата — Xray это одна общая подписка без имени.
+  const [rawStep, setRawStep] = useState<1 | 2 | 3 | 4>(() => {
+    if (!user || !data) return 2;
+    const online = data.servers.filter((s) => user.allowedServers.includes(s.id) && s.online);
+    if (online.length !== 1) return 2;
+    const protos = (['xray', 'amneziawg'] as Proto[]).filter(
+      (p) => (user.allowedProtocols as string[]).includes(p) && (online[0]!.protocols as string[]).includes(p),
+    );
+    return protos.length > 1 ? 3 : 4;
+  });
   const [issuing, setIssuing] = useState(false);
   const [result, setResult] = useState<IssueDeviceResult | null>(null);
 
@@ -88,16 +99,8 @@ export function Wizard() {
 
   const step: 1 | 2 | 3 | 4 = mode === 'view' || result ? 4 : rawStep;
 
-  /** Дальше: пропускаем шаги, где выбирать не из чего. */
-  const next = () => {
-    if (rawStep === 1) return setRawStep(autoServer ? (autoProto ? 4 : 3) : 2);
-    if (rawStep === 2) return setRawStep(autoProto ? 4 : 3);
-    setRawStep(4);
-  };
-
-  // Имя необязательно: если не задали — «Устройство N». Для Xray-подписки его
-  // и не меняют, так что заставлять придумывать имя ни к чему.
-  const defaultName = `Устройство ${data.devices.filter((d) => d.userId === user.id).length + 1}`;
+  // Имя нужно только для AmneziaWG (у каждого устройства своё). По умолчанию — «Устройство N».
+  const defaultName = `Устройство ${data.devices.filter((d) => d.userId === user.id && d.protocol === 'amneziawg').length + 1}`;
 
   const doIssue = async () => {
     if (!chosenServer || !effProto || issuing) return;
@@ -114,9 +117,9 @@ export function Wizard() {
 
   const back = () => {
     if (mode === 'view' || result) return goPublic('devices');
-    if (rawStep === 4) return setRawStep(autoProto ? (autoServer ? 1 : 2) : 3);
-    if (rawStep === 3) return setRawStep(autoServer ? 1 : 2);
-    if (rawStep === 2) return setRawStep(1);
+    // Назад: результат(4) → протокол(3), если он был; иначе сервер(2), если был; иначе кабинет.
+    if (rawStep === 4) return autoProto ? (autoServer ? goPublic('cabinet') : setRawStep(2)) : setRawStep(3);
+    if (rawStep === 3) return autoServer ? goPublic('cabinet') : setRawStep(2);
     goPublic('cabinet');
   };
 
@@ -151,25 +154,8 @@ export function Wizard() {
         <BackButton onClick={back} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 20, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
-          {step < 4 ? <div className="small muted">Шаг {step} из 3</div> : null}
         </div>
       </div>
-
-      {/* ШАГ 1 — имя (необязательно) */}
-      {step === 1 ? (
-        <div className="stack" style={{ gap: 14 }}>
-          <p className="body small" style={{ margin: 0 }}>
-            Можете назвать устройство, чтобы потом его узнать. Не обязательно — по умолчанию «{defaultName}».
-          </p>
-          <input className="input" placeholder={defaultName} aria-label="Название устройства" value={name} onChange={(e) => setName(e.target.value)} />
-          <div className="chip-row">
-            {['Телефон', 'Ноутбук', 'Планшет', 'ПК'].map((q) => (
-              <button key={q} type="button" className="chip chip-sm" onClick={() => setName(q)}>{q}</button>
-            ))}
-          </div>
-          <button className="btn btn-primary btn-lg" onClick={next}>Далее</button>
-        </div>
-      ) : null}
 
       {/* ШАГ 2 — сервер (только если их несколько) */}
       {step === 2 ? (
@@ -238,16 +224,27 @@ export function Wizard() {
       {/* ШАГ 4 — результат */}
       {step === 4 ? (
         <div className="stack" style={{ gap: 14 }}>
-          {/* ещё не выпущено — кнопка выпуска */}
+          {/* ещё не выпущено — кнопка выпуска. Имя спрашиваем ТОЛЬКО для AmneziaWG:
+              Xray — одна общая подписка на все устройства, имя ей не нужно. */}
           {!dev ? (
             <>
+              {effProto === 'amneziawg' ? (
+                <div className="stack" style={{ gap: 10 }}>
+                  <p className="body small" style={{ margin: 0 }}>Назовите устройство, чтобы узнавать его в списке (необязательно).</p>
+                  <input className="input" placeholder={defaultName} aria-label="Название устройства" value={name} onChange={(e) => setName(e.target.value)} />
+                  <div className="chip-row">
+                    {['Телефон', 'Ноутбук', 'Планшет', 'ПК'].map((q) => (
+                      <button key={q} type="button" className="chip chip-sm" onClick={() => setName(q)}>{q}</button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="card stack" style={{ gap: 6 }}>
-                <div className="row-between"><span className="muted">Устройство</span><b>{name}</b></div>
                 <div className="row-between"><span className="muted">Сервер</span><b>{chosenServer?.name ?? '—'}</b></div>
-                <div className="row-between"><span className="muted">Способ</span><b>{effProto === 'xray' ? 'Xray' : 'AmneziaWG'}</b></div>
+                <div className="row-between"><span className="muted">Способ</span><b>{effProto === 'xray' ? 'Xray — общая подписка' : 'AmneziaWG'}</b></div>
               </div>
               <button className="btn btn-primary btn-lg btn-block" disabled={issuing} onClick={() => void doIssue()}>
-                {issuing ? 'Создаём…' : 'Создать конфигурацию'}
+                {issuing ? 'Создаём…' : effProto === 'xray' ? 'Получить подписку' : 'Создать конфигурацию'}
               </button>
             </>
           ) : null}

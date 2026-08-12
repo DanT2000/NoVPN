@@ -172,8 +172,12 @@ export function getDevice(id: string): Device | null {
 export function getDeviceRow(id: string): { uuid: string | null; public_key: string | null; protocol: string; server_id: string } | null {
   return (db.prepare('SELECT uuid, public_key, protocol, server_id FROM devices WHERE id = ?').get(id) as any) ?? null;
 }
-export function countActiveDevices(userId: string): number {
-  return (db.prepare('SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_active = 1').get(userId) as { n: number }).n;
+export function countActiveDevices(userId: string, protocol?: string): number {
+  const sql = protocol
+    ? 'SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_active = 1 AND protocol = ?'
+    : 'SELECT COUNT(*) AS n FROM devices WHERE user_id = ? AND is_active = 1';
+  const args = protocol ? [userId, protocol] : [userId];
+  return (db.prepare(sql).get(...args) as { n: number }).n;
 }
 
 /** Активный Xray-конфиг пользователя на сервере (одна конфигурация работает на
