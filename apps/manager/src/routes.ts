@@ -118,8 +118,10 @@ router.get('/sub/:token/full', (req, res) => {
   const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
   if (links.length === 0) return res.status(404).send('');
   const json = buildWhitelistXrayConfig(links, config.appName);
+  // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
+  // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${config.appName}-whitelist.json"`);
+  res.setHeader('Profile-Update-Interval', '12');
   res.send(json);
 });
 

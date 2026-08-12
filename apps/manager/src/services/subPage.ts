@@ -141,9 +141,11 @@ export function renderSubPage(opts: {
   ${
     configCount > 0
       ? `<div class="card">
-    <div class="lbl">Обход белых списков (V2RayNG / Xray)</div>
-    <div class="app-i" style="margin-bottom:10px">Полный конфиг: российские сайты (госуслуги, банки, VK, Яндекс, Ozon…) идут напрямую и работают даже в режиме «белого списка», остальное — через VPN. Импортируйте в V2RayNG как «свой конфиг».</div>
-    <a class="btn btn-primary btn-wide" href="${esc(subUrl)}/full">Скачать конфиг с обходом</a>
+    <div class="lbl">Подписка с обходом белых списков (V2RayNG)</div>
+    <div class="app-i" style="margin-bottom:10px">Отдельная подписка: российские сайты (госуслуги, банки, VK, Яндекс, Ozon…) идут напрямую и работают даже в режиме «белого списка», остальное — через VPN. Добавьте этот адрес в V2RayNG как подписку — сервер и маршрутизация подгрузятся сами.</div>
+    <div class="link" id="lnkfull">${esc(subUrl)}/full</div>
+    <button class="btn btn-primary btn-wide" data-copy-full>Скопировать подписку с обходом</button>
+    <a class="btn btn-sec btn-wide" style="margin-top:8px" href="${esc(subUrl)}/full" download="${esc(appName)}-whitelist.json">Скачать файлом (для импорта конфига)</a>
   </div>`
       : ''
   }
@@ -157,14 +159,17 @@ export function renderSubPage(opts: {
   var SUB = ${JSON.stringify(subUrl)};
   function toast(m){var t=document.getElementById('t');t.textContent=m;t.className='toast on';
     setTimeout(function(){t.className='toast'},1800)}
-  document.addEventListener('click',function(e){
-    var b=e.target.closest('[data-copy]'); if(!b) return;
-    if(navigator.clipboard){navigator.clipboard.writeText(SUB).then(function(){toast('Ссылка скопирована')},
+  function copyText(txt,id){
+    if(navigator.clipboard){navigator.clipboard.writeText(txt).then(function(){toast('Ссылка скопирована')},
       function(){toast('Скопируйте вручную')})}
-    else{var r=document.createRange();r.selectNode(document.getElementById('lnk'));
+    else{var el=document.getElementById(id);if(!el)return;var r=document.createRange();r.selectNode(el);
       var s=getSelection();s.removeAllRanges();s.addRange(r);
       try{document.execCommand('copy');toast('Ссылка скопирована')}catch(_){toast('Скопируйте вручную')}
       s.removeAllRanges()}
+  }
+  document.addEventListener('click',function(e){
+    if(e.target.closest('[data-copy]')) return copyText(SUB,'lnk');
+    if(e.target.closest('[data-copy-full]')) return copyText(SUB+'/full','lnkfull');
   });
   // Вкладка системы: по умолчанию — угаданная по устройству.
   var ua=navigator.userAgent, def=/android/i.test(ua)?'Android':/iphone|ipad|ipod/i.test(ua)?'iOS':

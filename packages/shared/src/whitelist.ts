@@ -59,8 +59,13 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN'): st
       rules: [
         // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
         { type: 'field', outboundTag: 'direct', domain: RU_WHITELIST_ROUTES },
-        // Приватные/локальные адреса — напрямую.
-        { type: 'field', outboundTag: 'direct', ip: ['geoip:private'] },
+        // Приватные/локальные адреса — напрямую. Явные подсети (без geoip.dat,
+        // чтобы конфиг был самодостаточным для любого клиента).
+        {
+          type: 'field',
+          outboundTag: 'direct',
+          ip: ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10'],
+        },
         // Торренты — мимо VPN (не грузим прокси).
         { type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] },
         // Всё остальное — через первый рабочий прокси.
