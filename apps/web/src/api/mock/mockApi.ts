@@ -127,6 +127,7 @@ export const mockApi: ApiClient = {
       subLink: u ? `https://vpn.example.ru/sub/sub-${u.id}` : null,
       proxyAccounts: [],
       allowedProxies: u ? u.allowedProxies : [],
+      xrayWhitelist: state.settings.xrayWhitelist !== false,
     };
   },
 
@@ -318,6 +319,16 @@ export const mockApi: ApiClient = {
     } while (state.users.some((x) => x.code === c));
     u.code = c;
     log(`Перевыпущен код для «${u.name}»`);
+    return clone(u);
+  },
+
+  async setCode(id: string, code: string): Promise<User> {
+    await wait(200);
+    const u = state.users.find((x) => x.id === id)!;
+    if (!/^\d{6}$/.test(code)) throw new Error('Код — 6 цифр.');
+    if (state.users.some((x) => x.code === code && x.id !== id)) throw new Error('Такой код уже используется — выберите другой.');
+    u.code = code;
+    log(`Задан свой код для «${u.name}»`);
     return clone(u);
   },
 

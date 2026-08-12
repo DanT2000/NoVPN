@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   codeCooldownMin: 15,
   inactiveDisableDays: 0,
   codeLoginDays: 15,
+  xrayWhitelist: true,
 };
 
 const DEFAULT_TELEGRAM: TelegramSettings = {

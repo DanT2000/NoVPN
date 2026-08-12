@@ -99,6 +99,8 @@ interface AppContextValue {
   extendUser(id: string, days: number): Promise<User>;
   setUserActive(id: string, active: boolean): Promise<User>;
   reissueCode(id: string): Promise<User>;
+  /** Задать пользователю свой код (6 цифр, уникальность — на сервере). */
+  setCode(id: string, code: string): Promise<User>;
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
   /** Включить/выключить запасной вход по коду. */
@@ -396,6 +398,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [upsertUser],
   );
+  const setCode = useCallback(
+    async (id: string, code: string) => {
+      const u = await api.setCode(id, code);
+      upsertUser(u);
+      return u;
+    },
+    [upsertUser],
+  );
   const reissueLink = useCallback(
     async (id: string) => {
       const u = await api.reissueLink(id);
@@ -492,7 +502,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices,
       adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer,
       saveTelegram, saveApps, saveSettings,
     }),
@@ -500,7 +510,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, mustChangePassword, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices, adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
       addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],
   );

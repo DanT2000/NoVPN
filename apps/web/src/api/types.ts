@@ -162,6 +162,8 @@ export interface ApiClient {
   extendUser(id: string, days: number): Promise<User>;
   setUserActive(id: string, active: boolean): Promise<User>;
   reissueCode(id: string): Promise<User>;
+  /** Задать пользователю СВОЙ код (6 цифр). Уникальность проверяет сервер. */
+  setCode(id: string, code: string): Promise<User>;
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
   /** Включить/выключить запасной вход по коду. */

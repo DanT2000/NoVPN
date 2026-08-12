@@ -91,6 +91,7 @@ router.get('/sub/:token', (req, res) => {
         subUrl: `${base}/sub/${req.params.token}`,
         apps: repo.listApps(),
         configCount: links.length,
+        whitelist: repo.getSettings().xrayWhitelist !== false,
       }),
     );
   }
@@ -579,10 +580,10 @@ router.post('/api/admin/users/:id/reissue-code', requireAdmin, (req, res) => {
 router.post('/api/admin/users/:id/code', requireAdmin, (req, res) => {
   const u = repo.getUser(req.params.id!);
   if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
-  const code = String(req.body?.code ?? '');
+  const code = String(req.body?.code ?? '').trim();
   if (!/^\d{6}$/.test(code)) return res.status(400).json(err('validation', 'Код — 6 цифр.'));
-  if (repo.codeExists(code, u.id)) return res.status(400).json(err('validation', 'Такой код уже используется.'));
-  res.json({ user: repo.updateUserFields(u.id, { code }) });
+  if (repo.codeExists(code, u.id)) return res.status(400).json(err('validation', 'Такой код уже используется — выберите другой.'));
+  res.json(repo.updateUserFields(u.id, { code })); // как reissue-code — возвращаем самого пользователя
 });
 
 router.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {

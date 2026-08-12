@@ -14,7 +14,7 @@ import type { AppClient, IssueDeviceResult, PublicServerView } from '@novpn/shar
 import { useApp } from '../store/AppStore';
 import { BackButton, Dot, EmptyState } from '../components/ui';
 import { Qr } from '../components/Qr';
-import { copyText, downloadText, openUrl } from '../lib/clipboard';
+import { copyText, downloadText, downloadUrl, isDataFile, dataFileName, openUrl, normalizeUrl } from '../lib/clipboard';
 
 const PLATFORMS = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
 type Platform = (typeof PLATFORMS)[number];
@@ -341,7 +341,15 @@ export function Wizard() {
                         <div style={{ fontWeight: 600 }}>{a.client}</div>
                         <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
                           {entry.url ? (
-                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(entry.url!)}>Установить</button>
+                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
+                              {/play\.google\.com/i.test(entry.url) ? 'Google Play' : /apps\.apple\.com|itunes\.apple/i.test(entry.url) ? 'App Store' : 'Установить'}
+                            </button>
+                          ) : null}
+                          {entry.file ? (
+                            <button className="btn btn-outline btn-sm" onClick={() => downloadUrl(isDataFile(entry.file!) ? dataFileName(entry.file!) : 'app', entry.file!)}>⬇ Скачать с сайта</button>
+                          ) : null}
+                          {a.source ? (
+                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(a.source))}>🌐 Сайт</button>
                           ) : null}
                           {tap ? (
                             <button className="btn btn-primary btn-sm" onClick={() => openUrl(tap)}>Добавить подписку</button>

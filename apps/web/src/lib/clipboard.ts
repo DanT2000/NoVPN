@@ -77,6 +77,13 @@ export function downloadUrl(filename: string, url: string): void {
   document.body.removeChild(a);
 }
 
+/** Дописать https://, если у ссылки нет схемы (админ мог ввести «example.com»).
+ *  Без этого openUrl уходит на относительный путь вместо сайта. */
+export function normalizeUrl(u: string): string {
+  const t = u.trim();
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
+
 export function openUrl(url: string): void {
   // http(s) — обычная вкладка. Кастомные схемы (vpn://, happ://, v2raytun://…)
   // через window.open('_blank') НЕ открывают приложение: браузер молча создаёт

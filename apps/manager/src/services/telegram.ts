@@ -534,7 +534,13 @@ async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & 
     if (protocol === 'xray') {
       // Подписочная модель, как в кабинете: одна ссылка-подписка на ВСЕ устройства
       // (приложение само тянет и обновляет конфиги со всех разрешённых серверов).
-      const subUrl = out.subscriptionUrl ?? repo.subscriptionUrl(user.id) ?? out.link ?? '';
+      // Продвинутый режим (глоб. настройка, по умолчанию вкл) → /full: обход белых
+      // списков + аварийный фоллбэк. Та же логика, что в веб-кабинете.
+      const base = out.subscriptionUrl ?? repo.subscriptionUrl(user.id) ?? out.link ?? '';
+      const advanced = repo.getSettings().xrayWhitelist !== false;
+      // /full добавляем ТОЛЬКО к настоящей ссылке-подписке (…/sub/<токен>), а не к
+      // запасному vless://-конфигу, иначе получился бы битый vless://…/full.
+      const subUrl = advanced && base.includes('/sub/') && !base.endsWith('/full') ? `${base}/full` : base;
       const ok = await sendBlock(chatId, 'Готово! Ваша ссылка-подписка (одна на все устройства) — скопируйте целиком:', subUrl);
       if (!ok) {
         await send(chatId, 'Не удалось отправить ссылку. Откройте личный кабинет на сайте и скопируйте её там.');

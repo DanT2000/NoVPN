@@ -853,5 +853,7 @@ export function buildPublicBootstrap(userId?: string, fallbackOrigin?: string): 
     subLink: user ? subscriptionUrl(user.id, fallbackOrigin) : null,
     proxyAccounts: user ? listProxyAccountsOfUser(user.id) : [],
     allowedProxies: user ? user.allowedProxies : [],
+    // Отсутствие поля = ВКЛ (старые панели): продвинутый режим по умолчанию включён.
+    xrayWhitelist: getSettings().xrayWhitelist !== false,
   };
 }

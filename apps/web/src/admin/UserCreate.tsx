@@ -61,6 +61,8 @@ export function UserCreate() {
   // код по умолчанию выключен. Сам код панель генерирует сама (нужен как
   // внутренний идентификатор), задавать его вручную незачем.
   const [codeLoginEnabled, setCodeLoginEnabled] = useState(false);
+  // Свой код — опционально. Пусто → сервер сгенерирует. 6 цифр, уникальность на сервере.
+  const [customCode, setCustomCode] = useState('');
 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -113,6 +115,10 @@ export function UserCreate() {
       setError('Выберите хотя бы один протокол или прокси.');
       return;
     }
+    if (customCode && !/^\d{6}$/.test(customCode)) {
+      setError('Свой код должен состоять из 6 цифр (или оставьте поле пустым).');
+      return;
+    }
     setError(null);
 
     const deviceLimit =
@@ -137,8 +143,8 @@ export function UserCreate() {
       defaultServerId,
       allowedProtocols: effProtocols,
       allowedProxies: proxies,
-      // Код генерирует сервер — пустая строка. Вход по коду по умолчанию выключен.
-      code: '',
+      // Пусто → код генерирует сервер. Иначе — свой 6-значный (уникальность на сервере).
+      code: customCode.trim(),
       codeLoginEnabled,
     };
 
@@ -332,6 +338,20 @@ export function UserCreate() {
             </span>
           </span>
         </label>
+        <div style={{ marginTop: 12 }}>
+          <div className="body small muted" style={{ marginBottom: 6 }}>
+            Свой код (необязательно) — оставьте пустым, и панель сгенерирует его сама.
+          </div>
+          <input
+            className="input mono"
+            style={{ maxWidth: 160, letterSpacing: '0.06em' }}
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="6 цифр"
+            value={customCode}
+            onChange={(e) => setCustomCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          />
+        </div>
       </Panel>
 
       {error && <div className="notice notice-red">{error}</div>}

@@ -61,7 +61,10 @@ export function Connect() {
   // Если доступен только один протокол — развилку не показываем.
   const effBranch: Branch | null = branch ?? (canXray && canAwg ? null : canXray ? 'xray' : canAwg ? 'amneziawg' : null);
 
-  const subUrl = data.subLink ?? '';
+  // Продвинутый режим (по умолчанию вкл) → подписка /full: обход белых списков +
+  // аварийный фоллбэк. Выключен → обычная подписка (только ссылки). Приложение тянет
+  // тот же URL и обновляет маршрутизацию само.
+  const subUrl = data.subLink ? (data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink) : '';
 
   // Приложения, подходящие выбранному протоколу и платформе.
   const appsFor = (b: Branch) =>
@@ -234,7 +237,7 @@ function AppList({
                     downloadUrl(isDataFile(entry.file!) ? dataFileName(entry.file!) : 'app', entry.file!)
                   }
                 >
-                  Скачать файл
+                  ⬇ Скачать с сайта
                 </button>
               ) : null}
               {oneTap ? (
@@ -257,7 +260,7 @@ function AppList({
               ) : null}
               {app.source ? (
                 <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(app.source))}>
-                  Сайт
+                  🌐 Сайт
                 </button>
               ) : null}
             </div>

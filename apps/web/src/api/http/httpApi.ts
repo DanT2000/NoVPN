@@ -90,6 +90,7 @@ export const httpApi: ApiClient = {
   extendUser: (id, days) => req<User>('POST', `/api/admin/users/${id}/extend`, { days }),
   setUserActive: (id, active) => req<User>('POST', `/api/admin/users/${id}/active`, { active }),
   reissueCode: (id) => req<User>('POST', `/api/admin/users/${id}/reissue-code`),
+  setCode: (id, code) => req<User>('POST', `/api/admin/users/${id}/code`, { code }),
   reissueLink: (id) => req<User>('POST', `/api/admin/users/${id}/reissue-link`),
   setCodeLogin: (id, enabled) => req<User>('POST', `/api/admin/users/${id}/code-login`, { enabled }),
   deleteUser: (id) => req<Ok>('DELETE', `/api/admin/users/${id}`),

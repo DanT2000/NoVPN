@@ -13,6 +13,10 @@ import type { AppClient, AppPlatform, User } from '@novpn/shared';
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
+/** Дописать https://, если у ссылки нет схемы (админ мог ввести «example.com»),
+ *  иначе href стал бы относительным путём вместо внешнего сайта. */
+const normUrl = (u: string): string => (/^https?:\/\//i.test(u.trim()) ? u.trim() : `https://${u.trim()}`);
+
 /** Ссылка «добавить подписку одним нажатием» — из схемы, заданной в каталоге.
  *  Схема либо оканчивается на '=' (параметр), либо на '/' — тогда просто дописываем. */
 function oneTap(app: AppClient, subUrl: string): string | null {
@@ -37,8 +41,10 @@ export function renderSubPage(opts: {
   apps: AppClient[];
   /** Сколько конфигов сейчас в подписке. */
   configCount: number;
+  /** Продвинутый режим X-Ray (обход + фоллбэк) включён глобально. */
+  whitelist: boolean;
 }): string {
-  const { appName, user, subUrl, apps, configCount } = opts;
+  const { appName, user, subUrl, apps, configCount, whitelist } = opts;
 
   // Только клиенты, умеющие Xray: подписка — это Xray.
   const xrayApps = apps.filter((a) => a.enabled && a.compat.includes('xray'));
@@ -55,14 +61,20 @@ export function renderSubPage(opts: {
           ? `<img class="ico" src="${esc(a.icon)}" alt="">`
           : `<div class="ico ph">${esc(a.client.slice(0, 1))}</div>`;
         const install = e!.url
-          ? `<a class="btn btn-primary" href="${esc(e!.url)}" target="_blank" rel="noopener">${esc(storeLabel(e!.url))}</a>`
+          ? `<a class="btn btn-primary" href="${esc(normUrl(e!.url))}" target="_blank" rel="noopener">${esc(storeLabel(e!.url))}</a>`
           : '';
         const add = tap
           ? `<a class="btn btn-sec" href="${esc(tap)}">Добавить подписку</a>`
           : `<button class="btn btn-sec" data-copy>Копировать ссылку</button>`;
+        // Файл приложения (data-URL) не встраиваем в серверный HTML — он раздул бы
+        // страницу на мегабайты; скачивание с сайта живёт в кабинете (SPA). Здесь —
+        // ссылка на официальный сайт (глобус), лёгкая.
+        const site = a.source
+          ? `<a class="btn btn-sec" href="${esc(normUrl(a.source))}" target="_blank" rel="noopener">🌐 Сайт</a>`
+          : '';
         return `<div class="app">${icon}<div class="app-b"><div class="app-n">${esc(a.client)}</div>${
           a.instruction ? `<div class="app-i">${esc(a.instruction)}</div>` : ''
-        }<div class="row">${install}${add}</div></div></div>`;
+        }<div class="row">${install}${add}${site}</div></div></div>`;
       })
       .join('');
     return `<section class="plat" data-plat="${esc(plat)}" hidden>${items}</section>`;
@@ -139,7 +151,7 @@ export function renderSubPage(opts: {
   </div>
 
   ${
-    configCount > 0
+    configCount > 0 && whitelist
       ? `<div class="card">
     <div class="lbl">Подписка с обходом белых списков (V2RayNG)</div>
     <div class="app-i" style="margin-bottom:10px">Отдельная подписка: российские сайты (госуслуги, банки, VK, Яндекс, Ozon…) идут напрямую и работают даже в режиме «белого списка», остальное — через VPN. Добавьте этот адрес в V2RayNG как подписку — сервер и маршрутизация подгрузятся сами.</div>

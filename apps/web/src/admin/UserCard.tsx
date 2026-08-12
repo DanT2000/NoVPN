@@ -77,9 +77,22 @@ type TrafMode = 'unlim' | 'custom';
 function UserCardInner({ user }: { user: User }) {
   const {
     data, isMobile, goAdmin, showToast, showConfirm,
-    updateUser, extendUser, setUserActive, reissueCode, reissueLink, setCodeLogin, deleteUser,
+    updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
     reissueDevice, revokeDevice, issueDevice, renameDevice, cleanupDevices,
   } = useApp();
+  // Ввод своего кода (6 цифр). null — форма скрыта.
+  const [codeEdit, setCodeEdit] = useState<string | null>(null);
+  const saveCustomCode = async () => {
+    const c = (codeEdit ?? '').trim();
+    if (!/^\d{6}$/.test(c)) return showToast('Код — 6 цифр.');
+    try {
+      await setCode(user.id, c);
+      setCodeEdit(null);
+      showToast('Код задан');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось задать код');
+    }
+  };
 
   const servers = data?.servers ?? [];
 
@@ -406,6 +419,23 @@ function UserCardInner({ user }: { user: User }) {
               <button className="btn btn-outline btn-sm" onClick={reissue}>
                 Новый код
               </button>
+              <button className="btn btn-outline btn-sm" onClick={() => setCodeEdit(codeEdit == null ? user.code : null)}>
+                {codeEdit == null ? 'Задать свой' : 'Отмена'}
+              </button>
+            </div>
+          ) : null}
+          {codeLoginActive && codeEdit != null ? (
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+              <input
+                className="input mono"
+                style={{ maxWidth: 140, letterSpacing: '0.06em' }}
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6 цифр"
+                value={codeEdit}
+                onChange={(e) => setCodeEdit(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              />
+              <button className="btn btn-primary btn-sm" onClick={() => void saveCustomCode()}>Сохранить код</button>
             </div>
           ) : null}
         </Panel>

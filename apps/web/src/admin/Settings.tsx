@@ -28,6 +28,8 @@ export function Settings() {
   const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 15);
   const [inactiveDisableDays, setInactiveDisableDays] = useState(s?.inactiveDisableDays ?? 0);
   const [codeLoginDays, setCodeLoginDays] = useState(s?.codeLoginDays ?? 15);
+  // Отсутствие поля трактуем как ВКЛ (старые панели): продвинутый X-Ray по умолчанию включён.
+  const [xrayWhitelist, setXrayWhitelist] = useState(s?.xrayWhitelist !== false);
   const [saving, setSaving] = useState(false);
 
   // Пароль администратора
@@ -165,7 +167,8 @@ export function Settings() {
     codeAttempts !== (s.codeAttempts ?? 5) ||
     codeCooldownMin !== (s.codeCooldownMin ?? 15) ||
     inactiveDisableDays !== (s.inactiveDisableDays ?? 0) ||
-    codeLoginDays !== (s.codeLoginDays ?? 15);
+    codeLoginDays !== (s.codeLoginDays ?? 15) ||
+    xrayWhitelist !== (s.xrayWhitelist !== false);
 
   const save = async () => {
     setSaving(true);
@@ -181,6 +184,7 @@ export function Settings() {
         codeCooldownMin,
         inactiveDisableDays,
         codeLoginDays,
+        xrayWhitelist,
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
@@ -259,6 +263,28 @@ export function Settings() {
               ))}
             </div>
           </Field>
+        </Panel>
+
+        {/* Продвинутый режим X-Ray: обход белых списков + аварийный фоллбэк */}
+        <Panel title="Продвинутый режим X-Ray">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Подписка X-Ray отдаётся как полный конфиг с <b>обходом «белых списков»</b>
+            (российские домены — напрямую, мимо VPN) и <b>аварийным фоллбэком</b>: если
+            X-Ray заблокируют, трафик сам переключается на прокси (HTTPS → HTTP → SOCKS).
+            Выключите — пользователи получат обычную подписку (только ссылки, без обхода);
+            приложения подтянут её при следующем обновлении.
+          </div>
+          <div className="chip-row" style={{ marginBottom: 10 }}>
+            <Chip label={xrayWhitelist ? 'Включён' : 'Выключен'} active={xrayWhitelist} onClick={() => setXrayWhitelist((v) => !v)} />
+          </div>
+          {xrayWhitelist ? (
+            <div className="body small" style={{ background: 'var(--amber-bg)', color: 'var(--amber-fg)', padding: '10px 12px', borderRadius: 10 }}>
+              ⚠️ Аварийный фоллбэк работает через прокси, установленные на сервере
+              (HTTP / SOCKS / HTTPS). Если прокси не установлены — обход «белых списков»
+              всё равно работает, но резервных каналов не будет (только X-Ray). HTTPS-прокси
+              требует домена. Установить прокси можно в разделе «Серверы» → сервер → «Прокси».
+            </div>
+          ) : null}
         </Panel>
 
         {/* Шаблон */}

@@ -167,21 +167,26 @@ export function Cabinet() {
       {/* Подписка Xray: одна ссылка на все устройства. Приложение само тянет
           конфиги и обновляет их — не нужно выпускать конфиг на каждый телефон. */}
       {data.subLink && user.allowedProtocols.includes('xray') && hasActiveXray ? (
+        (() => {
+          // Продвинутый режим (по умолчанию) → /full: обход белых списков + фоллбэк.
+          const subUrl = data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink!;
+          return (
         <div className="card stack" style={{ gap: 10 }}>
           <div>
             <div className="eyebrow" style={{ marginBottom: 4 }}>Подписка Xray</div>
             <div className="body small muted">
               Добавьте эту ссылку в приложение один раз — оно само подтянет все ваши
               конфигурации и будет держать их актуальными.
+              {data.xrayWhitelist !== false ? ' Российские сайты идут напрямую, а если X-Ray заблокируют — включится резервный канал.' : ''}
             </div>
           </div>
-          <Qr text={data.subLink} caption="Отсканируйте в приложении" />
-          <input className="input mono" readOnly value={data.subLink} style={{ fontSize: 12 }} />
+          <Qr text={subUrl} caption="Отсканируйте в приложении" />
+          <input className="input mono" readOnly value={subUrl} style={{ fontSize: 12 }} />
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <button
               className="btn btn-primary btn-sm"
               onClick={async () => {
-                showToast((await copyText(data.subLink!)) ? 'Ссылка подписки скопирована' : 'Не удалось скопировать');
+                showToast((await copyText(subUrl)) ? 'Ссылка подписки скопирована' : 'Не удалось скопировать');
               }}
             >
               Копировать подписку
@@ -191,6 +196,8 @@ export function Cabinet() {
             </button>
           </div>
         </div>
+          );
+        })()
       ) : null}
 
       {showProxy ? (
