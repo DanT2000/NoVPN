@@ -754,7 +754,10 @@ function UserCardInner({ user }: { user: User }) {
                         className="btn btn-outline btn-sm"
                         onClick={async () => {
                           try {
-                            await reissueDevice(d.id);
+                            // Показываем НОВЫЙ доступ так же, как при выпуске (QR/ссылка/.conf/
+                            // копировать/скачать) — иначе старый конфиг уже мёртв, а новый негде взять.
+                            const r = await reissueDevice(d.id);
+                            setIssued(r);
                             showToast('Конфиг перевыпущен');
                           } catch (e) {
                             showToast(e instanceof Error ? e.message : 'Не удалось перевыпустить');
