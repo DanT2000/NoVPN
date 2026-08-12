@@ -1,8 +1,15 @@
 # NoVPN manager (control plane + собранный фронтенд). Один контейнер, порт 3000.
 # Контекст сборки — корень репозитория. Coolify: Dockerfile location = deploy/manager.Dockerfile.
 
+# Базовый образ через зеркало Docker Hub от Google (mirror.gcr.io). На одном из
+# build-хостов (107_AppsServer) путь к auth.docker.io по IPv6 перехватывается
+# (на HTTPS-запрос приходит HTTP), и pull с docker.io падает «server gave HTTP
+# response to HTTPS client». mirror.gcr.io отдаёт тот же образ в обход. Переопределяется
+# build-arg'ом NODE_IMAGE, если понадобится вернуть docker.io.
+ARG NODE_IMAGE=mirror.gcr.io/library/node:20-bookworm-slim
+
 # ---- build ----
-FROM node:20-bookworm-slim AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 
 # инструменты сборки нативных модулей (better-sqlite3) — на случай, если
@@ -29,7 +36,7 @@ RUN npm run build --workspace packages/shared \
  && npm run build --workspace apps/manager
 
 # ---- runtime ----
-FROM node:20-bookworm-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
 # curl нужен healthcheck'у Coolify (он вызывает curl/wget внутри контейнера)
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
