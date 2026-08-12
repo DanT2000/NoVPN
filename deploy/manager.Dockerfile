@@ -25,7 +25,11 @@ COPY apps/manager/package.json apps/manager/
 COPY apps/agent/package.json apps/agent/
 # --include=dev обязателен: Coolify задаёт NODE_ENV=production, иначе devDeps
 # (typescript, vite) не установятся и сборка упадёт с «tsc: not found».
-RUN npm install --include=dev
+# Флаги снижают пик памяти: build-хост 107_AppsServer — 2 ГБ RAM с почти полным
+# свопом, и обычный npm install падал OOM («Exit handler never called!»).
+# jobs=1 — последовательная сборка нативных модулей; без audit/fund; меньше сокетов.
+ENV npm_config_jobs=1 npm_config_audit=false npm_config_fund=false
+RUN npm install --include=dev --no-audit --no-fund --maxsockets=4
 
 # исходники и сборка: shared → web → manager
 COPY packages/shared packages/shared
