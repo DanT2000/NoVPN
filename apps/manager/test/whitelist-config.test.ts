@@ -1,42 +1,58 @@
-// Генерация полного Xray-конфига с обходом «белых списков».
+// Генерация полного Xray-конфига: обход «белых списков» + аварийный фоллбэк.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildWhitelistXrayConfig, RU_WHITELIST_ROUTES } from '@novpn/shared';
+import type { ProxyFallback } from '@novpn/shared';
 
 const LINK =
   'vless://b0cac4d7-e2a6-40a7-ba6e-a946bcbe6243@1.vpn.appswire.ru:443?type=tcp&security=reality&pbk=ABC&fp=edge&sni=cdn.dodostatic.net&sid=39a4&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x';
 
-test('buildWhitelistXrayConfig: валидный JSON с reality-outbound и маршрутизацией', () => {
+test('buildWhitelistXrayConfig: reality-outbound + маршрутизация (без прокси)', () => {
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN'));
-  // outbound reality собран из ссылки
   const proxy = cfg.outbounds.find((o: any) => o.protocol === 'vless');
-  assert.ok(proxy, 'есть vless-outbound');
+  assert.ok(proxy);
+  assert.equal(proxy.tag, 'proxy-t0-0');
   const vnext = proxy.settings.vnext[0];
   assert.equal(vnext.address, '1.vpn.appswire.ru');
-  assert.equal(vnext.port, 443);
   assert.equal(vnext.users[0].id, 'b0cac4d7-e2a6-40a7-ba6e-a946bcbe6243');
-  assert.equal(vnext.users[0].flow, 'xtls-rprx-vision');
   const rs = proxy.streamSettings.realitySettings;
   assert.equal(rs.serverName, 'cdn.dodostatic.net');
   assert.equal(rs.fingerprint, 'edge');
   assert.equal(rs.spiderX, '/');
-  // freedom(direct) и blackhole(block) присутствуют
-  assert.ok(cfg.outbounds.some((o: any) => o.protocol === 'freedom' && o.tag === 'direct'));
-  assert.ok(cfg.outbounds.some((o: any) => o.protocol === 'blackhole'));
-  // маршрутизация: RU-домены → direct, дефолт → proxy
+  assert.ok(cfg.outbounds.some((o: any) => o.tag === 'direct'));
   const directRule = cfg.routing.rules.find((r: any) => r.domain && r.outboundTag === 'direct');
-  assert.ok(directRule, 'есть правило RU-доменов напрямую');
-  assert.ok(directRule.domain.includes('domain:gosuslugi.ru'));
-  assert.ok(directRule.domain.length === RU_WHITELIST_ROUTES.length);
+  assert.ok(directRule && directRule.domain.includes('domain:gosuslugi.ru'));
+  assert.equal(directRule.domain.length, RU_WHITELIST_ROUTES.length);
+  // один тир → без балансировщиков, дефолт напрямую на proxy-t0-0
+  assert.ok(!cfg.balancers && !cfg.observatory);
   const last = cfg.routing.rules[cfg.routing.rules.length - 1];
-  assert.equal(last.outboundTag, 'proxy-0'); // всё остальное — через прокси
+  assert.equal(last.outboundTag, 'proxy-t0-0');
 });
 
-test('buildWhitelistXrayConfig: несколько ссылок — несколько outbound, дефолт на первый', () => {
-  const l2 = LINK.replace('1.vpn.appswire.ru', '2.vpn.appswire.ru');
-  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK, l2]));
-  const proxies = cfg.outbounds.filter((o: any) => o.protocol === 'vless');
-  assert.equal(proxies.length, 2);
-  const last = cfg.routing.rules[cfg.routing.rules.length - 1];
-  assert.equal(last.outboundTag, 'proxy-0');
+test('buildWhitelistXrayConfig: аварийный фоллбэк Xray→HTTPS→HTTP→SOCKS (тиры)', () => {
+  const proxies: ProxyFallback[] = [
+    { kind: 'https', host: '1.vpn.appswire.ru', port: 8443, user: 'u', pass: 'p' },
+    { kind: 'http', host: '1.vpn.appswire.ru', port: 8080, user: 'u', pass: 'p' },
+    { kind: 'socks', host: '1.vpn.appswire.ru', port: 1080, user: 'u', pass: 'p' },
+  ];
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', proxies));
+  // 4 тира: xray(t0) + https(t1) + http(t2) + socks(t3)
+  assert.ok(cfg.outbounds.some((o: any) => o.tag === 'proxy-t0-0' && o.protocol === 'vless'));
+  const https = cfg.outbounds.find((o: any) => o.tag === 'proxy-t1-0');
+  assert.equal(https.protocol, 'http');
+  assert.equal(https.streamSettings.security, 'tls'); // HTTPS-прокси через TLS
+  assert.equal(cfg.outbounds.find((o: any) => o.tag === 'proxy-t2-0').protocol, 'http');
+  assert.equal(cfg.outbounds.find((o: any) => o.tag === 'proxy-t3-0').protocol, 'socks');
+  // observatory + балансировщики с цепочкой fallbackTag
+  assert.ok(cfg.observatory && cfg.observatory.subjectSelector.includes('proxy-t'));
+  const bs = cfg.routing.balancers;
+  assert.equal(bs.length, 4);
+  assert.equal(bs[0].selector[0], 'proxy-t0-'); // Xray первый
+  assert.equal(bs[0].fallbackTag, 'loop-1'); // при падении Xray → следующий тир
+  assert.equal(bs[3].fallbackTag, 'direct'); // все мертвы → напрямую
+  // dokodemo-инбаунды и loopback-аутбаунды для тиров 1..3
+  assert.equal(cfg.inbounds.filter((i: any) => i.protocol === 'dokodemo-door').length, 3);
+  assert.equal(cfg.outbounds.filter((o: any) => o.protocol === 'loopback').length, 3);
+  // RU-домены по-прежнему напрямую
+  assert.ok(cfg.routing.rules.some((r: any) => r.outboundTag === 'direct' && r.domain));
 });

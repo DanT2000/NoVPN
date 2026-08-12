@@ -11,6 +11,7 @@ import type {
   User,
 } from '@novpn/shared';
 import { buildWhitelistXrayConfig } from '@novpn/shared';
+import type { ProxyFallback } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, REALITY_SNI } from './services/sshServer.js';
@@ -117,7 +118,20 @@ router.get('/sub/:token/full', (req, res) => {
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
   const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
   if (links.length === 0) return res.status(404).send('');
-  const json = buildWhitelistXrayConfig(links, config.appName);
+  // Аварийный фоллбэк: прокси-каналы пользователя В ПОРЯДКЕ ПРИОРИТЕТА HTTPS→HTTP→SOCKS.
+  // Если Xray заблокируют — конфиг сам переключится на них (observatory+balancer).
+  const typeOrder: Record<string, number> = { https: 0, http: 1, socks5: 2 };
+  const proxies: ProxyFallback[] = [];
+  if (!overQuota) {
+    for (const row of repo.listProxyAccountRowsOfUser(u.id)) {
+      const view = repo.buildProxyAccountView(row);
+      if (!view) continue;
+      for (const e of [...view.endpoints].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9))) {
+        proxies.push({ kind: e.type === 'socks5' ? 'socks' : (e.type as 'https' | 'http'), host: e.host, port: e.port, user: view.login, pass: view.password });
+      }
+    }
+  }
+  const json = buildWhitelistXrayConfig(links, config.appName, proxies);
   // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
   // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.
   res.setHeader('Content-Type', 'application/json; charset=utf-8');

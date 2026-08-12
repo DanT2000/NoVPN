@@ -31,47 +31,109 @@ export const RU_WHITELIST_ROUTES: string[] = [
 
 /** Полный Xray-конфиг (V2RayNG / Xray-core) с обходом «белых списков»:
  *  RU-домены — напрямую, всё остальное — через reality-прокси. `links` — vless://
- *  reality-ссылки пользователя (по одной на сервер). Возвращает JSON-строку. */
-export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN'): string {
+ *  reality-ссылки. `proxies` — резервные каналы В ПОРЯДКЕ ПРИОРИТЕТА (HTTPS, HTTP,
+ *  SOCKS): аварийный доступ, если Xray заблокируют. Возвращает JSON-строку. */
+export interface ProxyFallback {
+  kind: 'https' | 'http' | 'socks';
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+}
+
+const PRIVATE_IPS = ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10'];
+
+function proxyOutbound(p: ProxyFallback): Record<string, unknown> {
+  if (p.kind === 'socks') {
+    return { protocol: 'socks', settings: { servers: [{ address: p.host, port: p.port, users: [{ user: p.user, pass: p.pass }] }] } };
+  }
+  const o: Record<string, unknown> = {
+    protocol: 'http',
+    settings: { servers: [{ address: p.host, port: p.port, users: [{ user: p.user, pass: p.pass }] }] },
+  };
+  if (p.kind === 'https') o.streamSettings = { security: 'tls', tlsSettings: { serverName: p.host } };
+  return o;
+}
+
+export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', proxies: ProxyFallback[] = []): string {
+  // Тиры в порядке приоритета: 0 = Xray (reality), затем каждый прокси — свой тир.
+  const tiers: Array<Record<string, unknown>[]> = [];
+  const xray = links.map(parseVlessLink).filter((o): o is Record<string, unknown> => !!o);
+  if (xray.length) tiers.push(xray);
+  for (const p of proxies) tiers.push([proxyOutbound(p)]);
+
   const outbounds: Array<Record<string, unknown>> = [];
-  const proxyTags: string[] = [];
-  links.forEach((link, i) => {
-    const o = parseVlessLink(link);
-    if (!o) return;
-    const tag = `proxy-${i}`;
-    proxyTags.push(tag);
-    o.tag = tag;
-    outbounds.push(o);
-  });
+  tiers.forEach((tier, ti) =>
+    tier.forEach((o, oi) => {
+      o.tag = `proxy-t${ti}-${oi}`;
+      outbounds.push(o);
+    }),
+  );
   outbounds.push({ protocol: 'freedom', tag: 'direct' });
   outbounds.push({ protocol: 'blackhole', tag: 'block' });
 
+  const inbounds: Array<Record<string, unknown>> = [
+    { tag: 'socks', listen: '127.0.0.1', port: 10808, protocol: 'socks', settings: { auth: 'noauth', udp: true } },
+    { tag: 'http', listen: '127.0.0.1', port: 10809, protocol: 'http' },
+  ];
+  const whitelistRules = [
+    // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
+    { type: 'field', outboundTag: 'direct', domain: RU_WHITELIST_ROUTES },
+    // Приватные/локальные адреса — напрямую (явные подсети, без geoip.dat).
+    { type: 'field', outboundTag: 'direct', ip: PRIVATE_IPS },
+    // Торренты — мимо VPN.
+    { type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] },
+  ];
+
+  // Один тир (только Xray или только прокси) — без аварийного переключения.
+  if (tiers.length <= 1) {
+    const cfg = {
+      remarks: `${appName} — обход белых списков`,
+      log: { loglevel: 'warning' },
+      inbounds,
+      outbounds,
+      routing: {
+        domainStrategy: 'AsIs',
+        rules: [...whitelistRules, { type: 'field', outboundTag: tiers.length ? 'proxy-t0-0' : 'direct', network: 'tcp,udp' }],
+      },
+    };
+    return JSON.stringify(cfg, null, 2);
+  }
+
+  // Несколько тиров — строгий приоритет через цепочку балансировщиков с fallbackTag.
+  // Xray жив → идём через него; заблокировали → балансировщик пуст → fallbackTag на
+  // следующий тир (loopback возвращает трафик через dokodemo-инбаунд), и так до SOCKS,
+  // а если все мертвы — напрямую. observatory следит за живостью тиров.
+  const n = tiers.length;
+  const rules: Array<Record<string, unknown>> = [...whitelistRules];
+  const balancers: Array<Record<string, unknown>> = [];
+  for (let i = 1; i < n; i++) {
+    inbounds.push({
+      tag: `t${i}-in`,
+      listen: '127.0.0.1',
+      port: 10810 + i,
+      protocol: 'dokodemo-door',
+      settings: { address: '127.0.0.1', network: 'tcp,udp', port: 0 },
+    });
+    outbounds.push({ protocol: 'loopback', tag: `loop-${i}`, settings: { inboundTag: `t${i}-in` } });
+  }
+  rules.push({ type: 'field', inboundTag: ['socks', 'http'], balancerTag: 'lb0', network: 'tcp,udp' });
+  for (let i = 0; i < n; i++) {
+    if (i > 0) rules.push({ type: 'field', inboundTag: [`t${i}-in`], balancerTag: `lb${i}` });
+    balancers.push({
+      tag: `lb${i}`,
+      selector: [`proxy-t${i}-`],
+      fallbackTag: i < n - 1 ? `loop-${i + 1}` : 'direct',
+      strategy: { type: 'leastPing' },
+    });
+  }
   const cfg = {
-    remarks: `${appName} — обход белых списков`,
+    remarks: `${appName} — обход + аварийный доступ`,
     log: { loglevel: 'warning' },
-    inbounds: [
-      { tag: 'socks', listen: '127.0.0.1', port: 10808, protocol: 'socks', settings: { auth: 'noauth', udp: true } },
-      { tag: 'http', listen: '127.0.0.1', port: 10809, protocol: 'http' },
-    ],
+    inbounds,
     outbounds,
-    routing: {
-      domainStrategy: 'AsIs',
-      rules: [
-        // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
-        { type: 'field', outboundTag: 'direct', domain: RU_WHITELIST_ROUTES },
-        // Приватные/локальные адреса — напрямую. Явные подсети (без geoip.dat,
-        // чтобы конфиг был самодостаточным для любого клиента).
-        {
-          type: 'field',
-          outboundTag: 'direct',
-          ip: ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10'],
-        },
-        // Торренты — мимо VPN (не грузим прокси).
-        { type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] },
-        // Всё остальное — через первый рабочий прокси.
-        { type: 'field', outboundTag: proxyTags[0] ?? 'direct', network: 'tcp,udp' },
-      ],
-    },
+    observatory: { subjectSelector: ['proxy-t'], probeUrl: 'https://www.cloudflare.com/cdn-cgi/trace', probeInterval: '30s', enableConcurrency: true },
+    routing: { domainStrategy: 'AsIs', rules, balancers },
   };
   return JSON.stringify(cfg, null, 2);
 }

@@ -69,6 +69,17 @@ export async function issueForUser(
     const r = await createXrayCfg(server, name);
     const device = repo.insertDevice({ userId: user.id, name, serverId, protocol, uuid: r.uuid, publicKey: r.publicKey, link: r.link });
     repo.addHistory(user.id, `Выпущен конфиг «${name}» (Xray, ${server.name})`);
+    // Аварийный прокси-фоллбэк: заводим прокси-аккаунт (best-effort), если пользователю
+    // разрешены прокси и они установлены на сервере — тогда полный конфиг (/full) сможет
+    // переключиться на прокси, если Xray заблокируют. Аккаунт переиспользуется, удаляется
+    // вместе с пользователем/при отключении. Сбой прокси не мешает выпуску Xray.
+    if (repo.availableProxyTypes(user, server).length > 0) {
+      try {
+        await issueProxyForUser(user, serverId, { byAdmin: opts.byAdmin });
+      } catch {
+        /* прокси недоступны/самовыдача выключена — не критично для Xray */
+      }
+    }
     return { device, link: r.link, subscriptionUrl: repo.subscriptionUrl(user.id) ?? undefined };
   }
   if (atAwgDeviceLimit())
