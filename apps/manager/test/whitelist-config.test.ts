@@ -29,6 +29,21 @@ test('buildWhitelistXrayConfig: reality-outbound + маршрутизация (�
   assert.equal(last.outboundTag, 'proxy-t0-0');
 });
 
+test('buildWhitelistXrayConfig: несколько Xray-серверов без прокси — балансировщик по тиру 0', () => {
+  const LINK2 =
+    'vless://11111111-2222-3333-4444-555555555555@2.vpn.appswire.ru:443?type=tcp&security=reality&pbk=DEF&fp=edge&sni=cdn.dodostatic.net&sid=aa&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x2';
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK, LINK2], 'NoVPN'));
+  // Оба сервера — outbounds tier 0; балансировщик leastPing по proxy-t0-, а не только первый.
+  assert.ok(cfg.outbounds.some((o: any) => o.tag === 'proxy-t0-0'));
+  assert.ok(cfg.outbounds.some((o: any) => o.tag === 'proxy-t0-1'));
+  assert.ok(cfg.observatory && cfg.observatory.subjectSelector.includes('proxy-t0-'));
+  assert.equal(cfg.routing.balancers.length, 1);
+  assert.equal(cfg.routing.balancers[0].selector[0], 'proxy-t0-');
+  assert.equal(cfg.routing.balancers[0].fallbackTag, 'direct');
+  // RU-домены по-прежнему напрямую.
+  assert.ok(cfg.routing.rules.some((r: any) => r.outboundTag === 'direct' && r.domain));
+});
+
 test('buildWhitelistXrayConfig: аварийный фоллбэк Xray→HTTPS→HTTP→SOCKS (тиры)', () => {
   const proxies: ProxyFallback[] = [
     { kind: 'https', host: '1.vpn.appswire.ru', port: 8443, user: 'u', pass: 'p' },

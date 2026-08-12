@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS devices (
   traffic_gb REAL DEFAULT 0,
   created_at TEXT NOT NULL,
   revoked_at TEXT,
+  revoke_pending INTEGER NOT NULL DEFAULT 0,
   os_hint TEXT,
   source TEXT DEFAULT 'managed',
   management_level TEXT DEFAULT 'managed',
@@ -245,6 +246,10 @@ for (const stmt of [
   // сумме устройств, и физическое удаление конфига иначе уменьшало бы traffic_used_gb
   // (можно было бы вернуть квоту, удалив/очистив конфиг). Копим отдельно.
   'ALTER TABLE users ADD COLUMN retired_traffic_gb REAL NOT NULL DEFAULT 0',
+  // «Отзыв ожидает подтверждения»: конфиг отключён в панели, но серверный отзов
+  // по SSH не удался (сервер был недоступен). Такие НЕ чистим (revoked_at не ставим,
+  // иначе осиротеет живой конфиг), а повторяем отзыв в sync до подтверждения.
+  'ALTER TABLE devices ADD COLUMN revoke_pending INTEGER NOT NULL DEFAULT 0',
 ]) {
   try {
     db.exec(stmt);

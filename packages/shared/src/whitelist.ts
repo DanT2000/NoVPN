@@ -85,18 +85,26 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
     { type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] },
   ];
 
-  // Один тир (только Xray или только прокси) — без аварийного переключения.
+  // Один тир (только Xray или только прокси) — без аварийного переключения между тирами.
   if (tiers.length <= 1) {
-    const cfg = {
+    const tier0 = tiers[0] ?? [];
+    const rules: Array<Record<string, unknown>> = [...whitelistRules];
+    const cfg: Record<string, unknown> = {
       remarks: `${appName} — обход белых списков`,
       log: { loglevel: 'warning' },
       inbounds,
       outbounds,
-      routing: {
-        domainStrategy: 'AsIs',
-        rules: [...whitelistRules, { type: 'field', outboundTag: tiers.length ? 'proxy-t0-0' : 'direct', network: 'tcp,udp' }],
-      },
+      routing: { domainStrategy: 'AsIs', rules },
     };
+    if (tier0.length > 1) {
+      // Несколько Xray-серверов (без прокси) — балансируем по ним (leastPing), иначе
+      // использовался бы только первый; все мертвы → напрямую.
+      cfg.observatory = { subjectSelector: ['proxy-t0-'], probeUrl: 'https://www.cloudflare.com/cdn-cgi/trace', probeInterval: '30s', enableConcurrency: true };
+      (cfg.routing as Record<string, unknown>).balancers = [{ tag: 'lb0', selector: ['proxy-t0-'], fallbackTag: 'direct', strategy: { type: 'leastPing' } }];
+      rules.push({ type: 'field', inboundTag: ['socks', 'http'], balancerTag: 'lb0', network: 'tcp,udp' });
+    } else {
+      rules.push({ type: 'field', outboundTag: tier0.length ? 'proxy-t0-0' : 'direct', network: 'tcp,udp' });
+    }
     return JSON.stringify(cfg, null, 2);
   }
 

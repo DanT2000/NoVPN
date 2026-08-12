@@ -150,7 +150,8 @@ function UserCardInner({ user }: { user: User }) {
   if (!data) return null;
 
   const isAdmin = category === 'Админ';
-  const activeDevices = countActiveDevices(user.id, data.devices);
+  // Лимит устройств считается только по AmneziaWG (Xray — общая подписка вне лимита).
+  const awgDevices = countActiveDevices(user.id, data.devices, 'amneziawg');
   const userDevices = data.devices.filter((d) => d.userId === user.id);
   const inactiveDevices = userDevices.filter((d) => isInactive(d));
   const history = data.history[user.id] ?? [];
@@ -347,7 +348,7 @@ function UserCardInner({ user }: { user: User }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 12 }}>
         <StatCard label="Статус" value={statusOf(user).label} />
-        <StatCard label="Устройства" value={`${activeDevices}/${user.deviceLimit ?? '∞'}`} />
+        <StatCard label="Устройства AWG" value={`${awgDevices}/${user.deviceLimit ?? '∞'}`} />
         <StatCard label="Трафик" value={`${gb(user.trafficUsedGb)} / ${gb(user.trafficLimitGb)}`} />
         <StatCard label="Активность" value={rel(user.lastActivityAt)} />
       </div>

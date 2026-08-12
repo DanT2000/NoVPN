@@ -15,7 +15,10 @@ export function Devices() {
 
   const devices = data.devices.filter((d) => d.userId === user.id);
   const active = devices.filter((d) => d.isActive).length;
-  const uDevBig = user.deviceLimit == null ? String(active) : `${active} из ${user.deviceLimit}`;
+  // Счётчик «из лимита» — по AmneziaWG (лимит только на них); без лимита показываем
+  // общее число активных конфигов. Xray — общая подписка, в лимит не входит.
+  const awgActive = devices.filter((d) => d.isActive && d.protocol === 'amneziawg').length;
+  const uDevBig = user.deviceLimit == null ? String(active) : `AWG ${awgActive} из ${user.deviceLimit}`;
   const inactive = devices.filter((d) => isInactive(d));
 
   const serverName = (id: string) => data.servers.find((s) => s.id === id)?.name ?? id;

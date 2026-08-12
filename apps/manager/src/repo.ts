@@ -157,7 +157,36 @@ export function updateUserFields(id: string, fields: Record<string, unknown>): U
 }
 export function softDeleteUser(id: string): void {
   db.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(nowIso(), id);
-  db.prepare('UPDATE devices SET is_active = 0, revoked_at = ? WHERE user_id = ?').run(nowIso(), id);
+  // Базовое состояние: доступ снят, серверный отзыв ОЖИДАЕТ подтверждения. revoked_at
+  // (таймер автоочистки) НЕ ставим здесь — его выставит вызывающий только тем
+  // устройствам, чей отзыв на сервере подтверждён (revokeUserAccessOnServers). Иначе
+  // при недоступном сервере запись удалилась бы через 3 дня, осиротив живой конфиг.
+  db.prepare('UPDATE devices SET is_active = 0, revoke_pending = 1, revoked_at = NULL WHERE user_id = ? AND is_active = 1').run(id);
+  // Прокси-логины пользователя тоже гасим (раньше оставались is_active=1 навсегда).
+  db.prepare('UPDATE proxy_accounts SET is_active = 0 WHERE user_id = ? AND is_active = 1').run(id);
+}
+
+/** Пометить отзыв устройства ПОДТВЕРЖДЁННЫМ. Для удаления пользователя (forCleanup)
+ *  ставим revoked_at — запись очистится через grace-период; для приостановки —
+ *  оставляем revoked_at пустым (конфиг переживёт паузу до реактивации). */
+export function markDeviceRevokeConfirmed(id: string, forCleanup: boolean): void {
+  db.prepare('UPDATE devices SET is_active = 0, revoke_pending = 0, revoked_at = ? WHERE id = ?').run(
+    forCleanup ? nowIso() : null,
+    id,
+  );
+}
+
+/** Устройства с ожидающим серверным отзывом (сервер был недоступен) — sync повторит.
+ *  pending=1 → после подтверждения ставится revoked_at (автоочистка); pending=2 →
+ *  приостановка: отзыв подтверждаем, но запись храним (переживёт до реактивации). */
+export function listRevokePendingDevices(): Array<{
+  id: string; userId: string | null; protocol: string; uuid: string | null; publicKey: string | null; serverId: string; pending: number;
+}> {
+  return db
+    .prepare(
+      'SELECT id, user_id AS userId, protocol, uuid, public_key AS publicKey, server_id AS serverId, revoke_pending AS pending FROM devices WHERE revoke_pending != 0',
+    )
+    .all() as Array<{ id: string; userId: string | null; protocol: string; uuid: string | null; publicKey: string | null; serverId: string; pending: number }>;
 }
 
 // ── devices ──
@@ -169,8 +198,10 @@ export function getDevice(id: string): Device | null {
   return r ? rowToDevice(r) : null;
 }
 /** Сырая строка устройства (с uuid/public_key) — для отзыва на сервере. */
-export function getDeviceRow(id: string): { uuid: string | null; public_key: string | null; protocol: string; server_id: string } | null {
-  return (db.prepare('SELECT uuid, public_key, protocol, server_id FROM devices WHERE id = ?').get(id) as any) ?? null;
+export function getDeviceRow(
+  id: string,
+): { uuid: string | null; public_key: string | null; protocol: string; server_id: string; revoke_pending: number } | null {
+  return (db.prepare('SELECT uuid, public_key, protocol, server_id, revoke_pending FROM devices WHERE id = ?').get(id) as any) ?? null;
 }
 export function countActiveDevices(userId: string, protocol?: string): number {
   const sql = protocol
@@ -230,6 +261,18 @@ export function insertProxyAccountRow(d: { userId: string; serverId: string; log
 }
 export function deactivateProxyAccount(id: string): void {
   db.prepare('UPDATE proxy_accounts SET is_active = 0 WHERE id = ?').run(id);
+}
+/** Активные прокси-аккаунты пользователей, исчерпавших квоту трафика — их логины
+ *  надо погасить на сервере (иначе сохранённые creds работали бы сверх лимита). */
+export function listProxyAccountsOverQuota(): Array<{ id: string; login: string; serverId: string }> {
+  return db
+    .prepare(
+      `SELECT p.id AS id, p.login AS login, p.server_id AS serverId
+         FROM proxy_accounts p JOIN users u ON u.id = p.user_id
+        WHERE p.is_active = 1 AND u.deleted_at IS NULL
+          AND u.traffic_limit_gb IS NOT NULL AND u.traffic_used_gb >= u.traffic_limit_gb`,
+    )
+    .all() as Array<{ id: string; login: string; serverId: string }>;
 }
 /** Деактивировать ВСЕ прокси-аккаунты пользователя (при отключении/удалении). */
 export function deactivateUserProxyAccounts(userId: string): void {
@@ -362,7 +405,10 @@ export function disableInactiveDevices(days: number): DisabledDevice[] {
     )
     .all(cutoff) as DisabledDevice[];
   for (const r of rows) {
-    db.prepare('UPDATE devices SET is_active = 0, revoked_at = ? WHERE id = ?').run(nowIso(), r.id);
+    // Отзыв на сервере делает вызывающий (sync) и подтверждает его через
+    // markDeviceRevokeConfirmed(…, true). Здесь — pending=1: доступ снят, автоочистка
+    // не тронет запись, пока серверный отзыв не подтверждён (иначе конфиг осиротеет).
+    db.prepare('UPDATE devices SET is_active = 0, revoke_pending = 1, revoked_at = NULL WHERE id = ?').run(r.id);
     if (r.userId) addHistory(r.userId, `Устройство «${r.name}» отключено автоматически: неактивно более ${days} дн`);
   }
   if (rows.length) addLog(`Автоотключение неактивных устройств: ${rows.length}`);
@@ -377,9 +423,15 @@ export function recomputeUserUsage(userId: string): void {
     .prepare('SELECT COALESCE(SUM(traffic_gb),0) AS tg, MAX(last_seen_at) AS ls FROM devices WHERE user_id = ?')
     .get(userId) as { tg: number; ls: string | null };
   const retired = (db.prepare('SELECT retired_traffic_gb AS r FROM users WHERE id = ?').get(userId) as { r: number } | undefined)?.r ?? 0;
+  // Трафик прокси-аккаунтов тоже входит в квоту — иначе через прокси (аварийный
+  // доступ) можно было бы качать без учёта, обойдя лимит по гигабайтам.
+  const px = db
+    .prepare('SELECT COALESCE(SUM(received_bytes + sent_bytes),0) AS b, MAX(last_seen_at) AS ls FROM proxy_accounts WHERE user_id = ?')
+    .get(userId) as { b: number; ls: string | null };
+  const lastSeen = [row.ls, px.ls].filter(Boolean).sort().pop() ?? null; // самый свежий из устройств/прокси
   db.prepare('UPDATE users SET traffic_used_gb = @tg, last_activity_at = COALESCE(@ls, last_activity_at) WHERE id = @id').run({
-    tg: (row.tg ?? 0) + retired,
-    ls: row.ls ?? null,
+    tg: (row.tg ?? 0) + retired + (px.b ?? 0) / 1e9,
+    ls: lastSeen,
     id: userId,
   });
 }
@@ -441,8 +493,10 @@ export function renameDevice(id: string, name: string): Device | null {
  *  Через deleteDevice: трафик списывается, расход не «возвращается». Число удалённых. */
 export function cleanupRevokedDevices(graceDays = 3): number {
   const cutoff = new Date(Date.now() - graceDays * 86400000).toISOString();
+  // revoke_pending = 0: удаляем ТОЛЬКО с подтверждённым серверным отзывом — иначе
+  // живой (не отозванный) конфиг осиротел бы на сервере без возможности отзыва.
   const ids = db
-    .prepare('SELECT id FROM devices WHERE is_active = 0 AND revoked_at IS NOT NULL AND revoked_at < ?')
+    .prepare('SELECT id FROM devices WHERE is_active = 0 AND revoke_pending = 0 AND revoked_at IS NOT NULL AND revoked_at < ?')
     .all(cutoff) as Array<{ id: string }>;
   for (const r of ids) deleteDevice(r.id);
   return ids.length;

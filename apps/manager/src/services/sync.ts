@@ -4,7 +4,7 @@
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
 import * as repo from '../repo.js';
-import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshSetXraySni, REALITY_SNI } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshSetXraySni, REALITY_SNI } from './sshServer.js';
 import { getServerKeys } from './keyvault.js';
 
 const PROXY_PROTOS = ['http', 'https', 'socks5'];
@@ -26,6 +26,29 @@ export async function syncAllServers(): Promise<void> {
     } catch (e) {
       repo.addJobError('панель', `Автоочистка отозванных: ${e instanceof Error ? e.message : 'ошибка'}`);
     }
+    // Повтор отложенных отзывов: устройства, чей серверный отзыв не прошёл (сервер был
+    // недоступен при revoke/cleanup/удалении). Пока отзыв не подтверждён — запись не
+    // чистится (revoke_pending=1), а «отключённый» конфиг мог бы жить на сервере. Здесь
+    // добиваем отзыв, как только сервер снова доступен.
+    try {
+      for (const d of repo.listRevokePendingDevices()) {
+        const server = repo.getServer(d.serverId);
+        // Намерение закодировано в pending: 1 → чистить (revoked_at), 2 → приостановка
+        // (подтверждаем отзыв, но запись храним до реактивации).
+        const forCleanup = d.pending === 1;
+        if (!server) { repo.markDeviceRevokeConfirmed(d.id, forCleanup); continue; } // сервера нет — отзывать негде
+        if (!(await sshHasSshAccess(server.id))) continue; // всё ещё недоступен — повторим позже
+        try {
+          if (d.protocol === 'amneziawg' && d.publicKey) await sshRevokeAwg(server, d.publicKey);
+          else if (d.protocol === 'xray' && d.uuid) await sshRevokeXray(server, d.uuid);
+          repo.markDeviceRevokeConfirmed(d.id, forCleanup);
+        } catch {
+          /* сервер снова недоступен — оставим pending до следующего цикла */
+        }
+      }
+    } catch (e) {
+      repo.addJobError('панель', `Повтор отложенных отзывов: ${e instanceof Error ? e.message : 'ошибка'}`);
+    }
     // Автоотключение неактивных устройств (если включено в настройках) — и
     // реальный отзыв на сервере, иначе отключённый конфиг продолжал бы работать.
     try {
@@ -33,12 +56,15 @@ export async function syncAllServers(): Promise<void> {
       if (days > 0) {
         for (const d of repo.disableInactiveDevices(days)) {
           const server = repo.getServer(d.serverId);
+          // Сервер недоступен — оставляем как revoke_pending=1: retry-проход добьёт
+          // отзыв позже, а запись не удалится, пока он не подтверждён.
           if (!server || !(await sshHasSshAccess(server.id))) continue;
           try {
             if (d.protocol === 'amneziawg' && d.publicKey) await sshRevokeAwg(server, d.publicKey);
             else if (d.protocol === 'xray' && d.uuid) await sshRevokeXray(server, d.uuid);
+            repo.markDeviceRevokeConfirmed(d.id, true); // подтверждён → revoked_at, автоочистка через grace
           } catch {
-            /* best-effort: сервер недоступен — отзыв в БД уже сделан */
+            /* сервер недоступен — останется revoke_pending, retry-проход повторит */
           }
         }
       }
@@ -164,6 +190,9 @@ export async function syncAllServers(): Promise<void> {
               rxRaw: raw,
               lastSeenAt: delta > 0 ? now : undefined,
             });
+            // Трафик прокси теперь входит в квоту → пересчитать расход пользователя,
+            // даже если у него не было трафика по устройствам в этом цикле.
+            if (acc.user_id) affected.add(acc.user_id);
           }
         } catch (e) {
           repo.addJobError(s.name, `Синхронизация прокси: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
@@ -193,6 +222,25 @@ export async function syncAllServers(): Promise<void> {
         repo.updateServerFields(s.id, { agent: 'offline', endpoint_ok: 0 });
       }
       for (const uid of affected) repo.recomputeUserUsage(uid);
+    }
+
+    // Квота исчерпана → гасим прокси-логины на серверах: выдача новых уже блокируется
+    // при выпуске, а сохранённые creds иначе работали бы сверх лимита. Деактивируем в БД
+    // ТОЛЬКО после подтверждённого удаления логина на сервере (иначе живой логин осиротеет).
+    try {
+      for (const acc of repo.listProxyAccountsOverQuota()) {
+        const server = repo.getServer(acc.serverId);
+        if (!server) { repo.deactivateProxyAccount(acc.id); continue; } // сервера нет — гасить негде
+        if (!(await sshHasSshAccess(server.id))) continue; // недоступен — повторим в следующем цикле
+        try {
+          await sshRevokeProxyUser(server, acc.login);
+          repo.deactivateProxyAccount(acc.id);
+        } catch {
+          /* сервер недоступен — оставим активным, повторим в следующем цикле */
+        }
+      }
+    } catch (e) {
+      repo.addJobError('панель', `Гашение прокси по квоте: ${e instanceof Error ? e.message : 'ошибка'}`);
     }
   } finally {
     running = false;

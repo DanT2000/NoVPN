@@ -56,7 +56,10 @@ export function Wizard() {
     const protos = (['xray', 'amneziawg'] as Proto[]).filter(
       (p) => (user.allowedProtocols as string[]).includes(p) && (online[0]!.protocols as string[]).includes(p),
     );
-    return protos.length > 1 ? 3 : 4;
+    // Ровно один протокол → сразу результат(4). Ноль (сервер не делит с пользователем
+    // ни одного протокола) → шаг 3 с пустым состоянием, а НЕ мёртвый экран результата
+    // без выбранного протокола. Несколько → шаг 3 (выбор).
+    return protos.length === 1 ? 4 : 3;
   });
   const [issuing, setIssuing] = useState(false);
   const [result, setResult] = useState<IssueDeviceResult | null>(null);
@@ -243,7 +246,7 @@ export function Wizard() {
                 <div className="row-between"><span className="muted">Сервер</span><b>{chosenServer?.name ?? '—'}</b></div>
                 <div className="row-between"><span className="muted">Способ</span><b>{effProto === 'xray' ? 'Xray — общая подписка' : 'AmneziaWG'}</b></div>
               </div>
-              <button className="btn btn-primary btn-lg btn-block" disabled={issuing} onClick={() => void doIssue()}>
+              <button className="btn btn-primary btn-lg btn-block" disabled={issuing || !effProto} onClick={() => void doIssue()}>
                 {issuing ? 'Создаём…' : effProto === 'xray' ? 'Получить подписку' : 'Создать конфигурацию'}
               </button>
             </>

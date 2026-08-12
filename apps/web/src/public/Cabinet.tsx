@@ -39,7 +39,8 @@ export function Cabinet() {
   if (!user || !data) return null;
 
   const devices = data.devices.filter((d) => d.userId === user.id);
-  const active = devices.filter((d) => d.isActive).length;
+  // Лимит устройств — только AmneziaWG. Xray = одна общая подписка, в лимит не входит.
+  const awgActive = devices.filter((d) => d.isActive && d.protocol === 'amneziawg').length;
   // Подписку Xray показываем, только когда в ней реально есть конфиги: иначе новый
   // пользователь добавил бы пустую ссылку и получил бы «нет серверов».
   const hasActiveXray = devices.some((d) => d.isActive && d.protocol === 'xray');
@@ -132,13 +133,13 @@ export function Cabinet() {
           </div>
           <div className="small muted">{user.expiresAt ? `до ${dateShort(user.expiresAt)}` : 'без даты окончания'}</div>
         </Row>
-        <Row label="Устройства">
-          <div style={{ fontWeight: 700 }}>{user.deviceLimit == null ? active : `${active} из ${user.deviceLimit}`}</div>
+        <Row label="Устройства AmneziaWG">
+          <div style={{ fontWeight: 700 }}>{user.deviceLimit == null ? awgActive : `${awgActive} из ${user.deviceLimit}`}</div>
           <div className="small muted">
             {user.deviceLimit == null
               ? 'без ограничений'
-              : user.deviceLimit - active > 0
-                ? `можно ещё ${user.deviceLimit - active}`
+              : user.deviceLimit - awgActive > 0
+                ? `можно ещё ${user.deviceLimit - awgActive}`
                 : 'лимит достигнут'}
           </div>
         </Row>

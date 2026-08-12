@@ -153,11 +153,8 @@ export const mockApi: ApiClient = {
       return { error: { type: 'expired', message: 'Срок действия доступа истёк.' } };
     if (u.trafficLimitGb != null && u.trafficUsedGb >= u.trafficLimitGb)
       return { error: { type: 'traffic', message: 'Лимит трафика исчерпан. Обратитесь к администратору.' } };
-    if (u.deviceLimit != null) {
-      const used = state.devices.filter((d) => d.userId === u.id && d.isActive).length;
-      if (used >= u.deviceLimit)
-        return { error: { type: 'devices', message: 'Лимит устройств по этому коду исчерпан.' } };
-    }
+    // Вход по коду числом устройств не ограничиваем — лимит (только AmneziaWG)
+    // проверяется при выпуске конфига, а не при входе (как в реальном бэкенде).
     mockUserId = u.id;
     return { user: toPublic(u) };
   },

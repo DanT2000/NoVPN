@@ -64,9 +64,10 @@ export function Users() {
   const title = `${total} ${plural(total, 'пользователь', 'пользователя', 'пользователей')}`;
 
   const metricParts = (u: User) => {
-    const active = countActiveDevices(u.id, devices);
+    // Лимит устройств — только AmneziaWG (Xray вне лимита, общая подписка).
+    const awg = countActiveDevices(u.id, devices, 'amneziawg');
     return {
-      dev: `${active}/${u.deviceLimit ?? '∞'}`,
+      dev: `${awg}/${u.deviceLimit ?? '∞'}`,
       traf: `${gb(u.trafficUsedGb)} / ${gb(u.trafficLimitGb)}`,
       exp: u.expiresAt ? dateShort(u.expiresAt) : 'бессрочно',
     };

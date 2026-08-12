@@ -123,19 +123,24 @@ export async function revokeDeviceOnServer(deviceId: string): Promise<boolean> {
 
 /** Отозвать ВСЕ активные конфиги/прокси пользователя на серверах — при отключении,
  *  удалении или истечении доступа. Иначе уже импортированный конфиг продолжал бы
- *  работать на VPN-сервере бессрочно. Best-effort: сбой одного сервера не мешает
- *  остальным; отзыв в БД делает вызывающий отдельно. */
-export async function revokeUserAccessOnServers(userId: string): Promise<void> {
+ *  работать на VPN-сервере бессрочно. Возвращает id устройств, чей серверный отзыв
+ *  ПОДТВЕРЖДЁН (успех, либо отзывать нечего/сервер не управляется). Не попавшие в
+ *  список — «отзыв ожидает» (сервер был недоступен): вызывающий пометит их
+ *  revoke_pending, и sync повторит отзыв, чтобы утёкший конфиг не жил вечно. */
+export async function revokeUserAccessOnServers(userId: string): Promise<{ confirmed: string[] }> {
+  const confirmed: string[] = [];
   for (const d of repo.listDevicesOfUser(userId)) {
     if (!d.isActive) continue;
     const row = repo.getDeviceRow(d.id);
     const server = repo.getServer(d.serverId);
-    if (!row || !server || !(await sshHasSshAccess(server.id))) continue;
+    if (!server) { confirmed.push(d.id); continue; } // сервер не управляется панелью — отзывать негде
+    if (!(await sshHasSshAccess(server.id))) continue; // временно нет доступа — оставим pending
     try {
-      if (row.protocol === 'xray' && row.uuid) await sshRevokeXray(server, row.uuid);
-      else if (row.protocol === 'amneziawg' && row.public_key) await sshRevokeAwg(server, row.public_key);
+      if (row?.protocol === 'xray' && row.uuid) await sshRevokeXray(server, row.uuid);
+      else if (row?.protocol === 'amneziawg' && row.public_key) await sshRevokeAwg(server, row.public_key);
+      confirmed.push(d.id); // отозвали или отзывать было нечего
     } catch {
-      /* best-effort: сервер недоступен — отзыв в БД всё равно состоится */
+      /* сервер недоступен — НЕ подтверждаем: sync повторит отзыв */
     }
   }
   for (const acc of repo.listProxyAccountRowsOfUser(userId)) {
@@ -147,6 +152,7 @@ export async function revokeUserAccessOnServers(userId: string): Promise<void> {
       /* best-effort */
     }
   }
+  return { confirmed };
 }
 
 const rand = (n: number) => crypto.randomBytes(n).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, n);

@@ -273,16 +273,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setPublicData((prev) => (prev ? { ...prev, devices: fn(prev.devices) } : prev));
   }, []);
 
+  // Устройство из результата выпуска НЕ содержит вычисляемый vpnKey (его считает
+  // listDevicesOfUser из conf). Переносим conf/vpnKey из результата в кэш, иначе
+  // после выпуска/перевыпуска кнопка «Открыть в AmneziaVPN» пропадала до перезагрузки.
+  const devFromResult = (res: IssueDeviceResult): Device => ({
+    ...res.device,
+    conf: res.conf ?? res.device.conf,
+    vpnKey: res.vpnKey ?? res.device.vpnKey,
+  });
   const issueDevice: AppContextValue['issueDevice'] = useCallback(
     async (input) => {
       const res = await api.issueDevice(input);
+      const dev = devFromResult(res);
       // Upsert по id: при переиспользовании Xray-конфига сервер возвращает уже
       // существующее устройство (тот же id) — push дал бы дубль в списке.
       patchDevices((list) => {
-        const i = list.findIndex((d) => d.id === res.device.id);
-        if (i === -1) return [...list, res.device];
+        const i = list.findIndex((d) => d.id === dev.id);
+        if (i === -1) return [...list, dev];
         const next = [...list];
-        next[i] = res.device;
+        next[i] = dev;
         return next;
       });
       return res;
@@ -292,7 +301,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const reissueDevice = useCallback(
     async (deviceId: string) => {
       const res = await api.reissueDevice(deviceId);
-      patchDevices((list) => list.map((x) => (x.id === deviceId ? res.device : x)));
+      patchDevices((list) => list.map((x) => (x.id === deviceId ? devFromResult(res) : x)));
       return res;
     },
     [patchDevices],

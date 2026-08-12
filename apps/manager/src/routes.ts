@@ -183,7 +183,12 @@ router.post('/api/public/check-code', (req, res) => {
     return res.json(err('disabled', 'Вход по коду больше не работает. Откройте личную ссылку, которую вам отправил администратор.'));
   }
   const bad = accessError(u);
-  if (bad) return res.json(err(bad.type, bad.message));
+  // Отказ доступа по ВАЛИДНОМУ коду тоже расходует бюджет перебора: иначе такой
+  // ответ был бы «бесплатным» зондом, отличающим существующий код от несуществующего.
+  if (bad) {
+    guard.noteFailure(ip);
+    return res.json(err(bad.type, bad.message));
+  }
   // Вход по коду числом устройств НЕ ограничиваем: лимит относится к выпуску
   // AmneziaWG-устройств и проверяется при выдаче, а не при входе.
 
@@ -221,7 +226,9 @@ router.post('/api/public/devices', requireUserOrAdmin, async (req, res) => {
     const targetId = req.session.admin && req.body?.userId ? String(req.body.userId) : String(req.session.userId);
     const u = repo.getUser(targetId);
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
-    if (!u.isActive) return res.status(403).json(err('disabled', 'Доступ отключён.'));
+    // Статус/срок/квоту проверяет issueForUser, где админ (byAdmin) не ограничен —
+    // чтобы предвыпустить конфиг приостановленному. Здесь блокируем только неадмина.
+    if (!u.isActive && !req.session.admin) return res.status(403).json(err('disabled', 'Доступ отключён.'));
     if (protocol !== 'xray' && protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Неизвестный протокол.'));
     // Лимит устройств (только AmneziaWG) и все проверки — внутри issueForUser,
     // единый источник правды. Дублирующая пред-проверка убрана, чтобы не расходиться.
@@ -241,6 +248,15 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
     if (d.protocol !== 'xray' && d.protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Протокол не поддерживается.'));
     const server = repo.getServer(d.serverId)!;
+    // Лимит устройств (только AmneziaWG): перевыпуск НЕАКТИВНОГО AWG-устройства = его
+    // повторная активация, поэтому подчиняется тому же лимиту, что и новый выпуск.
+    // Иначе можно было бы обойти лимит, реактивируя отключённые устройства. Админ — без лимита.
+    if (
+      !req.session.admin && !d.isActive && d.protocol === 'amneziawg' &&
+      u.deviceLimit != null && repo.countActiveDevices(u.id, 'amneziawg') >= u.deviceLimit
+    ) {
+      return res.status(403).json(err('devices', `Достигнут лимит устройств AmneziaWG (${u.deviceLimit}). Отключите другое устройство.`));
+    }
 
     // СНАЧАЛА отзываем старый доступ на сервере. Иначе перевыпуск лишь забывает
     // старый ключ в панели, а на сервере он продолжает работать — навсегда и уже
@@ -255,12 +271,12 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
     let out: IssueDeviceResult;
     if (d.protocol === 'xray') {
       const r = await createXrayCfg(server, d.name);
-      const device = repo.updateDeviceFields(d.id, { is_active: 1, revoked_at: null, uuid: r.uuid, public_key: r.publicKey, link: r.link, conf: null })!;
+      const device = repo.updateDeviceFields(d.id, { is_active: 1, revoked_at: null, revoke_pending: 0, uuid: r.uuid, public_key: r.publicKey, link: r.link, conf: null })!;
       out = { device, link: r.link };
     } else {
       const r = await createAwgCfg(server, d.name);
       const device = repo.updateDeviceFields(d.id, {
-        is_active: 1, revoked_at: null, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
+        is_active: 1, revoked_at: null, revoke_pending: 0, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
         preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: r.conf, link: null,
       })!;
       const vk = vpnLinkFromConf(r.conf, `${config.appName} — ${server.name}`);
@@ -277,24 +293,31 @@ router.post('/api/public/devices/:id/revoke', requireUserOrAdmin, async (req, re
   const d = repo.getDevice(req.params.id!);
   if (!d) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
   if (!ownsDevice(req, d)) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
-  // Реальный отзыв на сервере (если сервер управляется по SSH).
-  try {
-    const row = repo.getDeviceRow(d.id);
-    const server = repo.getServer(d.serverId);
-    if (row && server && (await sshHasSshAccess(server.id))) {
-      if (row.protocol === 'xray' && row.uuid) await sshRevokeXray(server, row.uuid);
-      else if (row.protocol === 'amneziawg' && row.public_key) await sshRevokeAwg(server, row.public_key);
-    }
-  } catch {
-    /* даже если на сервере не удалось — помечаем отозванным в панели */
-  }
-  repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: repo.nowIso() });
-  res.json({ ok: true });
+  // Реальный отзыв на сервере. Подтверждён → ставим revoked_at (запись очистится
+  // автоматически через grace). Сервер недоступен → revoke_pending: доступ снят в
+  // панели, но запись НЕ удаляем и sync повторит отзыв (иначе конфиг осиротел бы живым).
+  const revoked = await revokeDeviceOnServer(d.id);
+  repo.updateDeviceFields(
+    d.id,
+    revoked ? { is_active: 0, revoked_at: repo.nowIso(), revoke_pending: 0 } : { is_active: 0, revoked_at: null, revoke_pending: 1 },
+  );
+  res.json({ ok: true, pending: !revoked });
 });
 
-router.delete('/api/public/devices/:id', requireUserOrAdmin, (req, res) => {
+router.delete('/api/public/devices/:id', requireUserOrAdmin, async (req, res) => {
   const d = repo.getDevice(req.params.id!);
   if (!d || !ownsDevice(req, d)) return res.status(404).json(err('not_found', 'Устройство не найдено.'));
+  // Удалять запись безопасно ТОЛЬКО когда серверный отзыв подтверждён. Если конфиг
+  // ещё активен или отзыв «висит» (revoke_pending), сначала отзываем; не удалось —
+  // сохраняем запись как pending (sync повторит), иначе живой ключ осиротеет навсегда.
+  const row = repo.getDeviceRow(d.id);
+  if (d.isActive || row?.revoke_pending) {
+    const revoked = await revokeDeviceOnServer(d.id);
+    if (!revoked) {
+      repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: null, revoke_pending: 1 });
+      return res.json({ ok: false, pending: true, message: 'Сервер недоступен — запись сохранена, отзыв повторится автоматически.' });
+    }
+  }
   repo.deleteDevice(req.params.id!);
   res.json({ ok: true });
 });
@@ -326,8 +349,9 @@ router.post('/api/public/devices/cleanup', requireUserOrAdmin, async (req, res) 
       const revoked = await revokeDeviceOnServer(d.id);
       if (!revoked) {
         // Сервер недоступен — не удаляем физически (иначе конфиг осиротеет и будет
-        // жить на сервере). Помечаем отозванным: доступ снят в панели, отзыв повторится.
-        repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: repo.nowIso() });
+        // жить на сервере). revoke_pending: доступ снят в панели, sync повторит отзыв;
+        // revoked_at НЕ ставим, чтобы автоочистка не удалила запись до подтверждения.
+        repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: null, revoke_pending: 1 });
         kept += 1;
         continue;
       }
@@ -346,7 +370,8 @@ router.post('/api/public/proxy', requireUserOrAdmin, async (req, res) => {
     const targetId = req.session.admin && req.body?.userId ? String(req.body.userId) : String(req.session.userId);
     const u = repo.getUser(targetId);
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
-    if (!u.isActive) return res.status(403).json(err('disabled', 'Доступ отключён.'));
+    // issueProxyForUser проверяет статус/срок/квоту; админ (byAdmin) не ограничен.
+    if (!u.isActive && !req.session.admin) return res.status(403).json(err('disabled', 'Доступ отключён.'));
     const acc = await issueProxyForUser(u, String(serverId), { byAdmin: !!req.session.admin });
     res.json(acc);
   } catch (e) {
@@ -487,9 +512,13 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.allowedServers !== undefined) fields.allowed_servers = JSON.stringify(b.allowedServers);
   if (b.defaultServerId !== undefined) fields.default_server_id = b.defaultServerId;
   if (b.allowedProtocols !== undefined)
-    fields.allowed_protocols = JSON.stringify((b.allowedProtocols as string[]).filter((p) => p === 'xray' || p === 'amneziawg'));
+    fields.allowed_protocols = JSON.stringify(
+      (Array.isArray(b.allowedProtocols) ? (b.allowedProtocols as string[]) : []).filter((p) => p === 'xray' || p === 'amneziawg'),
+    );
   if (b.allowedProxies !== undefined)
-    fields.allowed_proxies = JSON.stringify((b.allowedProxies as string[]).filter((p) => p === 'http' || p === 'https' || p === 'socks5'));
+    fields.allowed_proxies = JSON.stringify(
+      (Array.isArray(b.allowedProxies) ? (b.allowedProxies as string[]) : []).filter((p) => p === 'http' || p === 'https' || p === 'socks5'),
+    );
   res.json(repo.updateUserFields(u.id, fields));
 });
 
@@ -507,7 +536,10 @@ router.post('/api/admin/users/:id/reissue-link', requireAdmin, (req, res) => {
 router.post('/api/admin/users/:id/extend', requireAdmin, (req, res) => {
   const u = repo.getUser(req.params.id!);
   if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
-  const days = Number(req.body?.days ?? 0);
+  // Ограничиваем days разумным диапазоном: без этого огромное/NaN значение давало
+  // RangeError (Invalid time value) → 500. ±100 лет более чем достаточно.
+  const raw = Number(req.body?.days ?? 0);
+  const days = Number.isFinite(raw) ? Math.max(-36500, Math.min(36500, Math.trunc(raw))) : 0;
   const base = u.expiresAt && new Date(u.expiresAt) > new Date() ? new Date(u.expiresAt) : new Date();
   const expiresAt = new Date(base.getTime() + days * 86400000).toISOString();
   const updated = repo.updateUserFields(u.id, { expires_at: expiresAt });
@@ -523,12 +555,13 @@ router.post('/api/admin/users/:id/active', requireAdmin, async (req, res) => {
   if (!active) {
     // Сначала реально отзываем конфиги на VPN-серверах, затем помечаем в БД —
     // иначе отключённый пользователь продолжал бы пользоваться VPN.
-    await revokeUserAccessOnServers(u.id);
-    // ВАЖНО: приостановка — временная. Ставим только is_active=0 и НЕ ставим
-    // revoked_at, иначе автоочистка удалила бы записи через 3 дня, и после
-    // реактивации (напр. после оплаты) пользователь потерял бы все конфиги.
+    const { confirmed } = await revokeUserAccessOnServers(u.id);
+    const ok = new Set(confirmed);
+    // Приостановка — временная: revoked_at НЕ ставим (конфиги переживут паузу до
+    // реактивации). Если серверный отзыв не подтвердился (сервер был недоступен) —
+    // revoke_pending=2 (приостановка): sync повторит отзыв, но запись сохранит.
     for (const d of repo.listDevices().filter((x) => x.userId === u.id && x.isActive))
-      repo.updateDeviceFields(d.id, { is_active: 0 });
+      repo.updateDeviceFields(d.id, { is_active: 0, revoke_pending: ok.has(d.id) ? 0 : 2 });
     repo.deactivateUserProxyAccounts(u.id);
   }
   res.json(repo.getUser(u.id));
@@ -554,8 +587,11 @@ router.post('/api/admin/users/:id/code', requireAdmin, (req, res) => {
 
 router.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   const u = repo.getUser(req.params.id!);
-  if (u) await revokeUserAccessOnServers(u.id); // сначала снять доступ на серверах
-  repo.softDeleteUser(req.params.id!);
+  const confirmed = u ? (await revokeUserAccessOnServers(u.id)).confirmed : []; // сначала снять доступ на серверах
+  repo.softDeleteUser(req.params.id!); // база: is_active=0, revoke_pending=1 (revoked_at пуст)
+  // Только подтверждённым отзывам ставим revoked_at (таймер автоочистки). Остальные
+  // остаются pending — sync повторит отзыв и подтвердит, прежде чем запись удалится.
+  for (const id of confirmed) repo.markDeviceRevokeConfirmed(id, true);
   res.json({ ok: true });
 });
 

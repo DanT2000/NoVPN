@@ -67,6 +67,23 @@ function runScript(
 const san = (n: string) => (n.replace(/[^\w .-]/g, '').trim().slice(0, 40) || 'device');
 const grab = (out: string, k: string) => out.match(new RegExp('^' + k + '=(.+)$', 'm'))?.[1]?.trim();
 
+// Защита от инъекции в удалённые shell/python-скрипты. Для штатно выпущенных
+// конфигов значения генерирует сам сервер (uuid из /proc/…/random/uuid, ключи awg),
+// но uuid/public_key/ip могут прийти и из ИМПОРТА чужой БД или от админа. Пропускаем
+// в скрипт ТОЛЬКО строго ожидаемый алфавит; иначе — отказ (или пропуск в bulk-resync).
+const isUuid = (v: string | null | undefined): v is string => !!v && /^[0-9a-fA-F-]{8,64}$/.test(v);
+const isWgKey = (v: string | null | undefined): v is string => !!v && /^[A-Za-z0-9+/=]{40,50}$/.test(v);
+const isIpv4 = (v: string | null | undefined): v is string =>
+  !!v && /^(\d{1,3}\.){3}\d{1,3}$/.test(v) && v.split('.').every((o) => Number(o) <= 255);
+function assertUuid(v: string): string {
+  if (!isUuid(v)) throw new Error('Некорректный идентификатор клиента (uuid).');
+  return v;
+}
+function assertWgKey(v: string): string {
+  if (!isWgKey(v)) throw new Error('Некорректный публичный ключ.');
+  return v;
+}
+
 // Последовательный доступ к серверу: правки server.json/awg0.conf нельзя делать
 // параллельно (иначе гонка → битый конфиг → xray -test падает, exit 23).
 const serverLocks = new Map<string, Promise<unknown>>();
@@ -288,8 +305,12 @@ export async function sshResyncDevices(
   server: Server,
   items: Array<{ name: string; protocol: string; uuid?: string | null; awgPub?: string | null; clientIp?: string | null; psk?: string | null }>,
 ): Promise<void> {
-  const xray = items.filter((i) => i.protocol === 'xray' && i.uuid).map((i) => ({ id: i.uuid!, name: san(i.name) }));
-  const awg = items.filter((i) => i.protocol === 'amneziawg' && i.awgPub && i.clientIp);
+  // Только валидные идентификаторы попадают в удалённый скрипт (см. isUuid/isWgKey/isIpv4):
+  // битые/чужие значения из импорта пропускаем, чтобы они не инъектировались в shell/python.
+  const xray = items.filter((i) => i.protocol === 'xray' && isUuid(i.uuid)).map((i) => ({ id: i.uuid!, name: san(i.name) }));
+  const awg = items.filter(
+    (i) => i.protocol === 'amneziawg' && isWgKey(i.awgPub) && isIpv4((i.clientIp || '').split('/')[0]),
+  );
   const lines: string[] = ['set +e'];
   if (xray.length) {
     // UUID/имя пишем во временный файл (без встраивания JSON в python -c — иначе
@@ -517,6 +538,9 @@ export async function sshInstallProxies(
   opts: { http?: boolean; https?: boolean; socks?: boolean },
 ): Promise<{ user: string; pass: string; httpPort: number | null; httpsPort: number | null; socksPort: number | null; httpsHost: string | null }> {
   const domain = server.host;
+  // host задаёт админ — прежде чем подставлять в install-скрипт (DOMAIN=…, certbot -d),
+  // проверяем, что это валидный хост (буквы/цифры/дефис/точки), а не shell-инъекция.
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(domain)) throw new Error('Некорректный хост сервера.');
   const wantHttps = !!opts.https;
   // HTTP-прокси нужен и сам по себе, и как бэкенд для HTTPS(stunnel).
   const wantHttp = !!opts.http || wantHttps;
@@ -707,6 +731,7 @@ export async function sshPing(serverId: string): Promise<void> {
 }
 
 export async function sshRevokeXray(server: Server, uuid: string): Promise<void> {
+  assertUuid(uuid); // защита от инъекции в python -c (значение может быть из импорта)
   const script = `set -e
 python3 -c "import json;p='/opt/amnezia/xray/server.json';c=json.load(open(p));c['inbounds'][0]['settings']['clients']=[x for x in c['inbounds'][0]['settings']['clients'] if x.get('id')!='${uuid}'];json.dump(c,open(p,'w'),indent=2)"
 docker restart amnezia-xray >/dev/null
@@ -715,6 +740,7 @@ echo OK`;
 }
 
 export async function sshRevokeAwg(server: Server, publicKey: string): Promise<void> {
+  assertWgKey(publicKey); // защита от инъекции в awg set / python (значение может быть из импорта)
   const script = `set -e
 awg set awg0 peer "${publicKey}" remove || true
 PUB="${publicKey}" python3 -c "import os,re;p='/etc/amnezia/amneziawg/awg0.conf';t=open(p).read();pub=re.escape(os.environ['PUB']);t=re.sub(r'\\n\\[Peer\\][^\\[]*?PublicKey = '+pub+r'[^\\[]*','\\n',t);open(p,'w').write(t)"

@@ -20,8 +20,11 @@ const C = {
   blue: { fg: 'var(--blue-fg)', bg: 'var(--blue-bg)', dot: 'var(--blue-fg)' },
 } as const;
 
-export function countActiveDevices(userId: string, devices: Device[]): number {
-  return devices.filter((d) => d.userId === userId && d.isActive).length;
+/** Число активных устройств. С `protocol` — только этого протокола: лимит
+ *  устройств относится ТОЛЬКО к AmneziaWG (у каждого свои ключи = устройство),
+ *  а Xray — одна общая подписка на любое их число и в лимит не входит. */
+export function countActiveDevices(userId: string, devices: Device[], protocol?: Device['protocol']): number {
+  return devices.filter((d) => d.userId === userId && d.isActive && (protocol == null || d.protocol === protocol)).length;
 }
 
 type UserStatusInput = Pick<User, 'isActive' | 'expiresAt' | 'trafficLimitGb' | 'trafficUsedGb'>;

@@ -19,18 +19,24 @@ export function createApp() {
   // прокси перед нами (openresty + traefik = 2): Express возьмёт адрес, который
   // подставил наш прокси, а не тот, что придумал клиент.
   app.set('trust proxy', config.trustProxyHops);
-  // Сохраняем «сырое» тело для проверки подписи агента. Лимит 32mb: покрывает
-  // загрузку файлов приложений (base64, до 20 МБ файл ≈ 27 МБ тела) и
-  // восстановление бэкапа (base64 базы). Панель за requireAdmin; неаутен-
-  // тифицированные маршруты (вход/код) дополнительно под rate-limit.
+  // Разбор JSON-тела ограничиваем ПО МАРШРУТАМ, а не общим 32mb: иначе любой
+  // неаутентифицированный запрос (вход/код/подписка) мог бы прислать 32 МБ, а verify
+  // ещё и копировал бы всё тело в строку на КАЖДЫЙ запрос (DoS по памяти).
+  // 1) Агент: нужен rawBody для проверки подписи; тело маленькое.
   app.use(
+    '/api/agent',
     express.json({
-      limit: '32mb',
+      limit: '1mb',
       verify: (req, _res, buf) => {
         (req as express.Request & { rawBody?: string }).rawBody = buf.toString('utf8');
       },
     }),
   );
+  // 2) Крупные АДМИНСКИЕ тела: загрузка файлов приложений (base64 ≈ 27 МБ) и
+  //    восстановление бэкапа (base64 базы). Только за requireAdmin.
+  app.use(['/api/admin/apps', '/api/admin/backup'], express.json({ limit: '48mb' }));
+  // 3) Всё остальное (включая неаутентифицированные маршруты) — компактный лимит.
+  app.use(express.json({ limit: '1mb' }));
 
   app.use(
     session({
@@ -42,7 +48,10 @@ export function createApp() {
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
-        secure: config.cookieSecure,
+        // 'auto': за edge-прокси (trust proxy настроен) cookie получает флаг Secure,
+        // когда соединение https — не уходит в открытом виде. COOKIE_SECURE=true
+        // форсирует Secure всегда. 'auto' не ломает вход, если прокси не шлёт proto.
+        secure: config.cookieSecure || 'auto',
         maxAge: config.sessionTtlHours * 3600 * 1000,
       },
     }),

@@ -490,8 +490,16 @@ async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> 
   // (подписка одна на все устройства) лимитом не считается, а раньше эта пред-проверка
   // ложно блокировала выдачу «своего же» конфига пользователю на лимите. Единый
   // источник правды — issueForUser; для AWG он корректно откажет с понятным текстом.
-  const protos = user.allowedProtocols.filter((p) => p === 'xray' || p === 'amneziawg') as Array<'xray' | 'amneziawg'>;
-  if (protos.length === 0) return void send(chatId, 'Для вашего доступа не выбран протокол. Обратитесь к администратору.');
+  // Сервер, на котором реально выпустим (тот же, что и в issueAndSend).
+  const serverId = user.defaultServerId || user.allowedServers[0];
+  const server = serverId ? repo.getServer(serverId) : null;
+  if (!server) return void send(chatId, 'Для вашего доступа не назначен сервер. Обратитесь к администратору.');
+  // Предлагаем ТОЛЬКО протоколы, установленные на этом сервере (как в веб-визарде) —
+  // иначе выбор гарантированно упирался бы в «сервер не поддерживает протокол».
+  const protos = (user.allowedProtocols.filter((p) => p === 'xray' || p === 'amneziawg') as Array<'xray' | 'amneziawg'>).filter((p) =>
+    server.protocols.includes(p),
+  );
+  if (protos.length === 0) return void send(chatId, 'На вашем сервере нет доступных вам протоколов. Обратитесь к администратору.');
   if (protos.length === 1) return issueAndSend(chatId, user, protos[0]!);
   const kb: Kb = protos.map((p) => [{ text: PROTO_LABEL[p]!, callback_data: `proto:${p}` }]);
   await send(chatId, 'Какой протокол выпустить?', { kb });
