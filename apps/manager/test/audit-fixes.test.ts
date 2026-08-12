@@ -112,6 +112,26 @@ test('cleanupRevokedDevices: удаляет старое отозванное, �
   assert.ok(repo.getDevice(freshDev.id)); // свежее в grace — осталось
 });
 
+test('subscriptionXrayLinks: один конфиг на сервер (дедуп дублей)', () => {
+  const s1 = repo.insertServer({ name: 'S1', country: null, host: 'h1', protocols: ['xray'], endpointOk: true });
+  const s2 = repo.insertServer({ name: 'S2', country: null, host: 'h2', protocols: ['xray'], endpointOk: true });
+  const u = mkUser({ allowed_servers: JSON.stringify([s1.id, s2.id]) });
+  // 3 активных Xray-дубля на s1 + 1 на s2 + один отозванный на s1
+  const d1 = repo.insertDevice({ userId: u.id, name: 'a', serverId: s1.id, protocol: 'xray', uuid: 'x1', link: 'vless://x1@h1' });
+  const d2 = repo.insertDevice({ userId: u.id, name: 'b', serverId: s1.id, protocol: 'xray', uuid: 'x2', link: 'vless://x2@h1' });
+  const d3 = repo.insertDevice({ userId: u.id, name: 'c', serverId: s1.id, protocol: 'xray', uuid: 'x3', link: 'vless://x3@h1' });
+  repo.insertDevice({ userId: u.id, name: 'd', serverId: s2.id, protocol: 'xray', uuid: 'x4', link: 'vless://x4@h2' });
+  const revoked = repo.insertDevice({ userId: u.id, name: 'e', serverId: s1.id, protocol: 'xray', uuid: 'x5', link: 'vless://x5@h1' });
+  repo.updateDeviceFields(revoked.id, { is_active: 0, revoked_at: repo.nowIso() });
+  const links = repo.subscriptionXrayLinks(u.id);
+  // ровно 2: по одному на s1 и s2; отозванный не попал
+  assert.equal(links.length, 2);
+  assert.ok(links.some((l) => l.endsWith('@h2'))); // s2 представлен
+  assert.equal(links.filter((l) => l.endsWith('@h1')).length, 1); // с s1 ровно один
+  // дубли d1/d2/d3 существуют, но в подписке — один из них
+  assert.ok([d1, d2, d3].some((d) => links.includes(d.link!)));
+});
+
 test('issueForUser: лимит устройств блокирует выпуск (путь бота в обход UI)', async () => {
   const server = repo.insertServer({ name: 'S', country: null, host: 'h', protocols: ['amneziawg'], endpointOk: true });
   repo.updateServerFields(server.id, { auto_issue: 1 });

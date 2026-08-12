@@ -72,12 +72,8 @@ router.get('/sub/:token', (req, res) => {
   // ниже и перестанет подключаться). Раньше подписка продолжала слать конфиги
   // даже при превышении лимита трафика.
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
-  const links = overQuota
-    ? []
-    : repo
-        .listDevicesOfUser(u.id)
-        .filter((d) => d.isActive && d.protocol === 'xray' && d.link)
-        .map((d) => d.link!);
+  // Одна подписка = ОДИН Xray-конфиг на сервер (дедуп на чтении — см. repo).
+  const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
 
   // Один адрес — два ответа. Браузер просит text/html: показываем страницу с
   // приложениями и инструкцией. VPN-приложение просит что угодно другое:

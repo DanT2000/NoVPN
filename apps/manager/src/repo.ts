@@ -727,6 +727,23 @@ export function listDevicesOfUser(userId: string): Device[] {
     .map((d) => (d.protocol === 'amneziawg' && d.conf ? { ...d, vpnKey: vpnLinkFromConf(d.conf, d.name) } : d));
 }
 
+/** Ссылки для Xray-подписки: ОДИН активный конфиг на каждый сервер. У части
+ *  пользователей до внедрения дедупа накопились дубли (по конфигу на каждое
+ *  устройство одного сервера) — подписка отдавала их все, приложение показывало
+ *  «кучу разных девайсов» и могло цепляться за устаревший. Оставляем по одному
+ *  самому свежему на сервер (список отсортирован created_at DESC). */
+export function subscriptionXrayLinks(userId: string): string[] {
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const d of listDevicesOfUser(userId)) {
+    if (!d.isActive || d.protocol !== 'xray' || !d.link) continue;
+    if (seen.has(d.serverId)) continue;
+    seen.add(d.serverId);
+    links.push(d.link);
+  }
+  return links;
+}
+
 /** Данные публичной части. Без userId — только справочники (серверы, приложения):
  *  ни кодов, ни конфигов, ни чужих устройств. */
 /** Публичный адрес подписки Xray для пользователя. */
