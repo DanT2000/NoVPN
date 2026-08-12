@@ -23,13 +23,19 @@ COPY packages/shared/package.json packages/shared/
 COPY apps/web/package.json apps/web/
 COPY apps/manager/package.json apps/manager/
 COPY apps/agent/package.json apps/agent/
+# Зеркало npm (registry.npmmirror.com, Alibaba — НЕ Cloudflare). На build-хосте
+# 107_AppsServer исходящий HTTPS к сервисам за Cloudflare перехватывается (на HTTPS
+# приходит HTTP), а registry.npmjs.org фронтится Cloudflare — npm не мог докачать
+# пакеты и падал «Exit handler never called!». Зеркало отдаёт те же пакеты в обход.
+# Переписываем и resolved-URL в lock (иначе тарболы всё равно тянулись бы с npmjs.org).
+# --no-audit/--no-fund — не ходить в Cloudflare-эндпоинты аудита. Откат — build-arg NPM_REGISTRY.
+ENV npm_config_registry=https://registry.npmmirror.com \
+    npm_config_audit=false \
+    npm_config_fund=false
+RUN sed -i 's#registry\.npmjs\.org#registry.npmmirror.com#g' package-lock.json 2>/dev/null || true
 # --include=dev обязателен: Coolify задаёт NODE_ENV=production, иначе devDeps
 # (typescript, vite) не установятся и сборка упадёт с «tsc: not found».
-# Флаги снижают пик памяти: build-хост 107_AppsServer — 2 ГБ RAM с почти полным
-# свопом, и обычный npm install падал OOM («Exit handler never called!»).
-# jobs=1 — последовательная сборка нативных модулей; без audit/fund; меньше сокетов.
-ENV npm_config_jobs=1 npm_config_audit=false npm_config_fund=false
-RUN npm install --include=dev --no-audit --no-fund --maxsockets=4
+RUN npm install --include=dev --no-audit --no-fund
 
 # исходники и сборка: shared → web → manager
 COPY packages/shared packages/shared
