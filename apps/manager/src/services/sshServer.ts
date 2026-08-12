@@ -413,9 +413,11 @@ echo "UUID=$UUID"`;
 
 /** Сменить reality-SNI на сервере БЕЗ переустановки: правим serverNames+dest в
  *  server.json и перезапускаем Xray. Ключи (privateKey/shortIds) не трогаем — уже
- *  выданные UUID остаются валидными, меняется только маскировка. Клиентские ссылки
- *  обновляет отдельная миграция БД. */
-export async function sshSetXraySni(server: Server, sni: string = REALITY_SNI): Promise<void> {
+ *  выданные UUID остаются валидными, меняется только маскировка. Идемпотентно:
+ *  если сервер уже на нужном SNI — НЕ перезаписываем и НЕ рестартуем (безопасно
+ *  звать из авто-сверки). Пишем во временный файл, тестируем и только потом
+ *  подменяем боевой конфиг. Возвращает true, если реально применили изменение. */
+export async function sshSetXraySni(server: Server, sni: string = REALITY_SNI): Promise<boolean> {
   const out = await withServerLock(server.id, () => {
     const script = `set -e
 for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
@@ -425,16 +427,26 @@ sni=sys.argv[1]
 p='/opt/amnezia/xray/server.json'
 c=json.load(open(p))
 rs=c['inbounds'][0]['streamSettings']['realitySettings']
+if rs.get('serverNames')==[sni] and rs.get('dest')==sni+':443':
+    print('ALREADY'); sys.exit(0)
 rs['serverNames']=[sni]
 rs['dest']=sni+':443'
-json.dump(c,open(p,'w'),indent=2)
+json.dump(c,open(p+'.tmp','w'),indent=2)
+print('WRITTEN')
 PY
-docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null
-docker restart amnezia-xray >/dev/null
-echo SNI_SET`;
+if [ -f /opt/amnezia/xray/server.json.tmp ]; then
+  docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json.tmp >/dev/null
+  mv /opt/amnezia/xray/server.json.tmp /opt/amnezia/xray/server.json
+  docker restart amnezia-xray >/dev/null
+  echo SNI_SET
+else
+  echo SNI_ALREADY
+fi`;
     return runScript(creds(server.id), script, 120000);
   });
-  if (!/SNI_SET/.test(out)) throw new Error('Не удалось сменить SNI на сервере: ' + out.slice(-200));
+  if (/SNI_SET/.test(out)) return true;
+  if (/SNI_ALREADY/.test(out)) return false;
+  throw new Error('Не удалось сменить SNI на сервере: ' + out.slice(-200));
 }
 
 export async function sshCreateAwg(

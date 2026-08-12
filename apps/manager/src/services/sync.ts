@@ -4,11 +4,15 @@
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
 import * as repo from '../repo.js';
-import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshSetXraySni, REALITY_SNI } from './sshServer.js';
+import { getServerKeys } from './keyvault.js';
 
 const PROXY_PROTOS = ['http', 'https', 'socks5'];
 
 let running = false;
+// Сервера, у которых reality-SNI уже сверен с сохранённым в этом процессе — чтобы
+// не дёргать SSH каждый цикл. sshSetXraySni идемпотентна (без рестарта, если совпало).
+const sniReconciled = new Set<string>();
 
 export async function syncAllServers(): Promise<void> {
   if (running) return;
@@ -47,6 +51,21 @@ export async function syncAllServers(): Promise<void> {
       const hasAwg = s.protocols.includes('amneziawg');
       const hasXray = s.protocols.includes('xray');
       const hasProxy = (s.protocols as string[]).some((p) => PROXY_PROTOS.includes(p));
+
+      // Авто-сверка reality-SNI: если сохранённый SNI сервера = наш дефолт
+      // (миграция уже перевела на cdn.dodostatic.net), но server.json на сервере
+      // ещё не приведён — применяем один раз за процесс. Закрывает разрыв
+      // «ссылки обновлены, а сервер нет» без ручного действия и без UI.
+      if (hasXray && !sniReconciled.has(s.id)) {
+        try {
+          if (getServerKeys(s.host)?.xraySni === REALITY_SNI) {
+            await sshSetXraySni(s);
+          }
+          sniReconciled.add(s.id);
+        } catch (e) {
+          repo.addJobError(s.name, `Сверка reality-SNI: ${e instanceof Error ? e.message : 'ошибка'}`);
+        }
+      }
       const devices = repo.listServerDeviceKeys(s.id);
       const affected = new Set<string>();
       let serverBytes = 0;
