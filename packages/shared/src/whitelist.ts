@@ -72,9 +72,14 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
   outbounds.push({ protocol: 'freedom', tag: 'direct' });
   outbounds.push({ protocol: 'blackhole', tag: 'block' });
 
+  // sniffing КРИТИЧЕН для обхода: без него правила domain: не срабатывают для HTTPS
+  // (в TUN-режиме роутер видит только IP, а не домен → росс. сайты уходят через VPN
+  // вместо direct). destOverride tls/http/quic извлекает домен из хендшейка;
+  // routeOnly:true — используем его ТОЛЬКО для маршрутизации, соединяемся с оригиналом.
+  const sniffing = { enabled: true, destOverride: ['http', 'tls', 'quic'], routeOnly: true };
   const inbounds: Array<Record<string, unknown>> = [
-    { tag: 'socks', listen: '127.0.0.1', port: 10808, protocol: 'socks', settings: { auth: 'noauth', udp: true } },
-    { tag: 'http', listen: '127.0.0.1', port: 10809, protocol: 'http' },
+    { tag: 'socks', listen: '127.0.0.1', port: 10808, protocol: 'socks', settings: { auth: 'noauth', udp: true }, sniffing },
+    { tag: 'http', listen: '127.0.0.1', port: 10809, protocol: 'http', settings: { allowTransparent: false }, sniffing },
   ];
   const whitelistRules = [
     // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
@@ -94,7 +99,7 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
       log: { loglevel: 'warning' },
       inbounds,
       outbounds,
-      routing: { domainStrategy: 'AsIs', rules },
+      routing: { domainMatcher: 'hybrid', domainStrategy: 'AsIs', rules },
     };
     if (tier0.length > 1) {
       // Несколько Xray-серверов (без прокси) — балансируем по ним (leastPing), иначе
@@ -141,7 +146,7 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
     inbounds,
     outbounds,
     observatory: { subjectSelector: ['proxy-t'], probeUrl: 'https://www.cloudflare.com/cdn-cgi/trace', probeInterval: '30s', enableConcurrency: true },
-    routing: { domainStrategy: 'AsIs', rules, balancers },
+    routing: { domainMatcher: 'hybrid', domainStrategy: 'AsIs', rules, balancers },
   };
   return JSON.stringify(cfg, null, 2);
 }

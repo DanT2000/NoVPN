@@ -23,6 +23,14 @@ test('buildWhitelistXrayConfig: reality-outbound + маршрутизация (�
   const directRule = cfg.routing.rules.find((r: any) => r.domain && r.outboundTag === 'direct');
   assert.ok(directRule && directRule.domain.includes('domain:gosuslugi.ru'));
   assert.equal(directRule.domain.length, RU_WHITELIST_ROUTES.length);
+  // sniffing на инбаундах — иначе правила domain: не сработают для HTTPS (TUN).
+  const socksIn = cfg.inbounds.find((i: any) => i.tag === 'socks');
+  const httpIn = cfg.inbounds.find((i: any) => i.tag === 'http');
+  assert.equal(socksIn.sniffing.enabled, true);
+  assert.ok(socksIn.sniffing.destOverride.includes('tls'));
+  assert.equal(socksIn.sniffing.routeOnly, true);
+  assert.equal(httpIn.sniffing.enabled, true);
+  assert.equal(cfg.routing.domainMatcher, 'hybrid');
   // один тир → без балансировщиков, дефолт напрямую на proxy-t0-0
   assert.ok(!cfg.balancers && !cfg.observatory);
   const last = cfg.routing.rules[cfg.routing.rules.length - 1];
