@@ -30,8 +30,19 @@ export const RU_WHITELIST_ROUTES: string[] = [
   'domain:ok.ru', 'domain:lamoda.ru', 'domain:samokat.ru', 'domain:vkusvill.ru', 'domain:lenta.com',
   'domain:magnit.ru', 'domain:kinopoisk.ru', 'domain:ivi.ru', 'domain:start.ru', 'domain:kion.ru',
   'domain:wink.ru', 'domain:litres.ru', 'domain:cian.ru',
+  // Российские магазины (электроника/ритейл), часто «вылетают» под VPN:
+  'domain:dns-shop.ru', 'domain:mvideo.ru', 'domain:eldorado.ru', 'domain:citilink.ru',
+  'domain:detmir.ru', 'domain:sportmaster.ru', 'domain:leroymerlin.ru', 'domain:lemanapro.ru',
   // Российские авиакомпании:
   'domain:utair.ru', 'domain:s7.ru', 'domain:uralairlines.ru', 'domain:rossiya-airlines.com', 'domain:nordwindairlines.ru',
+  'domain:smartavia.com', 'domain:azimuth.aero', 'domain:flyredwings.com', 'domain:azurair.ru',
+  // Список «Russia outside» (itdoginfo/allow-domains) — росс. ресурсы, отдающиеся
+  // только росс. подсетям (гос/ЖКХ/утилиты). gov.ru покрывает *.gov.ru.
+  'domain:gov.ru', 'domain:mos.ru', 'domain:mosreg.ru', 'domain:mosenergosbyt.ru', 'domain:pesc.ru',
+  'domain:consultant.ru', 'domain:russianpost.ru', 'domain:emex.ru', 'domain:reso.ru', 'domain:rzd-bonus.ru',
+  'domain:avtodor-tr.ru', 'domain:onelya.ru', 'domain:bkvet.ru', 'domain:dzvr.ru', 'domain:yadro.ru',
+  'domain:gorzdrav.spb.ru', 'domain:gu-st.ru', 'domain:ozonusercontent.com', 'domain:refocus.ru', 'domain:ttk.ru',
+  'domain:bitrix.info', 'domain:showip.net', 'domain:xn--90aijkdmaud0d.xn--p1ai', 'domain:1018213540.rsc.cdn77.org',
   'full:go.yandex', 'full:ru.ruwiki.ru',
 ];
 
