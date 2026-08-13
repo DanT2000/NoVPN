@@ -6,7 +6,7 @@
 
 export const RU_WHITELIST_ROUTES: string[] = [
   'domain:2gis.ru', 'domain:2gis.com', 'domain:ads.x5.ru', 'domain:aif.ru', 'domain:aeroflot.ru',
-  'domain:alfabank.ru', 'domain:api.oneme.ru', 'domain:avito.ru', 'domain:beeline.ru',
+  'domain:alfabank.ru', 'domain:aliexpress.ru', 'domain:aliexpress.com', 'domain:api.oneme.ru', 'domain:avito.ru', 'domain:beeline.ru',
   'domain:burgerkingrus.ru', 'domain:dellin.ru', 'domain:drive2.ru', 'domain:dzen.ru',
   'domain:fd.oneme.ru', 'domain:flypobeda.ru', 'domain:forbes.ru', 'domain:gazeta.ru',
   'domain:gazprombank.ru', 'domain:gismeteo.ru', 'domain:gosuslugi.ru', 'domain:hh.ru',
