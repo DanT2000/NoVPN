@@ -188,7 +188,7 @@ export const mockApi: ApiClient = {
     return { ok: true };
   },
 
-  async deleteDevice(deviceId: string): Promise<Ok> {
+  async deleteDevice(deviceId: string): Promise<{ ok: boolean; pending?: boolean; message?: string }> {
     await wait(300);
     state.devices = state.devices.filter((d) => d.id !== deviceId);
     return { ok: true };
@@ -201,11 +201,11 @@ export const mockApi: ApiClient = {
     return d;
   },
 
-  async cleanupDevices(ids: string[]): Promise<{ deleted: number }> {
+  async cleanupDevices(ids: string[]): Promise<{ deleted: number; kept: number; keptIds: string[] }> {
     await wait(400);
     const before = state.devices.length;
     state.devices = state.devices.filter((d) => !ids.includes(d.id));
-    return { deleted: before - state.devices.length };
+    return { deleted: before - state.devices.length, kept: 0, keptIds: [] };
   },
 
   async adminLogin(password: string): Promise<{ ok: boolean }> {

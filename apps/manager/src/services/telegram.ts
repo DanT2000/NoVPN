@@ -117,6 +117,8 @@ function linkGuard(chatId: number): boolean {
   const now = Date.now();
   const WINDOW = 10 * 60 * 1000;
   const MAX = 5;
+  // Периодически подчищаем истёкшие записи, чтобы map не рос бесконечно.
+  if (linkAttempts.size > 500) for (const [k, v] of linkAttempts) if (now > v.resetAt) linkAttempts.delete(k);
   const rec = linkAttempts.get(chatId);
   if (!rec || now > rec.resetAt) {
     linkAttempts.set(chatId, { count: 1, resetAt: now + WINDOW });
@@ -477,7 +479,12 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
   repo.setTelegramChatId(user.id, chatId); // бэкофилл chat_id для рассылки
   if (data === 'menu') return showMenu(chatId, user);
   if (data === 'getcfg') return startGetConfig(chatId, user);
-  if (data.startsWith('proto:')) return issueAndSend(chatId, user, data.slice(6) as 'xray' | 'amneziawg');
+  // Выпуск не блокирует poll-loop: SSH может тянуться 30–60с, и await заморозил бы бота
+  // для ВСЕХ. issueAndSend сам шлёт «Выпускаю…» и результат/ошибку — запускаем в фоне.
+  if (data.startsWith('proto:')) {
+    void issueAndSend(chatId, user, data.slice(6) as 'xray' | 'amneziawg').catch(() => {});
+    return;
+  }
   if (data === 'devices') return sendDevices(chatId, user);
   if (data === 'howto') return sendHowto(chatId, user);
   if (data === 'apps') return sendApps(chatId);
@@ -500,7 +507,10 @@ async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> 
     server.protocols.includes(p),
   );
   if (protos.length === 0) return void send(chatId, 'На вашем сервере нет доступных вам протоколов. Обратитесь к администратору.');
-  if (protos.length === 1) return issueAndSend(chatId, user, protos[0]!);
+  if (protos.length === 1) {
+    void issueAndSend(chatId, user, protos[0]!).catch(() => {}); // в фоне, не блокируя poll-loop
+    return;
+  }
   const kb: Kb = protos.map((p) => [{ text: PROTO_LABEL[p]!, callback_data: `proto:${p}` }]);
   await send(chatId, 'Какой протокол выпустить?', { kb });
 }

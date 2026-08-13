@@ -572,12 +572,21 @@ export function setServerDefault(id: string): Server[] {
   return listServers();
 }
 export function deleteServer(id: string): void {
-  // Удаление сервера удаляет привязанные к нему устройства (подписки).
+  // Удаление сервера удаляет привязанные к нему устройства (подписки). Трафик удаляемых
+  // устройств «списываем» в retired_traffic_gb пользователей — иначе расход (сумма по
+  // устройствам) уменьшился бы и вернул часть квоты (обход лимита удалением сервера).
+  const rows = db.prepare('SELECT user_id, traffic_gb FROM devices WHERE server_id = ? AND user_id IS NOT NULL AND traffic_gb > 0').all(id) as Array<{ user_id: string; traffic_gb: number }>;
+  const affected = new Set<string>();
   const tx = db.transaction(() => {
+    for (const r of rows) {
+      db.prepare('UPDATE users SET retired_traffic_gb = retired_traffic_gb + ? WHERE id = ?').run(r.traffic_gb, r.user_id);
+      affected.add(r.user_id);
+    }
     db.prepare('DELETE FROM devices WHERE server_id = ?').run(id);
     db.prepare('DELETE FROM servers WHERE id = ?').run(id);
   });
   tx();
+  for (const uid of affected) recomputeUserUsage(uid);
 }
 export function updateServerFields(id: string, fields: Record<string, unknown>): Server | null {
   const cols = Object.keys(fields);

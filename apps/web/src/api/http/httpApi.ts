@@ -56,9 +56,9 @@ export const httpApi: ApiClient = {
   issueDevice: (r: IssueDeviceRequest) => req<IssueDeviceResult>('POST', '/api/public/devices', r),
   reissueDevice: (id) => req<IssueDeviceResult>('POST', `/api/public/devices/${id}/reissue`),
   revokeDevice: (id) => req<Ok>('POST', `/api/public/devices/${id}/revoke`),
-  deleteDevice: (id) => req<Ok>('DELETE', `/api/public/devices/${id}`),
+  deleteDevice: (id) => req<{ ok: boolean; pending?: boolean; message?: string }>('DELETE', `/api/public/devices/${id}`),
   renameDevice: (id, name) => req<Device>('POST', `/api/public/devices/${id}/rename`, { name }),
-  cleanupDevices: (ids) => req<{ deleted: number }>('POST', '/api/public/devices/cleanup', { ids }),
+  cleanupDevices: (ids) => req<{ deleted: number; kept?: number; keptIds?: string[] }>('POST', '/api/public/devices/cleanup', { ids }),
 
   adminLogin: (password) => req<{ ok: boolean; mustChangePassword?: boolean }>('POST', '/api/admin/login', { password }),
   adminLogout: () => req<Ok>('POST', '/api/admin/logout'),

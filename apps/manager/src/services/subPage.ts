@@ -158,7 +158,7 @@ export function renderSubPage(opts: {
 </div>
 <div class="toast" id="t"></div>
 <script>
-  var SUB = ${JSON.stringify(sub)};
+  var SUB = ${JSON.stringify(sub).replace(/</g, '\\u003c')};
   function toast(m){var t=document.getElementById('t');t.textContent=m;t.className='toast on';
     setTimeout(function(){t.className='toast'},1800)}
   function copyText(txt,id){

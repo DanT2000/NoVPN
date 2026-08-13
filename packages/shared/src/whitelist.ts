@@ -81,6 +81,9 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
   const xray = links.map(parseVlessLink).filter((o): o is Record<string, unknown> => !!o);
   if (xray.length) tiers.push(xray);
   for (const p of proxies) tiers.push([proxyOutbound(p)]);
+  // Нет НИ ОДНОГО валидного канала (все ссылки битые и прокси нет) → не отдаём конфиг,
+  // где весь трафик идёт direct (это была бы полная утечка без VPN). Возвращаем ''.
+  if (tiers.length === 0) return '';
 
   const outbounds: Array<Record<string, unknown>> = [];
   tiers.forEach((tier, ti) =>

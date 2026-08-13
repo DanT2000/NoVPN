@@ -140,6 +140,7 @@ router.get('/sub/:token/full', (req, res) => {
   const flag = (primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '';
   const title = primarySrv ? [flag, primarySrv.name].filter(Boolean).join(' ') : '';
   const json = buildWhitelistXrayConfig(links, config.appName, proxies, title);
+  if (!json) return res.status(404).send(''); // все ссылки битые → не отдаём all-direct утечку
   // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
   // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -158,7 +159,20 @@ router.get('/sub/:token/full', (req, res) => {
 // ── bootstrap ──
 // ТОЛЬКО для админа: содержит коды доступа всех пользователей и конфиги всех
 // устройств. Публичная часть сайта пользуется /api/public/bootstrap.
-router.get('/api/bootstrap', requireAdmin, (_req, res) => res.json(repo.buildBootstrap()));
+router.get('/api/bootstrap', requireAdmin, (_req, res) => {
+  // Пока пароль дефолтный — НЕ раскрываем данные (коды/токены/устройства/прокси):
+  // отдаём пустышку с флагом смены, чтобы UI показал экран смены пароля. Полные данные —
+  // только после установки своего пароля.
+  if (isDefaultAdminPassword())
+    return res.json({
+      users: [], devices: [], servers: [], apps: [], settings: repo.getSettings(),
+      telegram: { enabled: false, tokenMasked: null, mode: 'polling', proxyOn: false, proxyType: 'http', proxyHost: '', proxyPort: '', proxyLogin: '', proxyPassSet: false, template: '', status: 'stopped', linkedUserIds: [] },
+      adminLog: [], jobErrors: [], history: {},
+      dbHealth: { dbPath: '', container: true, confirmedPersistent: true, risky: false },
+      mustChangePassword: true,
+    });
+  res.json(repo.buildBootstrap());
+});
 
 // Данные публичной части. Без входа по коду — только справочники;
 // со входом — плюс свои устройства. Чужое не отдаётся никогда.
@@ -209,9 +223,13 @@ router.post('/api/public/check-code', (req, res) => {
   // AmneziaWG-устройств и проверяется при выдаче, а не при входе.
 
   guard.noteSuccess(ip);
-  // Код принят — это и есть вход. Дальше личность берётся из сессии, а не из тела запроса.
-  req.session.userId = u.id;
-  res.json({ user: toPublicUserView(u), codeLoginUntil: until });
+  // Регенерируем сессию при входе (анти-фиксация: заранее подложенный SID не станет
+  // авторизованным). Личность берётся из свежей сессии, не из тела запроса.
+  req.session.regenerate((e) => {
+    if (e) return res.status(500).json(err('server', 'Ошибка сессии, повторите вход.'));
+    req.session.userId = u.id;
+    res.json({ user: toPublicUserView(u), codeLoginUntil: until });
+  });
 });
 
 // ── public: вход по личной ссылке ──
@@ -222,8 +240,11 @@ router.post('/api/public/token-login', (req, res) => {
   if (!u) return res.json(err('not_found', 'Ссылка недействительна. Попросите у администратора новую.'));
   const bad = accessError(u);
   if (bad) return res.json(err(bad.type, bad.message));
-  req.session.userId = u.id;
-  res.json({ user: toPublicUserView(u) });
+  req.session.regenerate((e) => {
+    if (e) return res.status(500).json(err('server', 'Ошибка сессии, повторите вход.'));
+    req.session.userId = u.id;
+    res.json({ user: toPublicUserView(u) });
+  });
 });
 
 router.post('/api/public/logout', (req, res) => {
@@ -355,20 +376,25 @@ router.post('/api/public/devices/cleanup', requireUserOrAdmin, async (req, res) 
   const rawIds = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map(String) : [];
   // Ограничение: отзыв идёт по SSH последовательно, длинный список — риск таймаута.
   const ids = rawIds.slice(0, 100);
-  if (ids.length === 0) return res.json({ deleted: 0 });
+  if (ids.length === 0) return res.json({ deleted: 0, kept: 0, keptIds: [] });
   let deleted = 0;
   let kept = 0;
+  const keptIds: string[] = []; // id, что оставили (сервер был недоступен) — для точной синхронизации кэша
   for (const id of ids) {
     const d = repo.getDevice(id);
     if (!d || !ownsDevice(req, d)) continue; // чужое/несуществующее — молча пропускаем
-    if (d.isActive) {
+    // Отзываем на сервере, если конфиг ещё активен ИЛИ отзыв не подтверждён (revoke_pending):
+    // иначе удаление осиротит живой ключ (неактивное устройство могло не отозваться на
+    // недоступном сервере). Только с подтверждённым отзывом запись безопасно удалять.
+    const row = repo.getDeviceRow(d.id);
+    if (d.isActive || row?.revoke_pending) {
       const revoked = await revokeDeviceOnServer(d.id);
       if (!revoked) {
-        // Сервер недоступен — не удаляем физически (иначе конфиг осиротеет и будет
-        // жить на сервере). revoke_pending: доступ снят в панели, sync повторит отзыв;
-        // revoked_at НЕ ставим, чтобы автоочистка не удалила запись до подтверждения.
+        // Сервер недоступен — не удаляем физически. revoke_pending: доступ снят в панели,
+        // sync повторит отзыв; revoked_at НЕ ставим, чтобы автоочистка не удалила до подтверждения.
         repo.updateDeviceFields(d.id, { is_active: 0, revoked_at: null, revoke_pending: 1 });
         kept += 1;
+        keptIds.push(d.id);
         continue;
       }
     }
@@ -376,7 +402,7 @@ router.post('/api/public/devices/cleanup', requireUserOrAdmin, async (req, res) 
     if (d.userId) repo.addHistory(d.userId, `Удалён конфиг «${d.name}» (очистка)`);
     deleted += 1;
   }
-  res.json({ deleted, kept });
+  res.json({ deleted, kept, keptIds });
 });
 
 // Выдать/получить прокси-аккаунт пользователя на сервере.
@@ -427,8 +453,11 @@ router.post('/api/admin/login', (req, res) => {
     return res.json({ ok: false, message: v.allowed ? undefined : v.message });
   }
   guard.noteSuccess(ip);
-  req.session.admin = true;
-  res.json({ ok: true, mustChangePassword: isDefaultAdminPassword() });
+  req.session.regenerate((e) => {
+    if (e) return res.status(500).json({ ok: false, message: 'Ошибка сессии, повторите вход.' });
+    req.session.admin = true;
+    res.json({ ok: true, mustChangePassword: isDefaultAdminPassword() });
+  });
 });
 
 // Смена пароля администратора из панели.

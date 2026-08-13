@@ -152,9 +152,10 @@ export function UserCreate() {
     try {
       const created = await createUser(input);
       goAdmin('user-created', { userId: created.id });
-    } catch {
+    } catch (e) {
       setSubmitting(false);
-      setError('Не удалось создать пользователя. Попробуйте ещё раз.');
+      // Показываем реальную ошибку сервера (напр. «Такой код уже используется»), а не общий текст.
+      setError(e instanceof Error ? e.message : 'Не удалось создать пользователя. Попробуйте ещё раз.');
     }
   }
 

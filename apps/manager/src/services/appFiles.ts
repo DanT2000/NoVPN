@@ -110,13 +110,17 @@ export function streamDownload(res: Response, full: string, origName: string): v
   rs.pipe(res);
 }
 
-/** Удалить все файлы конкретной (app, platform). */
+/** Удалить файл конкретной (app, platform) — ТОЧНО по имени из каталога, а не по
+ *  префиксу: префикс «<app>__<platform>__» неоднозначен (app «a__b»/platform «c» даёт
+ *  то же имя, что app «a»/platform «b»), и удалил бы чужой файл. Осиротевшие подберёт
+ *  cleanupOrphans. */
 export function removeFiles(appId: string, platform: string): void {
-  const prefix = `${safe(appId)}__${safe(platform)}__`;
+  const entry = repo.getApp(appId)?.platforms.find((p) => p.platform === platform);
+  if (!entry?.downloadName) return;
   try {
-    for (const f of fs.readdirSync(config.appsDir)) if (f.startsWith(prefix)) fs.rmSync(path.join(config.appsDir, f), { force: true });
+    fs.rmSync(path.join(config.appsDir, diskName(appId, platform, entry.downloadName)), { force: true });
   } catch {
-    /* каталога ещё нет — нечего чистить */
+    /* нет файла — нечего чистить */
   }
 }
 

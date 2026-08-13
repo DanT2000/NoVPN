@@ -24,7 +24,28 @@ export async function createAwgCfg(server: Server, name: string) {
   return sshCreateAwg(server, name);
 }
 
-export async function issueForUser(
+// Сериализация выпуска ПО ПОЛЬЗОВАТЕЛЮ: check-then-act (посчитать активные → SSH →
+// insertDevice) не атомарен через await. Без блокировки N параллельных POST /devices
+// прошли бы лимит AmneziaWG или наплодили дублей Xray. Цепочка промисов на пользователя.
+const userIssueLocks = new Map<string, Promise<unknown>>();
+export function withUserIssueLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = userIssueLocks.get(userId) ?? Promise.resolve();
+  const run = prev.then(fn, fn); // ждём предыдущую выдачу (успех/ошибку — неважно)
+  userIssueLocks.set(userId, run.then(() => {}, () => {})); // одна запись на пользователя (не растёт)
+  return run;
+}
+
+export function issueForUser(
+  user: User,
+  name: string,
+  serverId: string,
+  protocol: 'xray' | 'amneziawg',
+  opts: { byAdmin?: boolean } = {},
+): Promise<IssueDeviceResult> {
+  return withUserIssueLock(user.id, () => issueForUserInner(user, name, serverId, protocol, opts));
+}
+
+async function issueForUserInner(
   user: User,
   name: string,
   serverId: string,

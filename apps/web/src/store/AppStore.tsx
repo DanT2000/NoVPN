@@ -215,6 +215,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (!alive) return;
           setData(full);
           setAdminAuthed(true);
+          // Флаг обязательной смены пароля должен переживать F5 (не только вход) —
+          // иначе после перезагрузки страницы экран смены пропадал, а мутации 403-или.
+          setMustChangePassword(!!full.mustChangePassword);
         } catch {
           /* не админ — это норма, публичная часть уже загружена */
         }
@@ -320,10 +323,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
   const deleteDevice = useCallback(
     async (deviceId: string) => {
-      await api.deleteDevice(deviceId);
-      patchDevices((list) => list.filter((x) => x.id !== deviceId));
+      const r = await api.deleteDevice(deviceId);
+      // Сервер мог НЕ удалить (был недоступен) и оставить запись как pending — тогда не
+      // выкидываем её из кэша, а помечаем неактивной (иначе «исчезла», а на перезагрузке — вернулась).
+      if (r.pending) {
+        patchDevices((list) => list.map((x) => (x.id === deviceId ? { ...x, isActive: false } : x)));
+        if (r.message) showToast(r.message);
+      } else {
+        patchDevices((list) => list.filter((x) => x.id !== deviceId));
+      }
     },
-    [patchDevices],
+    [patchDevices, showToast],
   );
   const renameDevice = useCallback(
     async (deviceId: string, name: string) => {
@@ -334,8 +344,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
   const cleanupDevices = useCallback(
     async (ids: string[]) => {
-      const { deleted } = await api.cleanupDevices(ids);
-      patchDevices((list) => list.filter((x) => !ids.includes(x.id)));
+      const { deleted, keptIds = [] } = await api.cleanupDevices(ids);
+      // Удаляем из кэша только реально удалённые; оставленные сервером (был недоступен)
+      // помечаем неактивными, а не выкидываем — иначе рассинхрон кэша с БД.
+      patchDevices((list) =>
+        list
+          .filter((x) => !ids.includes(x.id) || keptIds.includes(x.id))
+          .map((x) => (keptIds.includes(x.id) ? { ...x, isActive: false } : x)),
+      );
       return deleted;
     },
     [patchDevices],

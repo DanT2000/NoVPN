@@ -6,10 +6,11 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
     res.status(401).json({ error: { type: 'unauthorized', message: 'Требуется вход администратора.' } });
     return;
   }
-  // Пока пароль администратора дефолтный — до его смены пускаем только чтение (GET,
-  // чтобы загрузился экран смены) и сам эндпоинт смены пароля. Иначе известный дефолт
-  // был бы полноценным бэкдором, даже если UI показал экран смены.
-  if (isDefaultAdminPassword() && req.method !== 'GET' && req.path !== '/api/admin/password') {
+  // Пока пароль администратора дефолтный — до его смены НЕ отдаём ничего, кроме самой
+  // смены пароля и bootstrap (он в этом состоянии возвращает пустышку с флагом смены,
+  // чтобы UI показал экран смены). Иначе известный дефолт = бэкдор: даже GET /bootstrap
+  // отдал бы коды/токены всех пользователей и прокси-пароли. Блокируем и чтение, и запись.
+  if (isDefaultAdminPassword() && req.path !== '/api/admin/password' && req.path !== '/api/bootstrap') {
     res.status(403).json({ error: { type: 'must_change_password', message: 'Сначала задайте новый пароль администратора.' } });
     return;
   }

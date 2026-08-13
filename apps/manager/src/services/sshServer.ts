@@ -156,7 +156,18 @@ function buildInstallScript(o: {
   sni: string; realityPriv: string; shortId: string; awgPriv: string; xray: boolean; awg: boolean; awgParams: AwgParams;
 }): string {
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
-  const a = o.awgParams;
+  // Параметры обфускации подставляются в bash БЕЗ кавычек — приводим каждый к целому
+  // в разумных границах (защита от инъекции, если awgParams пришли из админ-ввода/импорта).
+  const int = (v: unknown, def: number): number => {
+    const n = Math.trunc(Number(v));
+    return Number.isFinite(n) && n >= 0 && n <= 2000000000 ? n : def;
+  };
+  const raw = o.awgParams;
+  const a = {
+    Jc: int(raw.Jc, 4), Jmin: int(raw.Jmin, 40), Jmax: int(raw.Jmax, 70),
+    S1: int(raw.S1, 0), S2: int(raw.S2, 0),
+    H1: int(raw.H1, 1), H2: int(raw.H2, 2), H3: int(raw.H3, 3), H4: int(raw.H4, 4),
+  };
   return `set -e
 SNI=${q(o.sni)}
 REALITY_PRIV=${q(o.realityPriv)}

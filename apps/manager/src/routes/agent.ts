@@ -17,8 +17,10 @@ function verifyAgent(req: Request): string | null {
   const ts = req.header('x-agent-ts');
   const sign = req.header('x-agent-sign');
   if (!agentId || !ts || !sign) return null;
-  // Защита от повторов: метка не старше 5 минут.
-  if (Math.abs(Date.now() - Date.parse(ts)) > 5 * 60 * 1000) return null;
+  // Защита от повторов: метка не старше 5 минут. Нечисловой ts даёт NaN, а NaN>x === false
+  // (обход окна свежести) — поэтому явно отвергаем неразбираемую метку.
+  const tsMs = Date.parse(ts);
+  if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > 5 * 60 * 1000) return null;
   const keyPem = repo.getServerAgentKey(agentId);
   if (!keyPem) return null;
   const raw = (req as Request & { rawBody?: string }).rawBody ?? '';
