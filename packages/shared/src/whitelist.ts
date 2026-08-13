@@ -26,6 +26,12 @@ export const RU_WHITELIST_ROUTES: string[] = [
   'domain:yandex.net', 'domain:yandex.com', 'domain:yandexcloud.net', 'domain:yastatic.net',
   'domain:sberbank.ru', 'domain:sber.ru', 'domain:tinkoff.ru', 'domain:t-bank.ru', 'domain:wildberries.ru',
   'domain:vtb24.ru', 'domain:nalog.ru', 'domain:nalog.gov.ru', 'domain:pochta.ru', 'domain:cdek.ru',
+  // «Суверенные» сервисы/маркетплейсы/стриминги, ломающиеся под VPN (по списку пользователя):
+  'domain:ok.ru', 'domain:lamoda.ru', 'domain:samokat.ru', 'domain:vkusvill.ru', 'domain:lenta.com',
+  'domain:magnit.ru', 'domain:kinopoisk.ru', 'domain:ivi.ru', 'domain:start.ru', 'domain:kion.ru',
+  'domain:wink.ru', 'domain:litres.ru', 'domain:cian.ru',
+  // Российские авиакомпании:
+  'domain:utair.ru', 'domain:s7.ru', 'domain:uralairlines.ru', 'domain:rossiya-airlines.com', 'domain:nordwindairlines.ru',
   'full:go.yandex', 'full:ru.ruwiki.ru',
 ];
 
