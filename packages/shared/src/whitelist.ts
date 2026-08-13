@@ -72,7 +72,10 @@ function proxyOutbound(p: ProxyFallback): Record<string, unknown> {
   return o;
 }
 
-export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', proxies: ProxyFallback[] = []): string {
+export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', proxies: ProxyFallback[] = [], title = ''): string {
+  // Название профиля (remarks): по серверу — «🇫🇮 Finland | Обход белых списков».
+  // Если сервер не передан — общий заголовок с названием панели.
+  const remarks = title ? `${title} | Обход белых списков` : `${appName} — обход белых списков`;
   // Тиры в порядке приоритета: 0 = Xray (reality), затем каждый прокси — свой тир.
   const tiers: Array<Record<string, unknown>[]> = [];
   const xray = links.map(parseVlessLink).filter((o): o is Record<string, unknown> => !!o);
@@ -112,7 +115,8 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
     const tier0 = tiers[0] ?? [];
     const rules: Array<Record<string, unknown>> = [...whitelistRules];
     const cfg: Record<string, unknown> = {
-      remarks: `${appName} — обход белых списков`,
+      remarks,
+      meta: { serverDescription: remarks },
       log: { loglevel: 'warning' },
       inbounds,
       outbounds,
@@ -158,7 +162,8 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
     });
   }
   const cfg = {
-    remarks: `${appName} — обход + аварийный доступ`,
+    remarks,
+    meta: { serverDescription: remarks },
     log: { loglevel: 'warning' },
     inbounds,
     outbounds,

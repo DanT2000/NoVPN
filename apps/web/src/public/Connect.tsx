@@ -230,7 +230,7 @@ function AppList({
               {/* Скачать прямо с нашего сервера (файл залит в админке) — работает
                   даже когда офиц. сайт заблокирован в РФ. Иначе — ссылка в магазин. */}
               {entry.downloadName ? (
-                <a className="btn btn-primary btn-sm" href={`/apps/file/${app.id}/${encodeURIComponent(entry.platform)}`}>
+                <a className="btn btn-primary btn-sm" href={`/apps/file/${encodeURIComponent(app.id)}/${encodeURIComponent(entry.platform)}`}>
                   ⬇ Скачать{entry.downloadSize ? ` · ${mb(entry.downloadSize)}` : ''}
                 </a>
               ) : entry.url ? (

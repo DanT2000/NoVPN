@@ -133,11 +133,25 @@ router.get('/sub/:token/full', (req, res) => {
       }
     }
   }
-  const json = buildWhitelistXrayConfig(links, config.appName, proxies);
+  // Название профиля — по основному (первому) Xray-серверу пользователя: флаг + имя,
+  // напр. «🇫🇮 Finland | Обход белых списков». country хранится как «🇫🇮 Финляндия».
+  const primaryDev = repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link);
+  const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
+  const flag = (primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '';
+  const title = primarySrv ? [flag, primarySrv.name].filter(Boolean).join(' ') : '';
+  const json = buildWhitelistXrayConfig(links, config.appName, proxies, title);
   // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
   // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Profile-Title', `base64:${Buffer.from(config.appName, 'utf8').toString('base64')}`);
   res.setHeader('Profile-Update-Interval', '12');
+  // Счётчик трафика/срока в приложении — как у обычной подписки (раньше /full его не слал).
+  if (u.trafficLimitGb != null) {
+    const total = Math.round(u.trafficLimitGb * 1e9);
+    const used = Math.round((u.trafficUsedGb ?? 0) * 1e9);
+    const expire = u.expiresAt ? Math.floor(new Date(u.expiresAt).getTime() / 1000) : 0;
+    res.setHeader('Subscription-Userinfo', `upload=0; download=${used}; total=${total}; expire=${expire}`);
+  }
   res.send(json);
 });
 

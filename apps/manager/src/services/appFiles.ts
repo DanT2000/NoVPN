@@ -4,9 +4,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from '../config.js';
 import * as repo from '../repo.js';
+
+// Серверный потолок размера файла (бэкстоп к клиентскому лимиту): чтобы прямой
+// API-вызов не забил том, где лежит и база. 500 МБ — с запасом на крупные инсталляторы.
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 
 function ensureDir(): string {
   fs.mkdirSync(config.appsDir, { recursive: true });
@@ -28,20 +33,51 @@ const CT: Record<string, string> = {
   '.zip': 'application/zip',
 };
 
-/** Стрим-загрузка файла приложения на диск. Возвращает имя (оригинальное) и размер. */
+/** Стрим-загрузка файла приложения на диск. Пишем во ВРЕМЕННЫЙ файл и только по
+ *  успешному завершению атомарно переименовываем поверх, а старый удаляем ПОСЛЕ —
+ *  иначе оборванная замена уничтожила бы рабочий файл. Обрыв/ошибка/переполнение
+ *  размера → чистим temp, промис отклоняется (без зависаний и утечки дескриптора). */
 export function saveUpload(appId: string, platform: string, origName: string, req: Request): Promise<{ name: string; size: number }> {
   ensureDir();
-  // Удаляем прежние файлы этой (app, platform) — чтобы не копить старые версии.
-  removeFiles(appId, platform);
-  const fname = diskName(appId, platform, origName);
-  const full = path.join(config.appsDir, fname);
+  const full = path.join(config.appsDir, diskName(appId, platform, origName));
+  // Temp с ПРЕФИКСОМ «.upload-» (не совпадает с «<app>__<platform>__») — чтобы
+  // removeFiles на успехе его не задел; осиротевшие temp подберёт cleanupOrphans.
+  const tmp = path.join(config.appsDir, `.upload-${crypto.randomBytes(8).toString('hex')}`);
   return new Promise((resolve, reject) => {
-    const ws = fs.createWriteStream(full);
+    const ws = fs.createWriteStream(tmp);
     let size = 0;
-    req.on('data', (c: Buffer) => (size += c.length));
-    req.on('error', reject);
-    ws.on('error', reject);
-    ws.on('finish', () => resolve({ name: origName, size }));
+    let settled = false;
+    const fail = (err: unknown): void => {
+      if (settled) return;
+      settled = true;
+      req.unpipe(ws);
+      ws.destroy();
+      fs.rm(tmp, { force: true }, () => {});
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_UPLOAD_BYTES) {
+        req.destroy();
+        fail(new Error(`Файл больше ${Math.round(MAX_UPLOAD_BYTES / 1048576)} МБ.`));
+      }
+    });
+    // Обрыв соединения клиентом эмитит 'aborted'/'close' (не 'error') — ловим оба.
+    req.on('aborted', () => fail(new Error('Загрузка прервана.')));
+    req.on('error', fail);
+    ws.on('error', fail);
+    ws.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      try {
+        removeFiles(appId, platform); // старые версии убираем только теперь, когда новый файл на диске
+        fs.renameSync(tmp, full);
+        resolve({ name: origName, size });
+      } catch (e) {
+        fs.rm(tmp, { force: true }, () => {});
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
     req.pipe(ws);
   });
 }
@@ -54,12 +90,24 @@ export function filePath(appId: string, platform: string, origName: string): str
 
 /** Отдать файл клиенту стримом (Content-Disposition = оригинальное имя). */
 export function streamDownload(res: Response, full: string, origName: string): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(full); // файл мог исчезнуть между проверкой и отдачей (TOCTOU)
+  } catch {
+    if (!res.headersSent) res.status(404).send('');
+    return;
+  }
   const ext = path.extname(origName).toLowerCase();
   res.setHeader('Content-Type', CT[ext] ?? 'application/octet-stream');
-  res.setHeader('Content-Length', String(fs.statSync(full).size));
+  res.setHeader('Content-Length', String(stat.size));
   // ASCII-имя в filename + RFC5987 filename* для кириллицы/пробелов.
   res.setHeader('Content-Disposition', `attachment; filename="${origName.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(origName)}`);
-  fs.createReadStream(full).pipe(res);
+  const rs = fs.createReadStream(full);
+  rs.on('error', () => {
+    if (!res.headersSent) res.status(500).send('');
+    res.destroy();
+  });
+  rs.pipe(res);
 }
 
 /** Удалить все файлы конкретной (app, platform). */

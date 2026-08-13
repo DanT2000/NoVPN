@@ -45,6 +45,10 @@ export function renderSubPage(opts: {
   whitelist: boolean;
 }): string {
   const { appName, user, subUrl, apps, configCount, whitelist } = opts;
+  // Эффективная подписка = как в кабинете/боте: при включённом обходе — /full (JSON с
+  // обходом белых списков), иначе плоская. Одна и та же ссылка везде — без «где-то full,
+  // где-то нет». Используем её и для основной ссылки, и для «Добавить подписку» (one-tap).
+  const sub = whitelist && configCount > 0 ? `${subUrl}/full` : subUrl;
 
   // Только клиенты, умеющие Xray: подписка — это Xray.
   const xrayApps = apps.filter((a) => a.enabled && a.compat.includes('xray'));
@@ -56,7 +60,7 @@ export function renderSubPage(opts: {
     if (!list.length) return '';
     const items = list
       .map(({ a, e }) => {
-        const tap = oneTap(a, subUrl);
+        const tap = oneTap(a, sub);
         const icon = a.icon
           ? `<img class="ico" src="${esc(a.icon)}" alt="">`
           : `<div class="ico ph">${esc(a.client.slice(0, 1))}</div>`;
@@ -136,9 +140,11 @@ export function renderSubPage(opts: {
   <p class="sub">Подключение для «${esc(user.name)}»</p>
 
   <div class="card">
-    <div class="lbl">Ссылка-подписка</div>
-    <div class="link" id="lnk">${esc(subUrl)}</div>
+    <div class="lbl">Ссылка-подписка${whitelist && configCount > 0 ? ' (с обходом белых списков)' : ''}</div>
+    <div class="link" id="lnk">${esc(sub)}</div>
+    ${whitelist && configCount > 0 ? `<div class="app-i" style="margin-bottom:10px">Российские сайты (госуслуги, банки, VK, Яндекс, Ozon…) идут напрямую, остальное — через VPN. Приложение само подтянет серверы и маршрутизацию.</div>` : ''}
     <button class="btn btn-primary btn-wide" data-copy>Скопировать ссылку</button>
+    ${whitelist && configCount > 0 ? `<a class="btn btn-sec btn-wide" style="margin-top:8px" href="${esc(sub)}" download="${esc(appName)}-whitelist.json">Скачать файлом (для импорта конфига)</a>` : ''}
     <div class="meta">
       <span>Конфигураций: <b>${configCount}</b></span>
       <span>Действует: <b>${esc(expiry)}</b></span>
@@ -146,25 +152,13 @@ export function renderSubPage(opts: {
     </div>
   </div>
 
-  ${
-    configCount > 0 && whitelist
-      ? `<div class="card">
-    <div class="lbl">Подписка с обходом белых списков (V2RayNG)</div>
-    <div class="app-i" style="margin-bottom:10px">Отдельная подписка: российские сайты (госуслуги, банки, VK, Яндекс, Ozon…) идут напрямую и работают даже в режиме «белого списка», остальное — через VPN. Добавьте этот адрес в V2RayNG как подписку — сервер и маршрутизация подгрузятся сами.</div>
-    <div class="link" id="lnkfull">${esc(subUrl)}/full</div>
-    <button class="btn btn-primary btn-wide" data-copy-full>Скопировать подписку с обходом</button>
-    <a class="btn btn-sec btn-wide" style="margin-top:8px" href="${esc(subUrl)}/full" download="${esc(appName)}-whitelist.json">Скачать файлом (для импорта конфига)</a>
-  </div>`
-      : ''
-  }
-
   <div class="step">Выберите вашу систему — покажем, что установить.</div>
   <div class="tabs">${tabs}</div>
   ${cards}
 </div>
 <div class="toast" id="t"></div>
 <script>
-  var SUB = ${JSON.stringify(subUrl)};
+  var SUB = ${JSON.stringify(sub)};
   function toast(m){var t=document.getElementById('t');t.textContent=m;t.className='toast on';
     setTimeout(function(){t.className='toast'},1800)}
   function copyText(txt,id){
@@ -177,7 +171,6 @@ export function renderSubPage(opts: {
   }
   document.addEventListener('click',function(e){
     if(e.target.closest('[data-copy]')) return copyText(SUB,'lnk');
-    if(e.target.closest('[data-copy-full]')) return copyText(SUB+'/full','lnkfull');
   });
   // Вкладка системы: по умолчанию — угаданная по устройству.
   var ua=navigator.userAgent, def=/android/i.test(ua)?'Android':/iphone|ipad|ipod/i.test(ua)?'iOS':

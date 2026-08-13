@@ -292,8 +292,8 @@ export function AppsAdmin() {
       )}
 
       <div style={{ marginTop: 18 }}>
-        <button className="btn btn-primary" disabled={saving} onClick={() => void save()}>
-          Сохранить
+        <button className="btn btn-primary" disabled={saving || uploading !== null} onClick={() => void save()}>
+          {uploading !== null ? 'Идёт загрузка файла…' : 'Сохранить'}
         </button>
       </div>
     </>

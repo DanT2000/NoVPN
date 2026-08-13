@@ -344,7 +344,7 @@ export function Wizard() {
                         <div style={{ fontWeight: 600 }}>{a.client}</div>
                         <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
                           {entry.downloadName ? (
-                            <a className="btn btn-primary btn-sm" href={`/apps/file/${a.id}/${encodeURIComponent(entry.platform)}`}>⬇ Скачать</a>
+                            <a className="btn btn-primary btn-sm" href={`/apps/file/${encodeURIComponent(a.id)}/${encodeURIComponent(entry.platform)}`}>⬇ Скачать</a>
                           ) : entry.url ? (
                             <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
                               {/play\.google\.com/i.test(entry.url) ? 'Google Play' : /apps\.apple\.com|itunes\.apple/i.test(entry.url) ? 'App Store' : 'Установить'}
