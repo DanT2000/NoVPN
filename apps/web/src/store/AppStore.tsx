@@ -129,7 +129,25 @@ export function useApp(): AppContextValue {
 }
 
 function detectStartArea(): 'public' | 'admin' {
-  return typeof window !== 'undefined' && window.location.hash.includes('admin') ? 'admin' : 'public';
+  if (typeof window === 'undefined') return 'public';
+  // Основной путь — реальный /admin (можно дать ссылку «сайт/admin»). Легаси-якорь
+  // #admin поддерживаем для старых закладок.
+  const p = window.location.pathname;
+  if (p === '/admin' || p.startsWith('/admin/')) return 'admin';
+  return window.location.hash.includes('admin') ? 'admin' : 'public';
+}
+
+/** Держим адресную строку в согласии с областью: админка → /admin, público → корень
+ *  (кроме персональной ссылки /k/…, её не трогаем). Через replaceState — без перезагрузки;
+ *  при F5 сервер отдаёт SPA (index.html) и detectStartArea вернёт ту же область. */
+function syncUrl(area: 'public' | 'admin'): void {
+  if (typeof window === 'undefined') return;
+  const p = window.location.pathname;
+  if (area === 'admin') {
+    if (p !== '/admin') window.history.replaceState(null, '', '/admin');
+  } else if (p === '/admin' || p.startsWith('/admin/')) {
+    window.history.replaceState(null, '', '/');
+  }
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -239,6 +257,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
+  // Один раз на маунт приводим адрес в согласие с областью (легаси #admin → /admin).
+  useEffect(() => {
+    syncUrl(startArea);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const showToast = useCallback((text: string) => {
     setToast(text);
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -249,10 +273,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const goPublic = useCallback((route: PublicRoute, params: NavParams = {}) => {
     setNav({ area: 'public', route, params });
+    syncUrl('public');
     window.scrollTo(0, 0);
   }, []);
   const goAdmin = useCallback((route: AdminRoute, params: NavParams = {}) => {
     setNav({ area: 'admin', route, params });
+    syncUrl('admin');
     window.scrollTo(0, 0);
   }, []);
 

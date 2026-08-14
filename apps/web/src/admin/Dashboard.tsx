@@ -56,6 +56,12 @@ export function Dashboard() {
 
   const recentLog = adminLog.slice(0, 6);
 
+  // Трафик по серверам — компактные горизонтальные бары (из текущих метрик).
+  const trafficRows = servers
+    .map((s) => ({ id: s.id, name: s.name, country: s.country, gb: s.trafficGb || 0, online: s.agent === 'online' }))
+    .sort((a, b) => b.gb - a.gb);
+  const maxTraffic = Math.max(1, ...trafficRows.map((r) => r.gb));
+
   const stats = [
     { label: 'Активные пользователи', value: String(activeUsers), sub: `из ${users.length} всего` },
     { label: 'Активные конфиги', value: String(activeDevices), sub: '' },
@@ -81,6 +87,34 @@ export function Dashboard() {
             </div>
           ))}
         </div>
+
+        {trafficRows.length > 0 ? (
+          <Panel
+            title="Трафик по серверам"
+            extra={<button type="button" style={linkBtn} onClick={() => goAdmin('servers')}>все →</button>}
+          >
+            <div className="stack" style={{ gap: 12 }}>
+              {trafficRows.map((r) => (
+                <div key={r.id} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div className="row-between" style={{ alignItems: 'baseline' }}>
+                    <span className="row" style={{ gap: 8, minWidth: 0 }}>
+                      <Dot color={r.online ? 'var(--green-dot)' : 'var(--red-fg)'} />
+                      <span style={{ fontWeight: 600, ...ellipsis }}>{r.name}{r.country ? ` (${r.country})` : ''}</span>
+                    </span>
+                    <span className="small muted mono" style={{ flex: 'none' }}>{gb(r.gb)}</span>
+                  </div>
+                  <div style={{ height: 8, borderRadius: 6, background: 'var(--surface-btn-2, rgba(127,127,127,.15))', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${Math.max(2, Math.round((r.gb / maxTraffic) * 100))}%`, background: 'var(--accent)', borderRadius: 6 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="small muted" style={{ marginTop: 10 }}>
+              Суммарный трафик по каждому серверу за всё время. Разбивка по дням/неделям —
+              в ближайших обновлениях (нужен сбор истории).
+            </div>
+          </Panel>
+        ) : null}
 
         <Panel title="Требуют внимания" bodyStyle={{ gap: 0 }}>
           {attention.length === 0 ? (
