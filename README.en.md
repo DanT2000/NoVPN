@@ -51,6 +51,19 @@ for both the admin and the user.
 - **Secure by default.** Mandatory admin password change on first login, anti‑fixation
   sessions, secrets never returned by the API.
 
+## What it looks like
+
+<p align="center">
+  <img src="press/screenshots/admin-dashboard-dark-desktop.png" width="49%" alt="Overview: metrics, traffic chart, server uptime" />
+  <img src="press/screenshots/admin-servers-desktop.png" width="49%" alt="Server management" />
+</p>
+<p align="center">
+  <img src="press/screenshots/admin-logs-desktop.png" width="49%" alt="Logs with error explanations" />
+  <img src="press/screenshots/public-home-desktop.png" width="49%" alt="User login via personal link" />
+</p>
+
+More in [`press/screenshots/`](press/screenshots/) (desktop, mobile, dark theme).
+
 ## One‑command install
 
 On a clean Linux server (Ubuntu/Debian; may be the same box that will run the VPN):

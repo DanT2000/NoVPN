@@ -6,19 +6,22 @@
 |------|---------|
 | [`habr-ru.md`](habr-ru.md) | Статья для Habr (RU) — вставляйте в редактор как есть |
 | [`habr-en.md`](habr-en.md) | Та же статья на английском |
-| [`cover.svg`](cover.svg) | Обложка 1200×630 (OG/Habr). Экспорт в PNG — см. гайд ниже |
-| [`screenshots/`](screenshots/README.md) | Какие скриншоты нужны и как снять их чисто (mock-режим) |
+| [`cover.svg`](cover.svg) | Обложка 1200×630 (OG/Habr). Экспорт в PNG — см. гайд |
+| [`image-briefs.md`](image-briefs.md) | Готовые брифы/промпты для Codex CLI (герой, коллаж, соцсети) |
+| [`screenshots/`](screenshots/README.md) | **Уже сняты** (десктоп/телефон/тёмная) — можно пересобрать |
 
 ## Порядок публикации
 
-1. **Скриншоты.** Снимите по списку из [`screenshots/README.md`](screenshots/README.md)
-   (проще всего — mock-режим: `VITE_USE_MOCK=true npm run dev --workspace @novpn/web`).
-2. **Обложка.** Экспортируйте `cover.svg` → `cover.png` (1200×630).
-3. **GitHub.** `README.md` (RU) и `README.en.md` (EN) уже готовы; проверьте, что репозиторий
-   публичный и ссылка `github.com/DanT2000/0VPN` верна.
-4. **Habr.** Создайте черновик, вставьте `habr-ru.md`, залейте картинки в редакторе Habr и
-   замените в тексте пути `screenshots/...` на выданные Habr’ом URL. Поставьте обложку, теги
-   (`vpn`, `amneziawg`, `xray`, `self-hosted`, `docker`), тип поста — «Туториал»/«Кейс».
+1. **Скриншоты — уже есть** в [`screenshots/`](screenshots/) (сняты автоматически через Playwright
+   по mock‑режиму). Пересобрать при желании — см. [`screenshots/README.md`](screenshots/README.md).
+2. **Красивые картинки (герой/коллаж).** По брифам из [`image-briefs.md`](image-briefs.md) через
+   ваш Codex CLI (логотип + скриншоты в макеты устройств).
+3. **Обложка.** Экспортируйте `cover.svg` → `cover.png` (1200×630) или сгенерируйте по брифу №1.
+4. **GitHub.** `README.md` (RU) и `README.en.md` (EN) готовы, со встроенными скриншотами; сделайте
+   репозиторий публичным, проверьте ссылку `github.com/DanT2000/0VPN`.
+5. **Habr.** Черновик → вставьте `habr-ru.md` → залейте картинки в редакторе Habr, заменив пути
+   `screenshots/...` на выданные URL. Обложка, теги (`vpn`, `amneziawg`, `xray`, `self-hosted`,
+   `docker`), тип — «Туториал»/«Кейс».
 
 ## Чек-лист перед тем, как делать репозиторий публичным
 

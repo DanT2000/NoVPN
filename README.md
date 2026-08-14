@@ -53,6 +53,19 @@ NoVPN построен вокруг двух идей:
 - **Безопасно по умолчанию.** Обязательная смена пароля админа при первом входе, сессии с
   анти‑фиксацией, секреты никогда не возвращаются наружу.
 
+## Как выглядит
+
+<p align="center">
+  <img src="press/screenshots/admin-dashboard-dark-desktop.png" width="49%" alt="Обзор: метрики, график трафика, аптайм серверов" />
+  <img src="press/screenshots/admin-servers-desktop.png" width="49%" alt="Управление серверами" />
+</p>
+<p align="center">
+  <img src="press/screenshots/admin-logs-desktop.png" width="49%" alt="Логи с объяснением ошибок" />
+  <img src="press/screenshots/public-home-desktop.png" width="49%" alt="Вход пользователя по личной ссылке" />
+</p>
+
+Больше — в [`press/screenshots/`](press/screenshots/) (десктоп, телефон, тёмная тема).
+
 ## Установка в одну команду
 
 На чистом Linux‑сервере (Ubuntu/Debian; можно на том же, где будет VPN):
