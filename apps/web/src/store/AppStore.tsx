@@ -26,7 +26,7 @@ import type {
 export type PublicRoute = 'home' | 'cabinet' | 'wizard' | 'devices' | 'apps';
 export type AdminRoute =
   | 'login' | 'dashboard' | 'users' | 'user-create' | 'user-created'
-  | 'user-card' | 'servers' | 'server-wizard' | 'telegram' | 'apps' | 'settings';
+  | 'user-card' | 'servers' | 'server-wizard' | 'telegram' | 'apps' | 'logs' | 'settings';
 
 export interface NavParams {
   userId?: string;

@@ -2,14 +2,14 @@
 //
 // Смысл: у прода нет второй копии на случай гибели хоста с панелью (том — на том
 // же диске). Кнопка «Скачать бэкап» даёт админу самодостаточный файл: развернул
-// новую панель с ЛЮБЫМ ENCRYPTION_KEY, залил бэкап, ввёл пароль — всё встало.
+// новую панель (даже с нуля, без ENV), залил бэкап, ввёл пароль — ВСЁ встало,
+// включая рабочие конфиги, SSH-доступ к серверам и ключи Reality.
 //
-// Файл шифруется паролем АДМИНА, а не ENCRYPTION_KEY сервера: иначе для
-// восстановления понадобились бы и файл, и ключ — два секрета вместо одного,
-// и оба на умершем хосте. Внутри — сырой снимок sqlite (в нём serverKeys уже
-// зашифрованы своим ENCRYPTION_KEY, но их назначение — работать на том же
-// ENCRYPTION_KEY; поэтому при переносе на новый ключ восстанавливается всё, что
-// не зашифровано им, а серверные ключи переставляются заново — см. памятку).
+// Файл шифруется паролем АДМИНА (scrypt), а внутрь кладётся И снимок sqlite, И сам
+// ENCRYPTION_KEY сервера — иначе на новом хосте с другим ключом зашифрованные поля
+// (conf устройств, SSH-пароли, ключи серверов) не расшифровались бы. Ключ защищён
+// тем же паролем бэкапа, так что «один секрет» сохраняется, а перенос на новый хост
+// действительно поднимает всё. (v1-бэкапы без ключа тоже читаются — обратная совм.)
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -18,7 +18,7 @@ import { config } from '../config.js';
 import { db } from '../db.js';
 
 const MAGIC = 'NOVPNBAK';
-const VERSION = 1;
+const VERSION = 2; // v2: внутрь добавлен ENCRYPTION_KEY (u32 len + key + sqlite)
 
 /** Снять консистентный снимок базы во временный файл и вернуть его содержимое. */
 function snapshot(): Buffer {
@@ -45,7 +45,12 @@ function snapshot(): Buffer {
  */
 export function createBackup(password: string): Buffer {
   if (!password || password.length < 8) throw new Error('Пароль бэкапа — минимум 8 символов.');
-  const plain = snapshot();
+  const sqlite = snapshot();
+  // v2: [u32 keyLen][ENCRYPTION_KEY][sqlite] — ключ едет внутри, под паролем бэкапа.
+  const keyBuf = Buffer.from(config.encryptionKey, 'utf8');
+  const keyLen = Buffer.alloc(4);
+  keyLen.writeUInt32BE(keyBuf.length);
+  const plain = Buffer.concat([keyLen, keyBuf, sqlite]);
   const salt = crypto.randomBytes(16);
   const iv = crypto.randomBytes(12);
   const key = crypto.scryptSync(password, salt, 32, { N: 16384, r: 8, p: 1 });
@@ -55,12 +60,12 @@ export function createBackup(password: string): Buffer {
   return Buffer.concat([Buffer.from(MAGIC, 'ascii'), Buffer.from([VERSION]), salt, iv, tag, ct]);
 }
 
-/** Расшифровать бэкап и вернуть сырые байты sqlite. Бросает при неверном пароле. */
-export function decryptBackup(buf: Buffer, password: string): Buffer {
+/** Расшифровать бэкап → снимок sqlite + (для v2) ENCRYPTION_KEY. Бросает при неверном пароле. */
+export function decryptBackup(buf: Buffer, password: string): { sqlite: Buffer; encKey: string | null } {
   if (buf.length < 8 + 1 + 16 + 12 + 16) throw new Error('Файл повреждён или это не бэкап.');
   if (buf.subarray(0, 8).toString('ascii') !== MAGIC) throw new Error('Это не файл бэкапа NoVPN.');
   const ver = buf[8];
-  if (ver !== VERSION) throw new Error(`Неизвестная версия бэкапа: ${ver}.`);
+  if (ver !== 1 && ver !== 2) throw new Error(`Неизвестная версия бэкапа: ${ver}.`);
   const salt = buf.subarray(9, 25);
   const iv = buf.subarray(25, 37);
   const tag = buf.subarray(37, 53);
@@ -68,11 +73,16 @@ export function decryptBackup(buf: Buffer, password: string): Buffer {
   const key = crypto.scryptSync(password, salt, 32, { N: 16384, r: 8, p: 1 });
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);
+  let plain: Buffer;
   try {
-    return Buffer.concat([decipher.update(ct), decipher.final()]);
+    plain = Buffer.concat([decipher.update(ct), decipher.final()]);
   } catch {
     throw new Error('Неверный пароль или файл повреждён.');
   }
+  if (ver === 1) return { sqlite: plain, encKey: null };
+  const keyLen = plain.readUInt32BE(0);
+  const encKey = plain.subarray(4, 4 + keyLen).toString('utf8') || null;
+  return { sqlite: plain.subarray(4 + keyLen), encKey };
 }
 
 /**
@@ -80,7 +90,7 @@ export function decryptBackup(buf: Buffer, password: string): Buffer {
  * sqlite нашей схемы, затем подменяет файл базы и просит перезапустить процесс
  * (better-sqlite3 держит старый файл открытым — переоткрыть в рантайме нельзя).
  */
-export function restoreBackup(sqliteBytes: Buffer): { users: number } {
+export function restoreBackup(sqliteBytes: Buffer, encKey?: string | null): { users: number } {
   const tmp = `${config.databasePath}.restore-${crypto.randomBytes(6).toString('hex')}`;
   fs.writeFileSync(tmp, sqliteBytes);
   let users = 0;
@@ -105,6 +115,15 @@ export function restoreBackup(sqliteBytes: Buffer): { users: number } {
   // переключение делает загрузчик БД при рестарте.
   const pending = `${config.databasePath}.pending-restore`;
   fs.renameSync(tmp, pending);
+  // Ключ шифрования из бэкапа (v2) кладём рядом — config.ts подхватит его при рестарте
+  // (иначе секреты восстановленной базы не расшифровались бы на новом/другом ключе).
+  if (encKey) {
+    try {
+      fs.writeFileSync(`${config.databasePath}.pending-key`, encKey, { mode: 0o600 });
+    } catch {
+      /* том только для чтения — восстановление секретов не сработает, но БД встанет */
+    }
+  }
   return { users };
 }
 

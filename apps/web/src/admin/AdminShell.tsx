@@ -12,6 +12,7 @@ import { Servers } from './Servers';
 import { ServerWizard } from './ServerWizard';
 import { Telegram } from './Telegram';
 import { AppsAdmin } from './AppsAdmin';
+import { Logs } from './Logs';
 import { Settings } from './Settings';
 
 interface NavItem {
@@ -26,6 +27,7 @@ const NAV: NavItem[] = [
   { key: 'servers', label: 'Серверы', match: ['servers', 'server-wizard'] },
   { key: 'telegram', label: 'Telegram', match: ['telegram'] },
   { key: 'apps', label: 'Приложения', match: ['apps'] },
+  { key: 'logs', label: 'Логи', match: ['logs'] },
   { key: 'settings', label: 'Настройки', match: ['settings'] },
 ];
 
@@ -68,6 +70,7 @@ export function AdminShell() {
       {route === 'server-wizard' && <ServerWizard />}
       {route === 'telegram' && <Telegram />}
       {route === 'apps' && <AppsAdmin />}
+      {route === 'logs' && <Logs />}
       {route === 'settings' && <Settings />}
     </>
   );

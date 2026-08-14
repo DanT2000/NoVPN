@@ -196,6 +196,31 @@ export interface ApiClient {
 
   // ── admin: settings ──
   saveSettings(input: AppSettings): Promise<AppSettings>;
+
+  // ── admin: графики истории + здоровье серверов ──
+  getStats(days: number): Promise<{ days: number; series: StatsPoint[] }>;
+  getHealth(): Promise<{ servers: ServerHealth[] }>;
+}
+
+export interface StatsPoint {
+  at: string;
+  trafficGb: number;
+  activeUsers: number;
+  activeDevices: number;
+  onlineServers: number;
+  totalServers: number;
+}
+
+export interface ServerHealth {
+  id: string;
+  name: string;
+  country: string | null;
+  online: boolean;
+  lastSyncAt: string | null;
+  endpointOk: boolean;
+  uptime24h: number;
+  uptime7d: number;
+  lastChangeAt: string | null;
 }
 
 export type { Device };

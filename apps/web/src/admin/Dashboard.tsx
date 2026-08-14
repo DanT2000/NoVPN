@@ -1,11 +1,27 @@
 // A1 — Обзор / Состояние системы.
 
+import { useEffect, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { User } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
-import { Panel, Dot, ScreenHeader, Loading } from '../components/ui';
+import { api } from '../api';
+import type { StatsPoint, ServerHealth } from '../api/types';
+import { Panel, Dot, ScreenHeader, Loading, Chip } from '../components/ui';
+import { AreaChart } from '../components/Chart';
 import { statusOf } from '../lib/status';
 import { gb, rel, daysLeft } from '../lib/format';
+
+const WINDOWS: Array<{ days: number; label: string }> = [
+  { days: 1, label: 'Сутки' },
+  { days: 7, label: 'Неделя' },
+  { days: 30, label: 'Месяц' },
+];
+
+type Metric = 'trafficGb' | 'activeDevices';
+const METRICS: Array<{ key: Metric; label: string }> = [
+  { key: 'trafficGb', label: 'Трафик' },
+  { key: 'activeDevices', label: 'Активность' },
+];
 
 function rowProps(onClick: () => void) {
   return {
@@ -33,9 +49,26 @@ const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'no
 
 export function Dashboard() {
   const { data, loading, loadError, isMobile, goAdmin } = useApp();
+  const [win, setWin] = useState(7);
+  const [metric, setMetric] = useState<Metric>('trafficGb');
+  const [series, setSeries] = useState<StatsPoint[] | null>(null);
+  const [health, setHealth] = useState<ServerHealth[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.getStats(win).then((r) => { if (alive) setSeries(r.series); }).catch(() => { if (alive) setSeries([]); });
+    return () => { alive = false; };
+  }, [win]);
+  useEffect(() => {
+    let alive = true;
+    api.getHealth().then((r) => { if (alive) setHealth(r.servers); }).catch(() => { if (alive) setHealth([]); });
+    return () => { alive = false; };
+  }, []);
 
   if (loadError) return <div className="notice notice-red">{loadError}</div>;
   if (loading || !data) return <Loading text="Загружаем данные…" />;
+
+  const chartPoints = (series ?? []).map((p) => ({ t: new Date(p.at).getTime(), v: p[metric] }));
 
   const { users, devices, servers, jobErrors, adminLog } = data;
 
@@ -87,6 +120,53 @@ export function Dashboard() {
             </div>
           ))}
         </div>
+
+        {/* История: трафик/активность по времени с переключением окна */}
+        <Panel
+          title="История"
+          extra={
+            <div className="chip-row">
+              {METRICS.map((m) => (
+                <Chip key={m.key} label={m.label} size="sm" active={metric === m.key} onClick={() => setMetric(m.key)} />
+              ))}
+            </div>
+          }
+        >
+          <div className="chip-row" style={{ marginBottom: 12 }}>
+            {WINDOWS.map((w) => (
+              <Chip key={w.days} label={w.label} size="sm" active={win === w.days} onClick={() => setWin(w.days)} />
+            ))}
+          </div>
+          {series === null ? (
+            <div className="small muted" style={{ padding: '24px 0', textAlign: 'center' }}>Загрузка…</div>
+          ) : (
+            <AreaChart
+              points={chartPoints}
+              format={metric === 'trafficGb' ? (v) => gb(v) : (v) => String(Math.round(v))}
+            />
+          )}
+        </Panel>
+
+        {/* Здоровье серверов: аптайм за сутки/неделю (в стиле Uptime-мониторинга) */}
+        {health && health.length > 0 ? (
+          <Panel
+            title="Здоровье серверов"
+            extra={<button type="button" style={linkBtn} onClick={() => goAdmin('servers')}>все →</button>}
+            bodyStyle={{ gap: 0 }}
+          >
+            {health.map((h) => (
+              <div key={h.id} className="divide-row">
+                <div className="row" style={{ gap: 10, minWidth: 0 }}>
+                  <Dot color={h.online ? 'var(--green-dot)' : 'var(--red-fg)'} />
+                  <span style={{ fontWeight: 600, ...ellipsis }}>{h.name}{h.country ? ` (${h.country})` : ''}</span>
+                </div>
+                <span className="small muted mono" style={{ flex: 'none' }}>
+                  {h.online ? 'онлайн' : 'офлайн'} · аптайм 24ч {h.uptime24h}% · 7д {h.uptime7d}%
+                </span>
+              </div>
+            ))}
+          </Panel>
+        ) : null}
 
         {trafficRows.length > 0 ? (
           <Panel

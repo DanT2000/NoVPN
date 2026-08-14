@@ -27,6 +27,16 @@ if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.renameSync(config.databasePath, `${config.databasePath}.replaced-${Date.now()}`);
     }
     fs.renameSync(pending, config.databasePath);
+    // Ключ из бэкапа (v2) делаем постоянным: config.ts уже прочитал его для этого
+    // старта, теперь кладём как encryption.key, чтобы следующие старты его использовали.
+    const pendingKey = `${config.databasePath}.pending-key`;
+    if (fs.existsSync(pendingKey)) {
+      try {
+        fs.renameSync(pendingKey, path.join(dir, 'encryption.key'));
+      } catch {
+        /* не удалось — секреты могут не расшифроваться, но БД восстановлена */
+      }
+    }
     console.log('[restore] база восстановлена из бэкапа');
   }
 }
@@ -176,6 +186,29 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TEXT NOT NULL
 );
 
+-- Периодические снимки метрик (для графиков истории: трафик/пользователи/устройства
+-- по дням/неделям/месяцам). Пишется throttled из sync-цикла, старое чистится.
+CREATE TABLE IF NOT EXISTS stats_samples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  traffic_gb REAL NOT NULL DEFAULT 0,
+  active_users INTEGER NOT NULL DEFAULT 0,
+  active_devices INTEGER NOT NULL DEFAULT 0,
+  online_servers INTEGER NOT NULL DEFAULT 0,
+  total_servers INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_stats_at ON stats_samples(at);
+
+-- События смены состояния сервера (online<->offline) — для аптайма/инцидентов
+-- в стиле Uptime Kuma. Пишем ТОЛЬКО при смене состояния (компактно).
+CREATE TABLE IF NOT EXISTS server_status_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  online INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sse_server ON server_status_events(server_id, at);
+
 -- Серверные ключи по ДОМЕНУ — для восстановления при замене сервера.
 -- Если новый сервер поднимается на том же домене, эти ключи подставляются →
 -- старые клиентские конфиги продолжают работать.
@@ -201,7 +234,8 @@ CREATE TABLE IF NOT EXISTS proxy_accounts (
   received_bytes INTEGER NOT NULL DEFAULT 0,
   sent_bytes INTEGER NOT NULL DEFAULT 0,
   rx_raw INTEGER NOT NULL DEFAULT 0,
-  last_seen_at TEXT
+  last_seen_at TEXT,
+  quota_blocked INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
@@ -254,6 +288,12 @@ for (const stmt of [
   // Пир снят с сервера из-за исчерпанной квоты (запись и ключи сохранены). При
   // восстановлении лимита пир возвращается на сервер — reissue не нужен.
   'ALTER TABLE devices ADD COLUMN quota_blocked INTEGER NOT NULL DEFAULT 0',
+  // Уровень записи журнала ошибок: 'error' | 'warn' | 'info' — для красивого вида
+  // и фильтрации логов в админке.
+  "ALTER TABLE job_errors ADD COLUMN level TEXT NOT NULL DEFAULT 'error'",
+  // Прокси-логин снят с сервера по квоте (обратимо, симметрично устройствам): при
+  // возврате под лимит логин поднимается заново тем же паролем. is_active остаётся 1.
+  'ALTER TABLE proxy_accounts ADD COLUMN quota_blocked INTEGER NOT NULL DEFAULT 0',
 ]) {
   try {
     db.exec(stmt);

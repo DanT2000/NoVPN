@@ -2,7 +2,7 @@ import { config } from './config.js';
 import { seedIfEmpty } from './seed.js';
 import { createApp } from './app.js';
 import { startSyncLoop } from './services/sync.js';
-import { startBot } from './services/telegram.js';
+import { startBot, notifyAdmin } from './services/telegram.js';
 import * as repo from './repo.js';
 
 // Панель — долгоживущий сервис управления доступами: одна необработанная ошибка
@@ -37,6 +37,14 @@ if (config.isProd && !process.env.SESSION_SECRET) {
 }
 
 seedIfEmpty();
+
+// Уведомления администратору об ошибках фоновых задач в его Telegram (если задан
+// adminTelegramChatId и включено). Через хук, чтобы repo не зависел от telegram.
+repo.setJobErrorHook((e) => {
+  if (e.level !== 'error') return;
+  if (repo.getSettings().notifyErrors === false) return;
+  void notifyAdmin(`⚠️ ${repo.brandName()}: ошибка\n\n${e.server}: ${e.text}`, { key: `err:${e.server}:${e.text}`.slice(0, 80) }).catch(() => {});
+});
 
 // Одноразово шифруем открытые .conf в БД (AmneziaWG приватный ключ). Идемпотентно.
 try {

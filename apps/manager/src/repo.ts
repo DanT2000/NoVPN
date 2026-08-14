@@ -270,10 +270,26 @@ export function listProxyAccountsOverQuota(): Array<{ id: string; login: string;
     .prepare(
       `SELECT p.id AS id, p.login AS login, p.server_id AS serverId
          FROM proxy_accounts p JOIN users u ON u.id = p.user_id
-        WHERE p.is_active = 1 AND u.deleted_at IS NULL
+        WHERE p.is_active = 1 AND p.quota_blocked = 0 AND u.deleted_at IS NULL
           AND u.traffic_limit_gb IS NOT NULL AND u.traffic_used_gb >= u.traffic_limit_gb`,
     )
     .all() as Array<{ id: string; login: string; serverId: string }>;
+}
+export function setProxyQuotaBlocked(id: string, blocked: boolean): void {
+  db.prepare('UPDATE proxy_accounts SET quota_blocked = ? WHERE id = ?').run(blocked ? 1 : 0, id);
+}
+/** Прокси-логины, снятые по квоте (quota_blocked=1), чей пользователь СНОВА под лимитом —
+ *  поднять логин на сервере тем же паролем (симметрия с AWG/Xray restore). */
+export function listProxyAccountsToRestore(): Array<{ id: string; login: string; pass: string; serverId: string }> {
+  const rows = db
+    .prepare(
+      `SELECT p.id AS id, p.login AS login, p.pass_enc AS passEnc, p.server_id AS serverId
+         FROM proxy_accounts p JOIN users u ON u.id = p.user_id
+        WHERE p.quota_blocked = 1 AND p.is_active = 1 AND u.deleted_at IS NULL AND u.is_active = 1
+          AND (u.traffic_limit_gb IS NULL OR u.traffic_used_gb < u.traffic_limit_gb)`,
+    )
+    .all() as Array<{ id: string; login: string; passEnc: string; serverId: string }>;
+  return rows.map((r) => ({ id: r.id, login: r.login, serverId: r.serverId, pass: decryptSecret(r.passEnc) }));
 }
 /** Устройства (AWG/Xray) пользователей, ИСЧЕРПАВШИХ квоту — их пир/uuid надо снять с
  *  сервера (иначе уже импортированный конфиг тоннелит сверх лимита). Ключи/запись в
@@ -811,14 +827,131 @@ export function listLog(limit = 30): LogEntry[] {
   return db.prepare('SELECT at, text FROM admin_log ORDER BY id DESC LIMIT ?').all(limit) as LogEntry[];
 }
 export function listJobErrors(limit = 20): JobError[] {
-  return db.prepare('SELECT at, server, text FROM job_errors ORDER BY id DESC LIMIT ?').all(limit) as JobError[];
+  return db.prepare('SELECT at, server, text, level FROM job_errors ORDER BY id DESC LIMIT ?').all(limit) as JobError[];
 }
-/** Записать реальную ошибку фоновой операции (установка/синхронизация) — видна на «Обзоре». */
-export function addJobError(server: string, text: string): void {
-  db.prepare('INSERT INTO job_errors(at, server, text) VALUES(?,?,?)').run(nowIso(), server, text.slice(0, 300));
-  // держим только последние 50
-  db.prepare('DELETE FROM job_errors WHERE id NOT IN (SELECT id FROM job_errors ORDER BY id DESC LIMIT 50)').run();
+// Хук на новую запись журнала (регистрируется в index.ts → Telegram-уведомление).
+// Через хук, а не прямой импорт telegram, чтобы не плодить цикл repo↔telegram.
+let jobErrorHook: ((e: JobError) => void) | null = null;
+export function setJobErrorHook(fn: ((e: JobError) => void) | null): void {
+  jobErrorHook = fn;
 }
+/** Записать запись журнала фоновой операции (установка/синхронизация) — видна в «Логах».
+ *  level: 'error' (по умолчанию) | 'warn' | 'info'. */
+export function addJobError(server: string, text: string, level: 'error' | 'warn' | 'info' = 'error'): JobError {
+  const at = nowIso();
+  const t = text.slice(0, 300);
+  db.prepare('INSERT INTO job_errors(at, server, text, level) VALUES(?,?,?,?)').run(at, server, t, level);
+  // держим только последние 100
+  db.prepare('DELETE FROM job_errors WHERE id NOT IN (SELECT id FROM job_errors ORDER BY id DESC LIMIT 100)').run();
+  const rec: JobError = { at, server, text: t, level };
+  try {
+    jobErrorHook?.(rec);
+  } catch {
+    /* уведомление не должно ломать запись лога */
+  }
+  return rec;
+}
+
+/** Текст ежедневной сводки администратору: трафик, активные пользователи/устройства,
+ *  статус серверов, ошибки за сутки. Возвращает null, если сводку слать не нужно
+ *  (сегодня уже слали). Идемпотентно по дню через meta last_digest_day. */
+export function buildDailyDigestIfDue(): string | null {
+  const today = nowIso().slice(0, 10); // YYYY-MM-DD (UTC)
+  const lastDay = getSetting<string>('last_digest_day', '');
+  if (lastDay === today) return null;
+  setSetting('last_digest_day', today);
+  if (!lastDay) return null; // первый запуск — не слать «пустую» сводку, просто отметить день
+  const num = (sql: string, ...a: unknown[]) => (db.prepare(sql).get(...a) as { n: number }).n;
+  const now = nowIso();
+  const dayAgo = new Date(Date.now() - 86400000).toISOString();
+  const traffic = num('SELECT COALESCE(SUM(traffic_gb),0) AS n FROM servers');
+  const activeUsers = num("SELECT COUNT(*) AS n FROM users WHERE deleted_at IS NULL AND is_active=1 AND (expires_at IS NULL OR expires_at > ?) AND (traffic_limit_gb IS NULL OR traffic_used_gb < traffic_limit_gb)", now);
+  const activeDevices = num('SELECT COUNT(*) AS n FROM devices d JOIN users u ON u.id=d.user_id WHERE d.is_active=1 AND u.deleted_at IS NULL');
+  const online = num("SELECT COUNT(*) AS n FROM servers WHERE agent='online'");
+  const total = num('SELECT COUNT(*) AS n FROM servers');
+  const errors = num('SELECT COUNT(*) AS n FROM job_errors WHERE at >= ? AND level = ?', dayAgo, 'error');
+  const brand = brandName();
+  return (
+    `📊 ${brand} — сводка за сутки\n\n` +
+    `• Трафик суммарно: ${traffic.toFixed(1)} ГБ\n` +
+    `• Активные пользователи: ${activeUsers}\n` +
+    `• Активные конфиги: ${activeDevices}\n` +
+    `• Серверы онлайн: ${online} из ${total}\n` +
+    `• Ошибки за сутки: ${errors}` +
+    (errors > 0 ? ' ⚠️' : ' ✅')
+  );
+}
+// ── статистика/аптайм (для графиков истории и мониторинга здоровья) ──
+
+/** Снимок метрик в stats_samples. Throttled (по умолчанию не чаще раза в 9 мин),
+ *  вызывается из sync-цикла. Старое (>120 дней) чистится. */
+export function recordStatsSample(minGapMin = 9): void {
+  const last = db.prepare('SELECT at FROM stats_samples ORDER BY id DESC LIMIT 1').get() as { at: string } | undefined;
+  if (last && Date.now() - new Date(last.at).getTime() < minGapMin * 60000) return;
+  const now = nowIso();
+  const num = (sql: string, ...a: unknown[]) => (db.prepare(sql).get(...a) as { n: number }).n;
+  const traffic = num('SELECT COALESCE(SUM(traffic_gb),0) AS n FROM servers');
+  const activeUsers = num(
+    "SELECT COUNT(*) AS n FROM users WHERE deleted_at IS NULL AND is_active=1 AND (expires_at IS NULL OR expires_at > ?) AND (traffic_limit_gb IS NULL OR traffic_used_gb < traffic_limit_gb)",
+    now,
+  );
+  const activeDevices = num('SELECT COUNT(*) AS n FROM devices d JOIN users u ON u.id=d.user_id WHERE d.is_active=1 AND u.deleted_at IS NULL');
+  const online = num("SELECT COUNT(*) AS n FROM servers WHERE agent='online'");
+  const total = num('SELECT COUNT(*) AS n FROM servers');
+  db.prepare('INSERT INTO stats_samples(at,traffic_gb,active_users,active_devices,online_servers,total_servers) VALUES(?,?,?,?,?,?)').run(now, traffic, activeUsers, activeDevices, online, total);
+  db.prepare('DELETE FROM stats_samples WHERE at < ?').run(new Date(Date.now() - 120 * 86400000).toISOString());
+}
+
+export interface StatsSample { at: string; trafficGb: number; activeUsers: number; activeDevices: number; onlineServers: number; totalServers: number }
+export function getStatsSeries(sinceMs: number): StatsSample[] {
+  const since = new Date(Date.now() - sinceMs).toISOString();
+  return db
+    .prepare('SELECT at, traffic_gb AS trafficGb, active_users AS activeUsers, active_devices AS activeDevices, online_servers AS onlineServers, total_servers AS totalServers FROM stats_samples WHERE at >= ? ORDER BY at ASC')
+    .all(since) as StatsSample[];
+}
+
+/** Событие смены состояния сервера — пишем только при изменении (компактно). */
+export function recordServerStatus(serverId: string, online: boolean): void {
+  const last = db.prepare('SELECT online FROM server_status_events WHERE server_id=? ORDER BY id DESC LIMIT 1').get(serverId) as { online: number } | undefined;
+  const cur = online ? 1 : 0;
+  if (!last || last.online !== cur) {
+    db.prepare('INSERT INTO server_status_events(server_id,at,online) VALUES(?,?,?)').run(serverId, nowIso(), cur);
+    db.prepare('DELETE FROM server_status_events WHERE server_id=? AND id NOT IN (SELECT id FROM server_status_events WHERE server_id=? ORDER BY id DESC LIMIT 200)').run(serverId, serverId);
+  }
+}
+
+/** Аптайм сервера за окно (мс). Считаем только по НАБЛЮДАЁМОМУ периоду (с первого
+ *  события в окне), чтобы не выдумывать историю до начала мониторинга. */
+export function serverUptime(serverId: string, windowMs: number, currentOnline: boolean): { uptimePct: number; changes: number; lastChangeAt: string | null } {
+  const now = Date.now();
+  const start = now - windowMs;
+  const evs = db.prepare('SELECT at, online FROM server_status_events WHERE server_id=? ORDER BY at ASC').all(serverId) as Array<{ at: string; online: number }>;
+  if (evs.length === 0) return { uptimePct: currentOnline ? 100 : 0, changes: 0, lastChangeAt: null };
+  const firstTs = new Date(evs[0]!.at).getTime();
+  const effStart = Math.max(start, firstTs);
+  let state = evs[0]!.online;
+  let idx = 0;
+  for (; idx < evs.length; idx++) {
+    const t = new Date(evs[idx]!.at).getTime();
+    if (t <= effStart) state = evs[idx]!.online;
+    else break;
+  }
+  let lastTs = effStart;
+  let onlineMs = 0;
+  let changes = 0;
+  for (; idx < evs.length; idx++) {
+    const t = new Date(evs[idx]!.at).getTime();
+    if (t > now) break;
+    if (state) onlineMs += t - lastTs;
+    lastTs = t;
+    state = evs[idx]!.online;
+    changes++;
+  }
+  if (state) onlineMs += now - lastTs;
+  const total = now - effStart;
+  return { uptimePct: total > 0 ? Math.max(0, Math.min(100, (onlineMs / total) * 100)) : (currentOnline ? 100 : 0), changes, lastChangeAt: evs[evs.length - 1]!.at };
+}
+
 export function addHistory(userId: string, text: string): void {
   db.prepare('INSERT INTO user_history(user_id, at, text) VALUES(?, ?, ?)').run(userId, nowIso(), text);
 }
@@ -886,8 +1019,17 @@ export function listDevicesOfUser(userId: string): Device[] {
 export function subscriptionXrayLinks(userId: string): string[] {
   const seen = new Set<string>();
   const links: string[] = [];
+  // Защита на чтении: подписка отдаёт конфиги ТОЛЬКО с серверов/протоколов, которые
+  // пользователю разрешены СЕЙЧАС. Иначе сужение allowedServers/allowedProtocols в
+  // профиле не убирало бы уже выданные out-of-scope конфиги из подписки до серверного
+  // отзыва (functional-test #1). Xray в allowedProtocols — обязательное условие.
+  const u = getUser(userId);
+  const xrayAllowed = !u || u.allowedProtocols.includes('xray');
+  const allowedServers = u ? new Set(u.allowedServers) : null;
   for (const d of listDevicesOfUser(userId)) {
     if (!d.isActive || d.protocol !== 'xray' || !d.link) continue;
+    if (!xrayAllowed) continue;
+    if (allowedServers && allowedServers.size > 0 && !allowedServers.has(d.serverId)) continue;
     if (seen.has(d.serverId)) continue;
     seen.add(d.serverId);
     links.push(d.link);

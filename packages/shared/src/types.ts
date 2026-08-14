@@ -187,6 +187,15 @@ export interface AppSettings {
    *  умолчанию ВЫКЛ (LAN идёт напрямую/мимо, как и было). Включают для self-host
    *  дома, когда нужен доступ к домашним устройствам через VPN. */
   lanAccess?: boolean;
+  /** Telegram-ID администратора (узнаётся командой /id у бота). На него бот шлёт
+   *  уведомления об ошибках и ежедневную сводку. Управление панелью — только в вебе. */
+  adminTelegramChatId?: string;
+  /** Слать администратору уведомления об ошибках фоновых задач (по умолчанию ВКЛ,
+   *  если задан adminTelegramChatId). */
+  notifyErrors?: boolean;
+  /** Слать администратору ежедневную сводку (трафик/пользователи/ошибки). По умолчанию
+   *  ВКЛ, если задан adminTelegramChatId. */
+  dailyDigest?: boolean;
 }
 
 export interface LogEntry {
@@ -198,6 +207,8 @@ export interface JobError {
   at: string;
   server: string;
   text: string;
+  /** Уровень записи журнала: 'error' | 'warn' | 'info'. Старые записи — без поля (error). */
+  level?: 'error' | 'warn' | 'info';
 }
 
 export interface Job {

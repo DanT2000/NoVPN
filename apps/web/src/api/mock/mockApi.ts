@@ -498,4 +498,40 @@ export const mockApi: ApiClient = {
     state.settings = clone(input);
     return clone(state.settings);
   },
+  async getStats(days: number) {
+    await wait(200);
+    // Синтетическая история для демо/скриншотов: плавный рост трафика + суточные пики.
+    const now = Date.now();
+    const points = Math.min(180, Math.max(24, days * 6)); // ~6 точек/день
+    const stepMs = (days * 86400000) / points;
+    const baseTraffic = state.servers.reduce((s, v) => s + (v.trafficGb || 0), 0) || 400;
+    const series = Array.from({ length: points }, (_, i) => {
+      const t = now - (points - 1 - i) * stepMs;
+      const phase = (i / points) * Math.PI * 2 * days;
+      const daily = 0.55 + 0.45 * Math.sin(phase - Math.PI / 2); // суточная волна 0..1
+      const growth = 0.6 + 0.4 * (i / points);
+      return {
+        at: new Date(t).toISOString(),
+        trafficGb: Math.round(baseTraffic * growth * (0.7 + 0.3 * daily) * 10) / 10,
+        activeUsers: Math.round(2 + 3 * daily),
+        activeDevices: Math.round(4 + 4 * daily),
+        onlineServers: state.servers.filter((s) => s.agent === 'online').length,
+        totalServers: state.servers.length,
+      };
+    });
+    return { days, series };
+  },
+  async getHealth() {
+    await wait(200);
+    const servers = state.servers.map((s, i) => {
+      const online = s.agent === 'online';
+      return {
+        id: s.id, name: s.name, country: s.country ?? null, online, lastSyncAt: s.lastSyncAt ?? null, endpointOk: s.endpointOk,
+        uptime24h: online ? [99.9, 100, 98.7][i % 3]! : 41.2,
+        uptime7d: online ? [99.6, 99.9, 97.4][i % 3]! : 63.5,
+        lastChangeAt: s.lastSyncAt ?? null,
+      };
+    });
+    return { servers };
+  },
 };

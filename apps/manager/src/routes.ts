@@ -584,7 +584,25 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
     fields.allowed_proxies = JSON.stringify(
       (Array.isArray(b.allowedProxies) ? (b.allowedProxies as string[]) : []).filter((p) => p === 'http' || p === 'https' || p === 'socks5'),
     );
-  res.json(repo.updateUserFields(u.id, fields));
+  const updated = repo.updateUserFields(u.id, fields);
+  // Сузили allowedServers/allowedProtocols → уже выданные конфиги вне нового списка
+  // помечаем на отзыв (is_active=0, revoke_pending=1): sync-цикл снимет их с сервера
+  // (retry-проход). Подписка их уже не отдаёт (см. subscriptionXrayLinks). Fix #1.
+  if (updated && (b.allowedServers !== undefined || b.allowedProtocols !== undefined)) {
+    const okServers = new Set(updated.allowedServers);
+    const okProtos = new Set(updated.allowedProtocols);
+    let revoked = 0;
+    for (const d of repo.listDevicesOfUser(u.id)) {
+      if (!d.isActive) continue;
+      const outOfScope = (okServers.size > 0 && !okServers.has(d.serverId)) || !okProtos.has(d.protocol as (typeof updated.allowedProtocols)[number]);
+      if (outOfScope) {
+        repo.updateDeviceFields(d.id, { is_active: 0, revoke_pending: 1, revoked_at: null });
+        revoked += 1;
+      }
+    }
+    if (revoked) repo.addLog(`Профиль «${updated.name}»: снято ${revoked} конфиг(ов) вне разрешённых серверов/протоколов`);
+  }
+  res.json(updated);
 });
 
 // Перевыпуск личной ссылки: старая сразу перестаёт работать.
@@ -1118,6 +1136,25 @@ router.put('/api/admin/settings', requireAdmin, (req, res) => {
   res.json(repo.saveSettings(next));
 });
 
+// ── admin: графики истории + здоровье/аптайм серверов ──
+router.get('/api/admin/stats', requireAdmin, (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
+  res.json({ days, series: repo.getStatsSeries(days * 86400000) });
+});
+router.get('/api/admin/health', requireAdmin, (_req, res) => {
+  const servers = repo.listServers().map((s) => {
+    const online = s.agent === 'online';
+    const u24 = repo.serverUptime(s.id, 86400000, online);
+    const u7 = repo.serverUptime(s.id, 7 * 86400000, online);
+    return {
+      id: s.id, name: s.name, country: s.country ?? null, online, lastSyncAt: s.lastSyncAt ?? null, endpointOk: s.endpointOk,
+      uptime24h: Math.round(u24.uptimePct * 10) / 10, uptime7d: Math.round(u7.uptimePct * 10) / 10,
+      lastChangeAt: u24.lastChangeAt,
+    };
+  });
+  res.json({ servers });
+});
+
 // ── admin: бэкап базы ──
 // Скачать зашифрованный паролем бэкап. Файл самодостаточен: восстанавливается
 // на новой панели с любым ENCRYPTION_KEY.
@@ -1143,8 +1180,8 @@ router.post('/api/admin/backup/restore', requireAdmin, (req, res) => {
     const b64 = String(req.body?.file ?? '');
     if (!b64) return res.status(400).json(err('validation', 'Файл не передан.'));
     const buf = Buffer.from(b64, 'base64');
-    const sqliteBytes = decryptBackup(buf, password);
-    const { users } = restoreBackup(sqliteBytes);
+    const { sqlite, encKey } = decryptBackup(buf, password);
+    const { users } = restoreBackup(sqlite, encKey);
     repo.addLog(`Восстановление из бэкапа (${users} пользователей) — перезапуск`);
     res.json({ ok: true, users });
     // Даём ответу уйти и перезапускаемся: db.ts подхватит .pending-restore.

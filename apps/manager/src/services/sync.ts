@@ -4,8 +4,9 @@
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
 import * as repo from '../repo.js';
-import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshResyncDevices, sshSetXraySni, REALITY_SNI } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshAddProxyUser, sshResyncDevices, sshSetXraySni, REALITY_SNI } from './sshServer.js';
 import { getServerKeys } from './keyvault.js';
+import { notifyAdmin } from './telegram.js';
 
 const PROXY_PROTOS = ['http', 'https', 'socks5'];
 
@@ -224,9 +225,10 @@ export async function syncAllServers(): Promise<void> {
       for (const uid of affected) repo.recomputeUserUsage(uid);
     }
 
-    // Квота исчерпана → гасим прокси-логины на серверах: выдача новых уже блокируется
-    // при выпуске, а сохранённые creds иначе работали бы сверх лимита. Деактивируем в БД
-    // ТОЛЬКО после подтверждённого удаления логина на сервере (иначе живой логин осиротеет).
+    // Квота исчерпана → гасим прокси-логины на серверах ОБРАТИМО (quota_blocked=1,
+    // is_active остаётся 1), симметрично AWG/Xray. При возврате под лимит логин
+    // поднимается заново тем же паролем. Флаг ставим ТОЛЬКО после подтверждённого
+    // снятия на сервере (иначе живой логин осиротеет сверх квоты).
     try {
       for (const acc of repo.listProxyAccountsOverQuota()) {
         const server = repo.getServer(acc.serverId);
@@ -234,13 +236,24 @@ export async function syncAllServers(): Promise<void> {
         if (!(await sshHasSshAccess(server.id))) continue; // недоступен — повторим в следующем цикле
         try {
           await sshRevokeProxyUser(server, acc.login);
-          repo.deactivateProxyAccount(acc.id);
+          repo.setProxyQuotaBlocked(acc.id, true);
         } catch {
-          /* сервер недоступен — оставим активным, повторим в следующем цикле */
+          /* сервер недоступен — повторим в следующем цикле */
+        }
+      }
+      // Возврат под лимит → поднимаем снятые по квоте прокси-логины обратно.
+      for (const acc of repo.listProxyAccountsToRestore()) {
+        const server = repo.getServer(acc.serverId);
+        if (!server || !(await sshHasSshAccess(server.id))) continue;
+        try {
+          await sshAddProxyUser(server, acc.login, acc.pass);
+          repo.setProxyQuotaBlocked(acc.id, false);
+        } catch {
+          /* недоступен — повторим */
         }
       }
     } catch (e) {
-      repo.addJobError('панель', `Гашение прокси по квоте: ${e instanceof Error ? e.message : 'ошибка'}`);
+      repo.addJobError('панель', `Enforcement прокси по квоте: ${e instanceof Error ? e.message : 'ошибка'}`);
     }
 
     // Квота по AmneziaWG/Xray: снимаем пир/uuid С СЕРВЕРА при исчерпании лимита (иначе
@@ -283,6 +296,19 @@ export async function syncAllServers(): Promise<void> {
       }
     } catch (e) {
       repo.addJobError('панель', `Enforcement квоты AWG/Xray: ${e instanceof Error ? e.message : 'ошибка'}`);
+    }
+
+    // Мониторинг: аптайм серверов (событие при смене online/offline), снимок метрик
+    // для графиков истории, и ежедневная сводка администратору в Telegram.
+    try {
+      for (const s of repo.listServers()) repo.recordServerStatus(s.id, s.agent === 'online');
+      repo.recordStatsSample();
+      if (repo.getSettings().dailyDigest !== false) {
+        const digest = repo.buildDailyDigestIfDue();
+        if (digest) void notifyAdmin(digest, { key: 'daily-digest', minGapMs: 0 }).catch(() => {});
+      }
+    } catch (e) {
+      repo.addJobError('панель', `Мониторинг/сводка: ${e instanceof Error ? e.message : 'ошибка'}`, 'warn');
     }
   } finally {
     running = false;

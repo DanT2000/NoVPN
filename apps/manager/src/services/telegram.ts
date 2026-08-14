@@ -256,6 +256,34 @@ const CONSEC_FAIL_ABORT = 5; // подряд столько провалов ⇒
 /** Экстренная рассылка всем активным привязанным пользователям (по одному сообщению).
  *  Последовательно, с паузой (лимит Telegram ~30 сообщений/сек). Заблокировавшие бота
  *  молча пропускаются. При мёртвом токене/прокси прекращает рано, а не висит часами. */
+// Уведомления администратору (ошибки + ежедневная сводка) в его личный чат.
+// Чат берём из настроек (adminTelegramChatId — свой Telegram-ID, узнаётся через /id).
+// Управление осталось в веб-панели; сюда приходят ТОЛЬКО уведомления, не команды.
+const notifyThrottle = new Map<string, number>();
+export async function notifyAdmin(text: string, opts: { key?: string; minGapMs?: number } = {}): Promise<void> {
+  let chatId = '';
+  let enabled = false;
+  try {
+    chatId = String(repo.getSettings().adminTelegramChatId || '').trim();
+    enabled = !!repo.getTelegram()?.enabled;
+  } catch {
+    return;
+  }
+  if (!enabled || !chatId || !getToken()) return;
+  // Троттлинг одинаковых уведомлений (одна и та же ошибка каждую минуту → одно сообщение).
+  const key = opts.key ?? text;
+  const gap = opts.minGapMs ?? 5 * 60 * 1000;
+  const now = Date.now();
+  if (now - (notifyThrottle.get(key) ?? 0) < gap) return;
+  notifyThrottle.set(key, now);
+  if (notifyThrottle.size > 200) notifyThrottle.clear();
+  try {
+    await tgApi('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true }, undefined, AbortSignal.timeout(15000));
+  } catch {
+    /* бот/сеть недоступны — уведомление не критично */
+  }
+}
+
 export async function broadcastToLinked(text: string): Promise<{ total: number; sent: number; failed: number; aborted: boolean }> {
   const body = text.trim();
   if (!body) throw new Error('Пустое сообщение.');

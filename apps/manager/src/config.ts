@@ -18,6 +18,18 @@ const dataDir = path.dirname(databasePath);
  *  и переживёт рестарты (иначе зашифрованные секреты стали бы нечитаемы). Продвинутый
  *  пользователь по-прежнему может задать ENCRYPTION_KEY через окружение. */
 function resolveEncryptionKey(): string {
+  // Восстановление из бэкапа (v2): рядом лежит и снимок БД, и его ENCRYPTION_KEY.
+  // Берём ключ из бэкапа (иначе секреты восстановленной базы не расшифруются даже с
+  // ENV/автоключом нового хоста). db.ts затем сделает ключ постоянным.
+  try {
+    const pendingKey = `${databasePath}.pending-key`;
+    if (fs.existsSync(pendingKey) && fs.existsSync(`${databasePath}.pending-restore`)) {
+      const k = fs.readFileSync(pendingKey, 'utf8').trim();
+      if (k) return k;
+    }
+  } catch {
+    /* нет файлов восстановления */
+  }
   const fromEnv = env('ENCRYPTION_KEY', '').trim();
   if (fromEnv) return fromEnv;
   const keyFile = path.join(dataDir, 'encryption.key');

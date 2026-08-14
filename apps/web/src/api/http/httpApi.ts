@@ -24,7 +24,9 @@ import type {
   EditServerInput,
   Ok,
   SaveTelegramInput,
+  ServerHealth,
   ServerProxyConfig,
+  StatsPoint,
   UpdateUserPatch,
 } from '../types';
 
@@ -130,4 +132,6 @@ export const httpApi: ApiClient = {
   },
   deleteAppFile: (appId, platform) => req<AppClient>('DELETE', `/api/admin/apps/${appId}/${encodeURIComponent(platform)}/file`),
   saveSettings: (input: AppSettings) => req<AppSettings>('PUT', '/api/admin/settings', input),
+  getStats: (days: number) => req<{ days: number; series: StatsPoint[] }>('GET', `/api/admin/stats?days=${days}`),
+  getHealth: () => req<{ servers: ServerHealth[] }>('GET', '/api/admin/health'),
 };

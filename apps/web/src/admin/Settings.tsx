@@ -36,6 +36,10 @@ export function Settings() {
   const [xrayWhitelist, setXrayWhitelist] = useState(s?.xrayWhitelist !== false);
   // Доступ клиента в локальную сеть сервера через туннель. По умолчанию ВЫКЛ.
   const [lanAccess, setLanAccess] = useState(s?.lanAccess === true);
+  // Уведомления администратору в Telegram (по adminTelegramChatId — свой ID из /id).
+  const [adminChatId, setAdminChatId] = useState(s?.adminTelegramChatId ?? '');
+  const [notifyErrors, setNotifyErrors] = useState(s?.notifyErrors !== false);
+  const [dailyDigest, setDailyDigest] = useState(s?.dailyDigest !== false);
   // Редактируемый список доменов обхода (по строке на домен). Если у панели он ещё не
   // задан явно — префилл встроенным дефолтом (146 доменов), чтобы админ видел и правил их.
   const wlDefaultText = RU_WHITELIST_ROUTES.join('\n');
@@ -187,6 +191,9 @@ export function Settings() {
     xrayWhitelist !== (s.xrayWhitelist !== false) ||
     brandName !== (s.brandName ?? '') ||
     lanAccess !== (s.lanAccess === true) ||
+    adminChatId !== (s.adminTelegramChatId ?? '') ||
+    notifyErrors !== (s.notifyErrors !== false) ||
+    dailyDigest !== (s.dailyDigest !== false) ||
     whitelistText !== wlInitial;
 
   const save = async () => {
@@ -206,6 +213,9 @@ export function Settings() {
         xrayWhitelist,
         brandName: brandName.trim(),
         lanAccess,
+        adminTelegramChatId: adminChatId.trim(),
+        notifyErrors,
+        dailyDigest,
         // Совпадает со встроенным → пусто (не морозим список, ловим обновления из кода).
         whitelistDomains: wlIsBuiltin ? [] : wlLines,
       };
@@ -375,6 +385,34 @@ export function Settings() {
           <div className="chip-row">
             <Chip label={lanAccess ? 'Разрешён' : 'Закрыт'} active={lanAccess} onClick={() => setLanAccess((v) => !v)} />
           </div>
+        </Panel>
+
+        {/* Уведомления администратору в Telegram */}
+        <Panel title="Уведомления администратору (Telegram)">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Бот будет присылать вам уведомления об ошибках и ежедневную сводку (трафик,
+            пользователи, серверы). Управление панелью — только здесь, в вебе; в Telegram
+            приходят <b>только уведомления</b>. Узнать свой Telegram-ID: напишите боту
+            команду <span className="mono">/id</span>. Нужно, чтобы бот был включён в разделе «Telegram».
+          </div>
+          <Field label="Ваш Telegram-ID">
+            <input
+              className="input mono"
+              placeholder="напр. 123456789"
+              inputMode="numeric"
+              value={adminChatId}
+              onChange={(e) => setAdminChatId(e.target.value)}
+            />
+          </Field>
+          <div className="chip-row" style={{ marginTop: 8 }}>
+            <Chip label={notifyErrors ? 'Ошибки: вкл' : 'Ошибки: выкл'} active={notifyErrors} onClick={() => setNotifyErrors((v) => !v)} />
+            <Chip label={dailyDigest ? 'Сводка за сутки: вкл' : 'Сводка за сутки: выкл'} active={dailyDigest} onClick={() => setDailyDigest((v) => !v)} />
+          </div>
+          {!adminChatId.trim() ? (
+            <div className="body small muted" style={{ marginTop: 6 }}>
+              Пусто — уведомления не отправляются.
+            </div>
+          ) : null}
         </Panel>
 
         {/* Шаблон */}
