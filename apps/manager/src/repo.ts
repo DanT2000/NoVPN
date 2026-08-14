@@ -275,6 +275,43 @@ export function listProxyAccountsOverQuota(): Array<{ id: string; login: string;
     )
     .all() as Array<{ id: string; login: string; serverId: string }>;
 }
+/** Устройства (AWG/Xray) пользователей, ИСЧЕРПАВШИХ квоту — их пир/uuid надо снять с
+ *  сервера (иначе уже импортированный конфиг тоннелит сверх лимита). Ключи/запись в
+ *  БД сохраняются (quota_blocked=1) — при восстановлении лимита пир вернётся без reissue. */
+export function listDevicesToBlockForQuota(): Array<{ id: string; serverId: string; protocol: string }> {
+  return db
+    .prepare(
+      `SELECT d.id AS id, d.server_id AS serverId, d.protocol AS protocol
+         FROM devices d JOIN users u ON u.id = d.user_id
+        WHERE d.is_active = 1 AND d.quota_blocked = 0 AND u.deleted_at IS NULL
+          AND d.protocol IN ('xray','amneziawg')
+          AND u.traffic_limit_gb IS NOT NULL AND u.traffic_used_gb >= u.traffic_limit_gb`,
+    )
+    .all() as Array<{ id: string; serverId: string; protocol: string }>;
+}
+/** Устройства, снятые по квоте (quota_blocked=1), чей пользователь СНОВА под лимитом —
+ *  вернуть пир на сервер (тем же ключом → клиентский .conf работает без изменений). */
+export function listDevicesToRestoreFromQuota(): Array<{
+  id: string; serverId: string; name: string; protocol: string; uuid: string | null; awgPub: string | null; clientIp: string | null; psk: string | null;
+}> {
+  const rows = db
+    .prepare(
+      `SELECT d.id AS id, d.server_id AS serverId, d.name AS name, d.protocol AS protocol, d.uuid AS uuid,
+              d.public_key AS awgPub, d.client_ip AS clientIp, d.preshared_key_enc AS pskEnc
+         FROM devices d JOIN users u ON u.id = d.user_id
+        WHERE d.quota_blocked = 1 AND d.is_active = 1 AND u.deleted_at IS NULL AND u.is_active = 1
+          AND (u.traffic_limit_gb IS NULL OR u.traffic_used_gb < u.traffic_limit_gb)`,
+    )
+    .all() as Array<{ id: string; serverId: string; name: string; protocol: string; uuid: string | null; awgPub: string | null; clientIp: string | null; pskEnc: string | null }>;
+  return rows.map((r) => ({
+    id: r.id, serverId: r.serverId, name: r.name, protocol: r.protocol, uuid: r.uuid, awgPub: r.awgPub,
+    clientIp: r.clientIp, psk: r.pskEnc ? decryptSecret(r.pskEnc) : null,
+  }));
+}
+export function setQuotaBlocked(id: string, blocked: boolean): void {
+  db.prepare('UPDATE devices SET quota_blocked = ? WHERE id = ?').run(blocked ? 1 : 0, id);
+}
+
 /** Деактивировать ВСЕ прокси-аккаунты пользователя (при отключении/удалении). */
 export function deactivateUserProxyAccounts(userId: string): void {
   db.prepare('UPDATE proxy_accounts SET is_active = 0 WHERE user_id = ? AND is_active = 1').run(userId);

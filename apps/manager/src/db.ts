@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS devices (
   created_at TEXT NOT NULL,
   revoked_at TEXT,
   revoke_pending INTEGER NOT NULL DEFAULT 0,
+  quota_blocked INTEGER NOT NULL DEFAULT 0,
   os_hint TEXT,
   source TEXT DEFAULT 'managed',
   management_level TEXT DEFAULT 'managed',
@@ -250,6 +251,9 @@ for (const stmt of [
   // по SSH не удался (сервер был недоступен). Такие НЕ чистим (revoked_at не ставим,
   // иначе осиротеет живой конфиг), а повторяем отзыв в sync до подтверждения.
   'ALTER TABLE devices ADD COLUMN revoke_pending INTEGER NOT NULL DEFAULT 0',
+  // Пир снят с сервера из-за исчерпанной квоты (запись и ключи сохранены). При
+  // восстановлении лимита пир возвращается на сервер — reissue не нужен.
+  'ALTER TABLE devices ADD COLUMN quota_blocked INTEGER NOT NULL DEFAULT 0',
 ]) {
   try {
     db.exec(stmt);

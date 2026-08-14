@@ -1,7 +1,7 @@
 // Генерация полного Xray-конфига: обход «белых списков» + аварийный фоллбэк.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildWhitelistXrayConfig, RU_WHITELIST_ROUTES } from '@novpn/shared';
+import { buildWhitelistXrayConfig, normalizeWhitelistRoutes, RU_WHITELIST_ROUTES } from '@novpn/shared';
 import type { ProxyFallback } from '@novpn/shared';
 
 const LINK =
@@ -35,6 +35,26 @@ test('buildWhitelistXrayConfig: reality-outbound + маршрутизация (�
   assert.ok(!cfg.balancers && !cfg.observatory);
   const last = cfg.routing.rules[cfg.routing.rules.length - 1];
   assert.equal(last.outboundTag, 'proxy-t0-0');
+});
+
+test('редактируемый список доменов: кастомные маршруты попадают в direct-правило', () => {
+  const custom = ['domain:example.com', ' ', '# коммент', 'plain.ru', 'domain:example.com'];
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '', custom));
+  const directRule = cfg.routing.rules.find((r: any) => r.domain && r.outboundTag === 'direct');
+  assert.deepEqual(directRule.domain, ['domain:example.com', 'domain:plain.ru']); // trim/comment/пусто отброшены, bare → domain:, дедуп
+});
+
+test('редактируемый список доменов: пустой/мусорный список → дефолт RU_WHITELIST_ROUTES', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '', ['   ', '# только комментарий']));
+  const directRule = cfg.routing.rules.find((r: any) => r.domain && r.outboundTag === 'direct');
+  assert.equal(directRule.domain.length, RU_WHITELIST_ROUTES.length); // fallback на дефолт, не пусто
+});
+
+test('normalizeWhitelistRoutes: trim, префикс domain:, дедуп, отброс комментариев', () => {
+  assert.deepEqual(
+    normalizeWhitelistRoutes(['ya.ru', 'domain:ya.ru', '  vk.com  ', '', '# c', 'geosite:ru']),
+    ['domain:ya.ru', 'domain:vk.com', 'geosite:ru'],
+  );
 });
 
 test('buildWhitelistXrayConfig: несколько Xray-серверов без прокси — балансировщик по тиру 0', () => {

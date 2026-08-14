@@ -139,7 +139,8 @@ router.get('/sub/:token/full', (req, res) => {
   const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
   const flag = (primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '';
   const title = primarySrv ? [flag, primarySrv.name].filter(Boolean).join(' ') : '';
-  const json = buildWhitelistXrayConfig(links, config.appName, proxies, title);
+  // Список доменов обхода — из редактируемой настройки (пусто/absent → дефолт в билдере).
+  const json = buildWhitelistXrayConfig(links, config.appName, proxies, title, repo.getSettings().whitelistDomains);
   if (!json) return res.status(404).send(''); // все ссылки битые → не отдаём all-direct утечку
   // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
   // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.

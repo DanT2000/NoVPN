@@ -175,6 +175,10 @@ export interface AppSettings {
    *  По умолчанию ВКЛ. Выключение → обычная подписка (только ссылки, без обхода).
    *  Отсутствие поля трактуется как ВКЛ (для уже созданных панелей). */
   xrayWhitelist: boolean;
+  /** Редактируемый из админки список доменов обхода (по строке на домен: «ya.ru»
+   *  или «domain:ya.ru»/«full:go.yandex»). Пусто/отсутствует → встроенный дефолт
+   *  RU_WHITELIST_ROUTES. Меняется без пересборки/деплоя — новый /full сразу с ним. */
+  whitelistDomains?: string[];
 }
 
 export interface LogEntry {

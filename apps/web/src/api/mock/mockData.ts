@@ -56,7 +56,7 @@ export const SETTINGS: AppSettings = {
   domain: 'https://vpn.example.ru',
   defaultServerId: 's1', defaultProtocols: ['xray', 'amneziawg'],
   messageTemplate: 'Ваш доступ NoVPN:\n\n{link}\n\nПерейдите по ссылке — откроется личный кабинет, вводить ничего не нужно. Там подключите устройство и получите конфигурацию.\n\nДействует до: {expires}',
-  codeAttempts: 5, codeCooldownMin: 15, inactiveDisableDays: 0, codeLoginDays: 15, xrayWhitelist: true,
+  codeAttempts: 5, codeCooldownMin: 15, inactiveDisableDays: 0, codeLoginDays: 15, xrayWhitelist: true, whitelistDomains: ['domain:ya.ru', 'domain:mail.ru', 'domain:vk.com'],
 };
 
 export const ADMIN_LOG: LogEntry[] = [

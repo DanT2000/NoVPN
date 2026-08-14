@@ -60,6 +60,23 @@ export interface ProxyFallback {
 
 const PRIVATE_IPS = ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10'];
 
+/** Нормализация строки правила из редактируемого админкой списка: пустые/комментарии
+ *  отбрасываем; строку без известного префикса считаем доменом (→ domain:X). */
+export function normalizeWhitelistRoutes(raw: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line0 of raw) {
+    const line = String(line0).trim();
+    if (!line || line.startsWith('#')) continue;
+    const rule = /^(domain|full|regexp|keyword|geosite):/i.test(line) ? line : `domain:${line}`;
+    if (!seen.has(rule)) {
+      seen.add(rule);
+      out.push(rule);
+    }
+  }
+  return out;
+}
+
 function proxyOutbound(p: ProxyFallback): Record<string, unknown> {
   if (p.kind === 'socks') {
     return { protocol: 'socks', settings: { servers: [{ address: p.host, port: p.port, users: [{ user: p.user, pass: p.pass }] }] } };
@@ -72,10 +89,20 @@ function proxyOutbound(p: ProxyFallback): Record<string, unknown> {
   return o;
 }
 
-export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', proxies: ProxyFallback[] = [], title = ''): string {
+export function buildWhitelistXrayConfig(
+  links: string[],
+  appName = 'NoVPN',
+  proxies: ProxyFallback[] = [],
+  title = '',
+  whitelistRoutes: string[] = RU_WHITELIST_ROUTES,
+): string {
   // Название профиля (remarks): по серверу — «🇫🇮 Finland | Обход белых списков».
   // Если сервер не передан — общий заголовок с названием панели.
   const remarks = title ? `${title} | Обход белых списков` : `${appName} — обход белых списков`;
+  // Список доменов может приходить из редактируемой настройки админки; нормализуем и,
+  // если он пуст, откатываемся к встроенному дефолту (иначе обход бы не работал).
+  const routes = normalizeWhitelistRoutes(whitelistRoutes);
+  const wlRoutes = routes.length ? routes : RU_WHITELIST_ROUTES;
   // Тиры в порядке приоритета: 0 = Xray (reality), затем каждый прокси — свой тир.
   const tiers: Array<Record<string, unknown>[]> = [];
   const xray = links.map(parseVlessLink).filter((o): o is Record<string, unknown> => !!o);
@@ -106,7 +133,7 @@ export function buildWhitelistXrayConfig(links: string[], appName = 'NoVPN', pro
   ];
   const whitelistRules = [
     // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
-    { type: 'field', outboundTag: 'direct', domain: RU_WHITELIST_ROUTES },
+    { type: 'field', outboundTag: 'direct', domain: wlRoutes },
     // Приватные/локальные адреса — напрямую (явные подсети, без geoip.dat).
     { type: 'field', outboundTag: 'direct', ip: PRIVATE_IPS },
     // Торренты — мимо VPN.

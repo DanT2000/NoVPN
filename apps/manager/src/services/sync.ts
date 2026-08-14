@@ -4,7 +4,7 @@
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
 import * as repo from '../repo.js';
-import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshSetXraySni, REALITY_SNI } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshResyncDevices, sshSetXraySni, REALITY_SNI } from './sshServer.js';
 import { getServerKeys } from './keyvault.js';
 
 const PROXY_PROTOS = ['http', 'https', 'socks5'];
@@ -241,6 +241,41 @@ export async function syncAllServers(): Promise<void> {
       }
     } catch (e) {
       repo.addJobError('панель', `Гашение прокси по квоте: ${e instanceof Error ? e.message : 'ошибка'}`);
+    }
+
+    // Квота по AmneziaWG/Xray: снимаем пир/uuid С СЕРВЕРА при исчерпании лимита (иначе
+    // уже импортированный конфиг тоннелит сверх квоты — у WireGuard нет авто-отключения).
+    // Запись и ключи храним (quota_blocked=1); при восстановлении лимита пир возвращаем
+    // тем же ключом — клиентский .conf работает без изменений, reissue не нужен.
+    try {
+      for (const d of repo.listDevicesToBlockForQuota()) {
+        const server = repo.getServer(d.serverId);
+        if (!server || !(await sshHasSshAccess(server.id))) continue; // недоступен — повторим в след. цикле
+        const row = repo.getDeviceRow(d.id);
+        try {
+          if (d.protocol === 'amneziawg' && row?.public_key) await sshRevokeAwg(server, row.public_key);
+          else if (d.protocol === 'xray' && row?.uuid) await sshRevokeXray(server, row.uuid);
+          repo.setQuotaBlocked(d.id, true);
+        } catch {
+          /* сервер недоступен — оставим quota_blocked=0, повторим */
+        }
+      }
+      // Восстановление: пользователь снова под лимитом → возвращаем снятые пиры на сервер.
+      const restore = repo.listDevicesToRestoreFromQuota();
+      const byServer = new Map<string, typeof restore>();
+      for (const d of restore) (byServer.get(d.serverId) ?? byServer.set(d.serverId, []).get(d.serverId)!).push(d);
+      for (const [serverId, items] of byServer) {
+        const server = repo.getServer(serverId);
+        if (!server || !(await sshHasSshAccess(server.id))) continue;
+        try {
+          await sshResyncDevices(server, items.map((d) => ({ name: d.name, protocol: d.protocol, uuid: d.uuid, awgPub: d.awgPub, clientIp: d.clientIp, psk: d.psk })));
+          for (const d of items) repo.setQuotaBlocked(d.id, false);
+        } catch {
+          /* сервер недоступен — повторим */
+        }
+      }
+    } catch (e) {
+      repo.addJobError('панель', `Enforcement квоты AWG/Xray: ${e instanceof Error ? e.message : 'ошибка'}`);
     }
   } finally {
     running = false;

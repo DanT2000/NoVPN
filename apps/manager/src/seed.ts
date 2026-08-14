@@ -2,7 +2,7 @@
 // НЕ создаёт демо-пользователей/серверы — они появляются через создание/enrollment.
 
 import type { AppClient, AppSettings, TelegramSettings } from '@novpn/shared';
-import { DEFAULT_APPS } from '@novpn/shared';
+import { DEFAULT_APPS, RU_WHITELIST_ROUTES } from '@novpn/shared';
 import { db, getSetting, setSetting } from './db.js';
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   inactiveDisableDays: 0,
   codeLoginDays: 15,
   xrayWhitelist: true,
+  whitelistDomains: RU_WHITELIST_ROUTES,
 };
 
 const DEFAULT_TELEGRAM: TelegramSettings = {

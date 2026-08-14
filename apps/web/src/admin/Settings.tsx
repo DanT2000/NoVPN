@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { AppSettings, UserProtocol } from '@novpn/shared';
+import { RU_WHITELIST_ROUTES } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { Chip, Field, Panel } from '../components/ui';
@@ -30,6 +31,10 @@ export function Settings() {
   const [codeLoginDays, setCodeLoginDays] = useState(s?.codeLoginDays ?? 15);
   // Отсутствие поля трактуем как ВКЛ (старые панели): продвинутый X-Ray по умолчанию включён.
   const [xrayWhitelist, setXrayWhitelist] = useState(s?.xrayWhitelist !== false);
+  // Редактируемый список доменов обхода (по строке на домен). Если у панели он ещё не
+  // задан явно — префилл встроенным дефолтом (146 доменов), чтобы админ видел и правил их.
+  const wlInitial = (s?.whitelistDomains?.length ? s.whitelistDomains : RU_WHITELIST_ROUTES).join('\n');
+  const [whitelistText, setWhitelistText] = useState(wlInitial);
   const [saving, setSaving] = useState(false);
 
   // Пароль администратора
@@ -168,7 +173,8 @@ export function Settings() {
     codeCooldownMin !== (s.codeCooldownMin ?? 15) ||
     inactiveDisableDays !== (s.inactiveDisableDays ?? 0) ||
     codeLoginDays !== (s.codeLoginDays ?? 15) ||
-    xrayWhitelist !== (s.xrayWhitelist !== false);
+    xrayWhitelist !== (s.xrayWhitelist !== false) ||
+    whitelistText !== wlInitial;
 
   const save = async () => {
     setSaving(true);
@@ -185,6 +191,7 @@ export function Settings() {
         inactiveDisableDays,
         codeLoginDays,
         xrayWhitelist,
+        whitelistDomains: whitelistText.split('\n').map((l) => l.trim()).filter(Boolean),
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
@@ -284,6 +291,24 @@ export function Settings() {
               всё равно работает, но резервных каналов не будет (только X-Ray). HTTPS-прокси
               требует домена. Установить прокси можно в разделе «Серверы» → сервер → «Прокси».
             </div>
+          ) : null}
+          {xrayWhitelist ? (
+            <Field
+              label="Домены обхода (по одному в строке)"
+              hint="Идут напрямую, мимо VPN. Просто «ya.ru» = поддомены; «full:go.yandex» = точное совпадение. Меняется сразу, без деплоя. Пусто → встроенный список."
+            >
+              <textarea
+                className="textarea mono"
+                style={{ minHeight: 180, fontSize: 12 }}
+                spellCheck={false}
+                placeholder={'ya.ru\nmail.ru\nvk.com\nozon.ru\naliexpress.ru'}
+                value={whitelistText}
+                onChange={(e) => setWhitelistText(e.target.value)}
+              />
+              <div className="body small muted" style={{ marginTop: 6 }}>
+                Строк: {whitelistText.split('\n').map((l) => l.trim()).filter(Boolean).length}
+              </div>
+            </Field>
           ) : null}
         </Panel>
 
