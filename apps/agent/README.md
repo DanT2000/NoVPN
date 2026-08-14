@@ -50,7 +50,7 @@ createAccess, importAccess, revokeAccess, getTraffic, exportConfig, …):
 одноразовой установочной командой. Локально:
 
 ```bash
-CONTROL_PLANE_URL=https://vpn.dev.appswire.ru \
+CONTROL_PLANE_URL=https://vpn.dev.example.com \
 AGENT_ENROLLMENT_TOKEN=<из панели> \
 AGENT_DATA_DIR=./data \
 npm run dev --workspace apps/agent

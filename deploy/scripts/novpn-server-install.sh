@@ -5,7 +5,7 @@
 # старые клиентские конфиги продолжат работать на новом сервере (тот же домен → те же ключи).
 #
 # Запуск (панель подставляет значения):
-#   CONTROL_PLANE_URL=https://vpn.appswire.ru \
+#   CONTROL_PLANE_URL=https://vpn.example.com \
 #   ENROLLMENT_TOKEN=... \
 #   PUBLIC_HOST=fi1.example.com \
 #   [AWG_SERVER_PRIVKEY=... XRAY_REALITY_PRIVKEY=... XRAY_SHORT_ID=... XRAY_SNI=...] \

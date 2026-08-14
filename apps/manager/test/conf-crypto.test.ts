@@ -11,7 +11,7 @@ DNS = 1.1.1.1
 [Peer]
 PublicKey = xY9zA8bC7dE6fG5hI4jK3lM2nO1pQ0rS9tU8vW7xY6z=
 PresharedKey = pQ0rS9tU8vW7xY6zA5bC4dE3fG2hI1jK0lM9nO8pQ7r=
-Endpoint = 1.vpn.appswire.ru:40435
+Endpoint = 1.vpn.example.com:40435
 AllowedIPs = 0.0.0.0/0`;
 
 test('encConf → decConf возвращает исходный .conf', () => {

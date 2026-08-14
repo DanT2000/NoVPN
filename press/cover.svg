@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#111a33"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5b8cff"/>
+      <stop offset="1" stop-color="#37e0b0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.8" cy="0.2" r="0.7">
+      <stop offset="0" stop-color="#37e0b0" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#37e0b0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <!-- network motif: panel node -> servers -->
+  <g stroke="url(#accent)" stroke-width="2.5" fill="none" opacity="0.55">
+    <line x1="820" y1="315" x2="1010" y2="150"/>
+    <line x1="820" y1="315" x2="1040" y2="315"/>
+    <line x1="820" y1="315" x2="1010" y2="480"/>
+  </g>
+  <g fill="#0b1020" stroke="url(#accent)" stroke-width="3">
+    <circle cx="820" cy="315" r="34"/>
+    <circle cx="1030" cy="150" r="22"/>
+    <circle cx="1058" cy="315" r="22"/>
+    <circle cx="1030" cy="480" r="22"/>
+  </g>
+  <g fill="url(#accent)">
+    <circle cx="820" cy="315" r="7"/>
+    <circle cx="1030" cy="150" r="5"/>
+    <circle cx="1058" cy="315" r="5"/>
+    <circle cx="1030" cy="480" r="5"/>
+  </g>
+
+  <!-- accent bar -->
+  <rect x="90" y="150" width="64" height="6" rx="3" fill="url(#accent)"/>
+
+  <!-- wordmark -->
+  <text x="86" y="270" font-size="128" font-weight="800" fill="#ffffff" letter-spacing="-2">NoVPN</text>
+
+  <!-- tagline -->
+  <text x="90" y="340" font-size="34" font-weight="600" fill="#c7d2ea">Своя панель для AmneziaWG и Xray</text>
+  <text x="90" y="392" font-size="27" font-weight="400" fill="#8a97b8">Пользователь сам выдаёт себе ключ · установка в одну команду</text>
+
+  <!-- chips -->
+  <g font-size="22" font-weight="600">
+    <g>
+      <rect x="90" y="452" width="210" height="52" rx="26" fill="#16213f" stroke="#2b3a63"/>
+      <text x="195" y="485" fill="#9fe9cf" text-anchor="middle">AmneziaWG</text>
+    </g>
+    <g>
+      <rect x="312" y="452" width="240" height="52" rx="26" fill="#16213f" stroke="#2b3a63"/>
+      <text x="432" y="485" fill="#9fb8ff" text-anchor="middle">Xray · Reality</text>
+    </g>
+    <g>
+      <rect x="564" y="452" width="196" height="52" rx="26" fill="#16213f" stroke="#2b3a63"/>
+      <text x="662" y="485" fill="#c7d2ea" text-anchor="middle">self-hosted</text>
+    </g>
+  </g>
+
+  <!-- repo -->
+  <text x="90" y="576" font-size="22" font-weight="500" fill="#6b7aa0" font-family="Consolas, monospace">github.com/DanT2000/0VPN</text>
+</svg>

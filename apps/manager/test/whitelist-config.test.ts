@@ -5,7 +5,7 @@ import { buildWhitelistXrayConfig, normalizeWhitelistRoutes, RU_WHITELIST_ROUTES
 import type { ProxyFallback } from '@novpn/shared';
 
 const LINK =
-  'vless://b0cac4d7-e2a6-40a7-ba6e-a946bcbe6243@1.vpn.appswire.ru:443?type=tcp&security=reality&pbk=ABC&fp=edge&sni=cdn.dodostatic.net&sid=39a4&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x';
+  'vless://b0cac4d7-e2a6-40a7-ba6e-a946bcbe6243@1.vpn.example.com:443?type=tcp&security=reality&pbk=ABC&fp=edge&sni=cdn.dodostatic.net&sid=39a4&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x';
 
 test('buildWhitelistXrayConfig: reality-outbound + маршрутизация (без прокси)', () => {
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN'));
@@ -13,7 +13,7 @@ test('buildWhitelistXrayConfig: reality-outbound + маршрутизация (�
   assert.ok(proxy);
   assert.equal(proxy.tag, 'proxy-t0-0');
   const vnext = proxy.settings.vnext[0];
-  assert.equal(vnext.address, '1.vpn.appswire.ru');
+  assert.equal(vnext.address, '1.vpn.example.com');
   assert.equal(vnext.users[0].id, 'b0cac4d7-e2a6-40a7-ba6e-a946bcbe6243');
   const rs = proxy.streamSettings.realitySettings;
   assert.equal(rs.serverName, 'cdn.dodostatic.net');
@@ -77,7 +77,7 @@ test('бренд в remarks: без имени сервера используе
 
 test('buildWhitelistXrayConfig: несколько Xray-серверов без прокси — балансировщик по тиру 0', () => {
   const LINK2 =
-    'vless://11111111-2222-3333-4444-555555555555@2.vpn.appswire.ru:443?type=tcp&security=reality&pbk=DEF&fp=edge&sni=cdn.dodostatic.net&sid=aa&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x2';
+    'vless://11111111-2222-3333-4444-555555555555@2.vpn.example.com:443?type=tcp&security=reality&pbk=DEF&fp=edge&sni=cdn.dodostatic.net&sid=aa&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x2';
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK, LINK2], 'NoVPN'));
   // Оба сервера — outbounds tier 0; балансировщик leastPing по proxy-t0-, а не только первый.
   assert.ok(cfg.outbounds.some((o: any) => o.tag === 'proxy-t0-0'));
@@ -92,9 +92,9 @@ test('buildWhitelistXrayConfig: несколько Xray-серверов без 
 
 test('buildWhitelistXrayConfig: аварийный фоллбэк Xray→HTTPS→HTTP→SOCKS (тиры)', () => {
   const proxies: ProxyFallback[] = [
-    { kind: 'https', host: '1.vpn.appswire.ru', port: 8443, user: 'u', pass: 'p' },
-    { kind: 'http', host: '1.vpn.appswire.ru', port: 8080, user: 'u', pass: 'p' },
-    { kind: 'socks', host: '1.vpn.appswire.ru', port: 1080, user: 'u', pass: 'p' },
+    { kind: 'https', host: '1.vpn.example.com', port: 8443, user: 'u', pass: 'p' },
+    { kind: 'http', host: '1.vpn.example.com', port: 8080, user: 'u', pass: 'p' },
+    { kind: 'socks', host: '1.vpn.example.com', port: 1080, user: 'u', pass: 'p' },
   ];
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', proxies));
   // 4 тира: xray(t0) + https(t1) + http(t2) + socks(t3)
