@@ -95,6 +95,7 @@ export function buildWhitelistXrayConfig(
   proxies: ProxyFallback[] = [],
   title = '',
   whitelistRoutes: string[] = RU_WHITELIST_ROUTES,
+  lanAccess = false,
 ): string {
   // Название профиля (remarks): по серверу — «🇫🇮 Finland | Обход белых списков».
   // Если сервер не передан — общий заголовок с названием панели.
@@ -134,8 +135,11 @@ export function buildWhitelistXrayConfig(
   const whitelistRules = [
     // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
     { type: 'field', outboundTag: 'direct', domain: wlRoutes },
-    // Приватные/локальные адреса — напрямую (явные подсети, без geoip.dat).
-    { type: 'field', outboundTag: 'direct', ip: PRIVATE_IPS },
+    // Приватные/локальные адреса. По умолчанию (lanAccess=false) — напрямую (клиент
+    // держит свою локалку сам, приватные адреса не уходят в туннель). При lanAccess=true
+    // это правило УБИРАЕМ: приватные адреса пойдут через прокси/туннель к серверу — так
+    // самохостер добирается до локальной сети СВОЕГО сервера (дома) через VPN.
+    ...(lanAccess ? [] : [{ type: 'field', outboundTag: 'direct', ip: PRIVATE_IPS }]),
     // Торренты — мимо VPN.
     { type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] },
   ];

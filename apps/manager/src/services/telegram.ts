@@ -297,12 +297,21 @@ export async function broadcastToLinked(text: string): Promise<{ total: number; 
             /* повтор не удался — считаем провалом ниже */
           }
         }
-        // Заблокировал/удалил бота (403), устаревший chat_id — пропускаем.
+        // Заблокировал/удалил бота (403), устаревший chat_id (400) — штатный случай:
+        // Telegram ОТВЕТИЛ, значит токен и прокси живы. Такие адресаты просто
+        // пропускаются и НЕ считаются в consecFail — иначе 5 подряд заблокировавших
+        // бота (порядок целей произвольный) прервали бы всю экстренную рассылку (#9).
+        // В consecFail попадают только признаки мёртвой инфраструктуры (таймаут/сеть/5xx).
         failed += 1;
-        consecFail += 1;
-        if (consecFail >= CONSEC_FAIL_ABORT) {
-          aborted = true;
-          break;
+        const definiteReply = e instanceof TgApiError && typeof e.code === 'number' && e.code >= 400 && e.code < 500;
+        if (definiteReply) {
+          consecFail = 0;
+        } else {
+          consecFail += 1;
+          if (consecFail >= CONSEC_FAIL_ABORT) {
+            aborted = true;
+            break;
+          }
         }
       }
       await sleep(60); // ~16 сообщений/сек — с запасом под лимит Telegram

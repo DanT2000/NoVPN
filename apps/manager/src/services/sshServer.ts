@@ -315,7 +315,7 @@ export async function sshUninstallServer(server: Server): Promise<void> {
 export async function sshResyncDevices(
   server: Server,
   items: Array<{ name: string; protocol: string; uuid?: string | null; awgPub?: string | null; clientIp?: string | null; psk?: string | null }>,
-): Promise<void> {
+): Promise<{ xray: string[]; awg: string[] }> {
   // Только валидные идентификаторы попадают в удалённый скрипт (см. isUuid/isWgKey/isIpv4):
   // битые/чужие значения из импорта пропускаем, чтобы они не инъектировались в shell/python.
   const xray = items.filter((i) => i.protocol === 'xray' && isUuid(i.uuid)).map((i) => ({ id: i.uuid!, name: san(i.name) }));
@@ -365,6 +365,10 @@ PY`,
   }
   lines.push('echo RESYNC_DONE');
   await runScript(creds(server.id), lines.join('\n'), 120000);
+  // Возвращаем идентификаторы, которые РЕАЛЬНО попали в скрипт (прошли валидацию):
+  // вызывающий (восстановление по квоте) снимает quota_blocked только с них, а не
+  // безусловно — иначе устройство с битым ключом «разблокировалось» бы, не вернувшись.
+  return { xray: xray.map((x) => x.id), awg: awg.map((a) => a.awgPub!).filter(Boolean) as string[] };
 }
 
 // Сбор статистики AmneziaWG: rx/tx и время последнего рукопожатия по каждому пиру.
@@ -399,7 +403,7 @@ echo PROBE_DONE`;
   return res;
 }
 
-export async function sshCreateXray(server: Server, deviceName: string): Promise<{ uuid: string; link: string; publicKey: string }> {
+export async function sshCreateXray(server: Server, deviceName: string, brand = 'NoVPN'): Promise<{ uuid: string; link: string; publicKey: string }> {
   const keys = getServerKeys(server.host);
   const pbk = keys?.xrayRealityPubKey;
   const sid = keys?.xrayShortId;
@@ -439,7 +443,7 @@ echo "UUID=$UUID"`;
   const link =
     `vless://${uuid}@${server.host}:443?type=tcp&security=reality&pbk=${pbk}` +
     `&fp=${REALITY_FP}&sni=${encodeURIComponent(sni)}&sid=${sid}&spx=${encodeURIComponent(REALITY_SPX)}` +
-    `&flow=xtls-rprx-vision&encryption=none#NoVPN-${encodeURIComponent(nm)}`;
+    `&flow=xtls-rprx-vision&encryption=none#${encodeURIComponent(brand)}-${encodeURIComponent(nm)}`;
   return { uuid, link, publicKey: pbk };
 }
 
@@ -553,6 +557,11 @@ export async function sshInstallProxies(
   // проверяем, что это валидный хост (буквы/цифры/дефис/точки), а не shell-инъекция.
   if (!/^[A-Za-z0-9.-]{1,253}$/.test(domain)) throw new Error('Некорректный хост сервера.');
   const wantHttps = !!opts.https;
+  // HTTPS через certbot (HTTP-01) выпускается ТОЛЬКО на домен, не на голый IP — иначе
+  // challenge не проходит и весь install падает. Отклоняем заранее понятной ошибкой (#13/#5).
+  if (wantHttps && /^\d{1,3}(\.\d{1,3}){3}$/.test(domain)) {
+    throw new Error('HTTPS-прокси требует домен сервера (не IP): по домену certbot выпускает TLS-сертификат. Впишите домен в адрес сервера и сохраните.');
+  }
   // HTTP-прокси нужен и сам по себе, и как бэкенд для HTTPS(stunnel).
   const wantHttp = !!opts.http || wantHttps;
   const wantSocks = !!opts.socks;
@@ -615,6 +624,9 @@ ${
     ? `
 # --- HTTPS через certbot + stunnel ---
 apt-get install -y -qq certbot stunnel4 >/tmp/apt.log 2>&1
+# certbot --standalone слушает ВХОДЯЩИЙ :80 для ACME HTTP-01 — открываем порт 80 в
+# файрволе, иначе на ufw-серверах challenge не доходит и сертификат не выпускается (#13).
+openp 80
 if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
   certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$DOMAIN" >/tmp/cb.log 2>&1
 fi

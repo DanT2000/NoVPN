@@ -21,6 +21,14 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
 // либо админ (он делает то же самое за пользователя из панели).
 export function requireUserOrAdmin(req: Request, res: Response, next: NextFunction): void {
   if (req.session?.userId || req.session?.admin) {
+    // Тот же гейт дефолтного пароля, что и в requireAdmin: пока пароль админа дефолтный,
+    // admin-сессия НЕ должна действовать за пользователей (выпуск/перевыпуск/отзыв,
+    // выдача прокси-паролей) — иначе известный дефолт остаётся частичным бэкдором на
+    // запись через requireUserOrAdmin-роуты. Обычного пользователя (userId) не трогаем.
+    if (req.session?.admin && !req.session?.userId && isDefaultAdminPassword()) {
+      res.status(403).json({ error: { type: 'must_change_password', message: 'Сначала задайте новый пароль администратора.' } });
+      return;
+    }
     next();
     return;
   }

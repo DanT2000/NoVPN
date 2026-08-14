@@ -439,7 +439,10 @@ export function disableInactiveDevices(days: number): DisabledDevice[] {
   // Только AmneziaWG: по нему у нас есть достоверная активность (handshake).
   const rows = db
     .prepare(
-      "SELECT id, user_id AS userId, name, server_id AS serverId, protocol, uuid, public_key AS publicKey FROM devices WHERE is_active = 1 AND protocol = 'amneziawg' AND last_seen_at IS NOT NULL AND last_seen_at < ?",
+      // quota_blocked=0: у снятого по квоте пира НЕТ handshake по построению, поэтому
+      // его «неактивность» — следствие enforcement, а не пользователя. Иначе запись
+      // отключилась бы и очистилась, и возврат по сбросу квоты стал бы невозможен (#8).
+      "SELECT id, user_id AS userId, name, server_id AS serverId, protocol, uuid, public_key AS publicKey FROM devices WHERE is_active = 1 AND quota_blocked = 0 AND protocol = 'amneziawg' AND last_seen_at IS NOT NULL AND last_seen_at < ?",
     )
     .all(cutoff) as DisabledDevice[];
   for (const r of rows) {
@@ -769,6 +772,11 @@ export function getSettings(): AppSettings {
 export function saveSettings(s: AppSettings): AppSettings {
   setSetting('settings', s);
   return s;
+}
+/** Имя бренда/сервиса для меток конфигов и Profile-Title подписки. Задаётся админом
+ *  в настройках (brandName); если пусто — фолбэк на config.appName (env APP_NAME). */
+export function brandName(): string {
+  return (getSettings().brandName || '').trim() || config.appName;
 }
 export function getTelegram(): TelegramSettings {
   return getSetting<TelegramSettings>('telegram', {} as TelegramSettings);

@@ -85,9 +85,10 @@ router.get('/sub/:token', (req, res) => {
   if (String(req.headers.accept ?? '').includes('text/html')) {
     const base = repo.publicBaseUrl(reqOrigin(req));
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store, private'); // страница содержит личную ссылку-подписку
     return res.send(
       renderSubPage({
-        appName: config.appName,
+        appName: repo.brandName(),
         user: u,
         subUrl: `${base}/sub/${req.params.token}`,
         apps: repo.listApps(),
@@ -99,7 +100,8 @@ router.get('/sub/:token', (req, res) => {
 
   // Заголовки, которые читают клиенты подписок.
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Profile-Title', `base64:${Buffer.from(config.appName, 'utf8').toString('base64')}`);
+  res.setHeader('Cache-Control', 'no-store, private'); // тело = конфиги пользователя, не кэшировать
+  res.setHeader('Profile-Title', `base64:${Buffer.from(repo.brandName(), 'utf8').toString('base64')}`);
   res.setHeader('Profile-Update-Interval', '12');
   if (u.trafficLimitGb != null) {
     const total = Math.round(u.trafficLimitGb * 1e9);
@@ -140,12 +142,13 @@ router.get('/sub/:token/full', (req, res) => {
   const flag = (primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '';
   const title = primarySrv ? [flag, primarySrv.name].filter(Boolean).join(' ') : '';
   // Список доменов обхода — из редактируемой настройки (пусто/absent → дефолт в билдере).
-  const json = buildWhitelistXrayConfig(links, config.appName, proxies, title, repo.getSettings().whitelistDomains);
+  const json = buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, repo.getSettings().whitelistDomains, repo.getSettings().lanAccess === true);
   if (!json) return res.status(404).send(''); // все ссылки битые → не отдаём all-direct утечку
   // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
   // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Profile-Title', `base64:${Buffer.from(config.appName, 'utf8').toString('base64')}`);
+  res.setHeader('Cache-Control', 'no-store, private'); // полный конфиг с ключами, не кэшировать
+  res.setHeader('Profile-Title', `base64:${Buffer.from(repo.brandName(), 'utf8').toString('base64')}`);
   res.setHeader('Profile-Update-Interval', '12');
   // Счётчик трафика/срока в приложении — как у обычной подписки (раньше /full его не слал).
   if (u.trafficLimitGb != null) {
@@ -285,6 +288,14 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
     const u = repo.getUser(d.userId);
     if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
     if (d.protocol !== 'xray' && d.protocol !== 'amneziawg') return res.status(400).json(err('validation', 'Протокол не поддерживается.'));
+    // Перевыпуск — это ВЫПУСК свежего рабочего конфига, поэтому подчиняется тому же
+    // гейту доступа, что и обычная выдача: приостановленный/истёкший/исчерпавший квоту
+    // НЕ-админ иначе восстановил бы VPN из живой сессии, обойдя отключение и лимит
+    // трафика (в т.ч. enforcement квоты AWG/Xray). Админ (byAdmin) — без ограничений.
+    if (!req.session.admin) {
+      const bad = accessError(u);
+      if (bad) return res.status(403).json(err(bad.type, bad.message));
+    }
     const server = repo.getServer(d.serverId)!;
     // Лимит устройств (только AmneziaWG): перевыпуск НЕАКТИВНОГО AWG-устройства = его
     // повторная активация, поэтому подчиняется тому же лимиту, что и новый выпуск.
@@ -307,17 +318,21 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
     }
 
     let out: IssueDeviceResult;
+    // quota_blocked: 0 — перевыпуск даёт СВЕЖИЙ живой пир на сервере, поэтому запись
+    // возвращается в нормальное состояние enforcement. Если пользователь всё ещё сверх
+    // лимита (админский перевыпуск), следующий цикл sync сам снимет пир заново; иначе
+    // остался бы is_active=1 И quota_blocked=1 с рабочим пиром, который sync не трогает.
     if (d.protocol === 'xray') {
       const r = await createXrayCfg(server, d.name);
-      const device = repo.updateDeviceFields(d.id, { is_active: 1, revoked_at: null, revoke_pending: 0, uuid: r.uuid, public_key: r.publicKey, link: r.link, conf: null })!;
+      const device = repo.updateDeviceFields(d.id, { is_active: 1, revoked_at: null, revoke_pending: 0, quota_blocked: 0, uuid: r.uuid, public_key: r.publicKey, link: r.link, conf: null })!;
       out = { device, link: r.link };
     } else {
       const r = await createAwgCfg(server, d.name);
       const device = repo.updateDeviceFields(d.id, {
-        is_active: 1, revoked_at: null, revoke_pending: 0, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
+        is_active: 1, revoked_at: null, revoke_pending: 0, quota_blocked: 0, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
         preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: encConf(r.conf), link: null,
       })!;
-      const vk = vpnLinkFromConf(r.conf, `${config.appName} — ${server.name}`);
+      const vk = vpnLinkFromConf(r.conf, `${repo.brandName()} — ${server.name}`);
       out = { device, conf: r.conf, vpnKeyAvailable: !!vk, vpnKey: vk ?? undefined };
     }
     repo.addHistory(u.id, `Перевыпущен конфиг «${d.name}»`);
@@ -1085,7 +1100,22 @@ router.get('/apps/file/:appId/:platform', (req, res) => {
 
 // ── admin: settings ──
 router.put('/api/admin/settings', requireAdmin, (req, res) => {
-  res.json(repo.saveSettings(req.body as AppSettings));
+  // Мержим поверх текущих: частичное тело не должно обнулять несвязанные поля
+  // (раньше сохранялось body как есть — полная перезапись). Плюс лёгкая нормализация
+  // числовых (>=0) и списочных полей, чтобы битый ввод не портил конфиг (#19).
+  const patch = (req.body ?? {}) as Partial<AppSettings>;
+  const cur = repo.getSettings();
+  const next: AppSettings = { ...cur, ...patch };
+  const clamp = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : d);
+  next.codeAttempts = clamp(next.codeAttempts, cur.codeAttempts ?? 5);
+  next.codeCooldownMin = clamp(next.codeCooldownMin, cur.codeCooldownMin ?? 15);
+  next.inactiveDisableDays = clamp(next.inactiveDisableDays, cur.inactiveDisableDays ?? 0);
+  next.codeLoginDays = clamp(next.codeLoginDays, cur.codeLoginDays ?? 15);
+  if (next.whitelistDomains != null && !Array.isArray(next.whitelistDomains)) next.whitelistDomains = cur.whitelistDomains;
+  if (typeof next.brandName === 'string') next.brandName = next.brandName.slice(0, 64).trim();
+  next.lanAccess = next.lanAccess === true;
+  next.xrayWhitelist = next.xrayWhitelist !== false;
+  res.json(repo.saveSettings(next));
 });
 
 // ── admin: бэкап базы ──

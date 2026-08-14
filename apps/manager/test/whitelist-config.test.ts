@@ -57,6 +57,24 @@ test('normalizeWhitelistRoutes: trim, префикс domain:, дедуп, отб
   );
 });
 
+test('lanAccess=false (по умолчанию): приватные адреса идут direct (правило есть)', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN'));
+  const privRule = cfg.routing.rules.find((r: any) => r.outboundTag === 'direct' && Array.isArray(r.ip));
+  assert.ok(privRule, 'должно быть правило direct для приватных подсетей');
+  assert.ok(privRule.ip.includes('192.168.0.0/16'));
+});
+
+test('lanAccess=true: правило direct для приватных адресов убрано (идут через туннель)', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '', undefined, true));
+  const privRule = cfg.routing.rules.find((r: any) => r.outboundTag === 'direct' && Array.isArray(r.ip));
+  assert.equal(privRule, undefined, 'приватные адреса не должны форситься в direct при lanAccess');
+});
+
+test('бренд в remarks: без имени сервера используется appName (кастомный бренд)', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'МойСервис'));
+  assert.match(cfg.remarks, /^МойСервис — обход/);
+});
+
 test('buildWhitelistXrayConfig: несколько Xray-серверов без прокси — балансировщик по тиру 0', () => {
   const LINK2 =
     'vless://11111111-2222-3333-4444-555555555555@2.vpn.appswire.ru:443?type=tcp&security=reality&pbk=DEF&fp=edge&sni=cdn.dodostatic.net&sid=aa&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x2';

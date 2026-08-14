@@ -29,12 +29,23 @@ export function Settings() {
   const [codeCooldownMin, setCodeCooldownMin] = useState(s?.codeCooldownMin ?? 15);
   const [inactiveDisableDays, setInactiveDisableDays] = useState(s?.inactiveDisableDays ?? 0);
   const [codeLoginDays, setCodeLoginDays] = useState(s?.codeLoginDays ?? 15);
+  // Имя бренда/сервиса (метка конфигов #<бренд>-устройство и Profile-Title подписки).
+  // Пусто → фолбэк на APP_NAME на бэке (по умолчанию «NoVPN»).
+  const [brandName, setBrandName] = useState(s?.brandName ?? '');
   // Отсутствие поля трактуем как ВКЛ (старые панели): продвинутый X-Ray по умолчанию включён.
   const [xrayWhitelist, setXrayWhitelist] = useState(s?.xrayWhitelist !== false);
+  // Доступ клиента в локальную сеть сервера через туннель. По умолчанию ВЫКЛ.
+  const [lanAccess, setLanAccess] = useState(s?.lanAccess === true);
   // Редактируемый список доменов обхода (по строке на домен). Если у панели он ещё не
   // задан явно — префилл встроенным дефолтом (146 доменов), чтобы админ видел и правил их.
+  const wlDefaultText = RU_WHITELIST_ROUTES.join('\n');
   const wlInitial = (s?.whitelistDomains?.length ? s.whitelistDomains : RU_WHITELIST_ROUTES).join('\n');
   const [whitelistText, setWhitelistText] = useState(wlInitial);
+  // Список совпадает со встроенным дефолтом → сохраняем как «пусто» (панель продолжит
+  // получать обновления списка из кода, а не заморозит текущие 146 доменов). Иначе —
+  // кастомный список пользователя (findings #6).
+  const wlLines = whitelistText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const wlIsBuiltin = wlLines.join('\n') === wlDefaultText;
   const [saving, setSaving] = useState(false);
 
   // Пароль администратора
@@ -174,6 +185,8 @@ export function Settings() {
     inactiveDisableDays !== (s.inactiveDisableDays ?? 0) ||
     codeLoginDays !== (s.codeLoginDays ?? 15) ||
     xrayWhitelist !== (s.xrayWhitelist !== false) ||
+    brandName !== (s.brandName ?? '') ||
+    lanAccess !== (s.lanAccess === true) ||
     whitelistText !== wlInitial;
 
   const save = async () => {
@@ -191,7 +204,10 @@ export function Settings() {
         inactiveDisableDays,
         codeLoginDays,
         xrayWhitelist,
-        whitelistDomains: whitelistText.split('\n').map((l) => l.trim()).filter(Boolean),
+        brandName: brandName.trim(),
+        lanAccess,
+        // Совпадает со встроенным → пусто (не морозим список, ловим обновления из кода).
+        whitelistDomains: wlIsBuiltin ? [] : wlLines,
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
@@ -234,6 +250,30 @@ export function Settings() {
             <div className="notice notice-amber small" style={{ marginTop: 8 }}>
               <b>Внимание:</b> уже разосланные пользователям личные ссылки и подписки со старым
               адресом после смены перестанут открываться — их придётся выдать заново.
+            </div>
+          ) : null}
+        </Panel>
+
+        {/* Брендинг — имя сервиса в клиентах и подписке */}
+        <Panel title="Название сервиса (бренд)">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Как ваш сервис называется в приложении пользователя: метка каждого конфига
+            (<span className="mono">бренд-Устройство</span>) и название подписки (Profile-Title).
+            Имя <b>сервера</b> (🇫🇮 Finland и т. п.) задаётся отдельно в разделе «Серверы» —
+            это не оно. Задаётся один раз; на уже выданные ссылки старая метка останется.
+          </div>
+          <Field label="Название сервиса">
+            <input
+              className="input"
+              placeholder="NoVPN"
+              maxLength={32}
+              value={brandName}
+              onChange={(e) => setBrandName(e.target.value)}
+            />
+          </Field>
+          {!brandName.trim() ? (
+            <div className="body small muted" style={{ marginTop: 6 }}>
+              Пусто → используется значение по умолчанию («NoVPN»).
             </div>
           ) : null}
         </Panel>
@@ -305,11 +345,36 @@ export function Settings() {
                 value={whitelistText}
                 onChange={(e) => setWhitelistText(e.target.value)}
               />
-              <div className="body small muted" style={{ marginTop: 6 }}>
-                Строк: {whitelistText.split('\n').map((l) => l.trim()).filter(Boolean).length}
+              <div className="body small muted" style={{ marginTop: 6, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span>Строк: {wlLines.length}</span>
+                {wlIsBuiltin ? (
+                  <span style={{ color: 'var(--ok-fg, #2a9d3c)' }}>✓ встроенный список (обновляется с приложением)</span>
+                ) : (
+                  <>
+                    <span style={{ color: 'var(--amber-fg)' }}>● свой список (обновления из кода не применяются)</span>
+                    <button type="button" className="btn btn-sec btn-sm" onClick={() => setWhitelistText(wlDefaultText)}>
+                      Сбросить к встроенному
+                    </button>
+                  </>
+                )}
               </div>
             </Field>
           ) : null}
+        </Panel>
+
+        {/* Доступ в локальную сеть сервера */}
+        <Panel title="Доступ в локальную сеть">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Пропускать ли через туннель приватные адреса (192.168.x, 10.x и т. п.). По
+            умолчанию <b>закрыт</b> — в продвинутом X-Ray-конфиге приватные адреса идут мимо
+            VPN (клиент держит свою локалку сам, безопаснее). Включите, если ставите конфиг
+            себе <b>домой</b> и хотите через VPN добираться до устройств локальной сети
+            вашего сервера. Влияет на продвинутый X-Ray; AmneziaWG и так тоннелит все
+            диапазоны (доступ к локалке зависит от маршрутизации на сервере).
+          </div>
+          <div className="chip-row">
+            <Chip label={lanAccess ? 'Разрешён' : 'Закрыт'} active={lanAccess} onClick={() => setLanAccess((v) => !v)} />
+          </div>
         </Panel>
 
         {/* Шаблон */}

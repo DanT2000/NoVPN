@@ -268,8 +268,15 @@ export async function syncAllServers(): Promise<void> {
         const server = repo.getServer(serverId);
         if (!server || !(await sshHasSshAccess(server.id))) continue;
         try {
-          await sshResyncDevices(server, items.map((d) => ({ name: d.name, protocol: d.protocol, uuid: d.uuid, awgPub: d.awgPub, clientIp: d.clientIp, psk: d.psk })));
-          for (const d of items) repo.setQuotaBlocked(d.id, false);
+          const applied = await sshResyncDevices(server, items.map((d) => ({ name: d.name, protocol: d.protocol, uuid: d.uuid, awgPub: d.awgPub, clientIp: d.clientIp, psk: d.psk })));
+          const okXray = new Set(applied.xray);
+          const okAwg = new Set(applied.awg);
+          // Снимаем quota_blocked только с пиров, реально применённых на сервере (#17):
+          // устройство с битым/пропущенным ключом останется blocked и повторится.
+          for (const d of items) {
+            const ok = d.protocol === 'xray' ? !!d.uuid && okXray.has(d.uuid) : !!d.awgPub && okAwg.has(d.awgPub);
+            if (ok) repo.setQuotaBlocked(d.id, false);
+          }
         } catch {
           /* сервер недоступен — повторим */
         }

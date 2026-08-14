@@ -15,6 +15,14 @@ import { COUNTRIES, countryValue } from '../lib/countries';
 
 type Proto = 'xray' | 'amneziawg' | 'http' | 'https' | 'socks5';
 
+// HTTPS-прокси выпускает TLS-сертификат через certbot по HTTP-01 — это работает
+// только для ДОМЕНА (не голого IP). Чип HTTPS доступен лишь когда адрес сервера — домен.
+const isIpLike = (h: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(h.trim()) || h.includes(':');
+const hostIsDomain = (h: string) => {
+  const t = (h || '').trim();
+  return !!t && !isIpLike(t) && /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(t);
+};
+
 function ProxyBox({ proxy }: { proxy: ServerProxyConfig }) {
   const { showToast } = useApp();
   const line = (label: string, val: string) => (
@@ -115,10 +123,17 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
   const [pxBusy, setPxBusy] = useState(false);
   const [pxResult, setPxResult] = useState<ServerProxyConfig | null>(null);
   const [pxErr, setPxErr] = useState<string | null>(null);
+  // HTTPS доступен только на домене (certbot). Гейтим по СОХРАНЁННОМУ адресу — именно
+  // его использует certbot на бэке; впишешь домен и сохранишь — опция включится.
+  const httpsOk = hostIsDomain(server.host);
 
   function installProxies() {
-    if (!pxHttp && !pxHttps && !pxSocks) {
+    if (!pxHttp && !(pxHttps && httpsOk) && !pxSocks) {
       setPxErr('Отметьте хотя бы один тип прокси.');
+      return;
+    }
+    if (pxHttps && !httpsOk) {
+      setPxErr('HTTPS-прокси требует домен сервера (не IP). Впишите домен и сохраните сервер.');
       return;
     }
     setPxErr(null);
@@ -136,7 +151,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
     setPxBusy(true);
     setPxErr(null);
     try {
-      const r = await api.installServerProxies(server.id, { http: pxHttp, https: pxHttps, socks: pxSocks });
+      const r = await api.installServerProxies(server.id, { http: pxHttp, https: pxHttps && httpsOk, socks: pxSocks });
       setPxResult(r.proxy);
       await reload();
       showToast('Прокси установлены');
@@ -262,18 +277,29 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         <span className="field-label">Прокси на сервере (устанавливаются реально по SSH)</span>
         <div className="chip-row">
           <Chip label="HTTP" size="sm" active={pxHttp} onClick={() => setPxHttp((v) => !v)} />
-          <Chip label="HTTPS" size="sm" active={pxHttps} onClick={() => setPxHttps((v) => !v)} />
+          <Chip
+            label="HTTPS"
+            size="sm"
+            active={pxHttps && httpsOk}
+            disabled={!httpsOk}
+            onClick={() => { if (httpsOk) setPxHttps((v) => !v); }}
+          />
           <Chip label="SOCKS5" size="sm" active={pxSocks} onClick={() => setPxSocks((v) => !v)} />
         </div>
         <span className="small muted">
           3proxy (HTTP/SOCKS5) + certbot/stunnel (HTTPS).
         </span>
-        {pxHttps ? (
+        {!httpsOk ? (
+          <div className="body small muted" style={{ marginTop: 6 }}>
+            HTTPS-прокси доступен только когда адрес сервера — <b>домен</b> (сейчас указан
+            IP). Впишите домен в поле «{'Домен или IP'}» выше, сохраните сервер — и опция
+            включится. HTTP/SOCKS5 работают и на IP.
+          </div>
+        ) : pxHttps ? (
           <div className="notice notice-amber small" style={{ marginTop: 6 }}>
-            <b>Для HTTPS-прокси нужен домен и свободный порт 80.</b> Адрес сервера должен быть
-            доменом (не IP) и указывать на этот сервер — по нему certbot выпустит TLS-сертификат.
-            На время выпуска порт <b>80</b> должен быть свободен (не занят другим веб-сервером),
-            иначе установка прервётся. HTTPS-прокси слушает порт 8443.
+            <b>Для HTTPS-прокси нужен свободный порт 80.</b> По домену сервера certbot
+            выпустит TLS-сертификат; на время выпуска порт <b>80</b> должен быть свободен
+            (панель откроет его в файрволе автоматически). HTTPS-прокси слушает порт 8443.
           </div>
         ) : null}
         {pxErr ? <div className="notice notice-red small">{pxErr}</div> : null}

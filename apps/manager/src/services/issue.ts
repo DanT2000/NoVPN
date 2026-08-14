@@ -3,7 +3,6 @@
 import type { IssueDeviceResult, ProxyAccount, Server, User } from '@novpn/shared';
 import crypto from 'node:crypto';
 import * as repo from '../repo.js';
-import { config } from '../config.js';
 import { encryptSecret } from '../lib/crypto.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshAddProxyUser, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser } from './sshServer.js';
 import { vpnLinkFromConf } from './amneziaLink.js';
@@ -17,7 +16,7 @@ const NO_SSH =
 // Лучше честная ошибка, чем нерабочий конфиг на руках у пользователя.
 export async function createXrayCfg(server: Server, name: string) {
   if (!(await sshHasSshAccess(server.id))) throw new Error(NO_SSH);
-  return sshCreateXray(server, name);
+  return sshCreateXray(server, name, repo.brandName());
 }
 export async function createAwgCfg(server: Server, name: string) {
   if (!(await sshHasSshAccess(server.id))) throw new Error(NO_SSH);
@@ -114,7 +113,7 @@ async function issueForUserInner(
   repo.addHistory(user.id, `Выпущен конфиг «${name}» (AmneziaWG, ${server.name})`);
   // Ссылка vpn:// для приложения AmneziaVPN — импорт в один тап.
   // Отдельное приложение AmneziaWG её не принимает, ему нужен файл .conf.
-  const vpnKey = vpnLinkFromConf(r.conf, `${config.appName} — ${server.name}`);
+  const vpnKey = vpnLinkFromConf(r.conf, `${repo.brandName()} — ${server.name}`);
   return {
     device, conf: r.conf, vpnKeyAvailable: !!vpnKey, vpnKey: vpnKey ?? undefined,
     vpnKeyNote: vpnKey
