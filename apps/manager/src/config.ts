@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,18 +9,43 @@ function env(name: string, fallback = ''): string {
   return process.env[name] ?? fallback;
 }
 
-/** Секрет подписи сессий. Если SESSION_SECRET не задан, в production выводим
- *  СТАБИЛЬНЫЙ секрет из ENCRYPTION_KEY (он в проде обязателен) — так сессии
- *  секретны и переживают рестарт, а панель не падает из-за забытой переменной.
- *  Небезопасный дефолт остаётся только для локальной разработки. */
-function resolveSessionSecret(): string {
-  const s = env('SESSION_SECRET', '');
-  if (s) return s;
-  const enc = env('ENCRYPTION_KEY', '');
-  if (env('NODE_ENV') === 'production' && enc) {
-    return crypto.createHash('sha256').update(`novpn-session:${enc}`).digest('hex');
+const databasePath = env('DATABASE_PATH', path.join(__dirname, '../data/database.sqlite'));
+const dataDir = path.dirname(databasePath);
+
+/** Ключ шифрования секретов. Приоритет: ENV → файл рядом с БД → автогенерация.
+ *  Автогенерация + персист в data/encryption.key даёт установку БЕЗ единого ENV
+ *  («распаковал — работает»): панель сама заведёт стабильный ключ при первом старте
+ *  и переживёт рестарты (иначе зашифрованные секреты стали бы нечитаемы). Продвинутый
+ *  пользователь по-прежнему может задать ENCRYPTION_KEY через окружение. */
+function resolveEncryptionKey(): string {
+  const fromEnv = env('ENCRYPTION_KEY', '').trim();
+  if (fromEnv) return fromEnv;
+  const keyFile = path.join(dataDir, 'encryption.key');
+  try {
+    const existing = fs.readFileSync(keyFile, 'utf8').trim();
+    if (/^[0-9a-fA-F]{64}$/.test(existing)) return existing;
+  } catch {
+    /* файла ещё нет — создадим ниже */
   }
-  return 'dev-insecure-session-secret-change-me';
+  const key = crypto.randomBytes(32).toString('hex');
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(keyFile, key, { mode: 0o600 });
+  } catch {
+    /* том только для чтения — вернём эфемерный ключ (переживёт до рестарта) */
+  }
+  return key;
+}
+
+const encryptionKey = resolveEncryptionKey();
+
+/** Секрет подписи сессий. ENV SESSION_SECRET → иначе стабильно выводим из ключа
+ *  шифрования (он теперь всегда есть). Так сессии секретны и переживают рестарт,
+ *  а панель работает без единой переменной окружения. */
+function resolveSessionSecret(): string {
+  const s = env('SESSION_SECRET', '').trim();
+  if (s) return s;
+  return crypto.createHash('sha256').update(`novpn-session:${encryptionKey}`).digest('hex');
 }
 function bool(name: string, fallback = false): boolean {
   const v = process.env[name];
@@ -41,17 +67,17 @@ export const config = {
   adminPassword: env('ADMIN_PASSWORD', 'admin'),
 
   sessionSecret: resolveSessionSecret(),
-  encryptionKey: env('ENCRYPTION_KEY', ''),
+  encryptionKey,
 
   // Сколько доверенных прокси стоит перед панелью (openresty + traefik = 2).
   // От этого зависит, какой адрес Express считает адресом клиента, а значит —
   // работает ли лимит попыток входа. Значение 0 = обращаются напрямую.
   trustProxyHops: int('TRUST_PROXY_HOPS', 2),
 
-  databasePath: env('DATABASE_PATH', path.join(__dirname, '../data/database.sqlite')),
+  databasePath,
   // Файлы приложений (APK/EXE/AppImage) храним на диске рядом с базой (постоянный
   // том), а НЕ в SQLite: инсталляторы бывают по 60–120 МБ, base64 раздул бы базу.
-  appsDir: env('APPS_DIR', path.join(path.dirname(env('DATABASE_PATH', path.join(__dirname, '../data/database.sqlite'))), 'apps')),
+  appsDir: env('APPS_DIR', path.join(dataDir, 'apps')),
   // Каталог собранного фронтенда (в проде копируется в образ).
   webDist: env('WEB_DIST', path.join(__dirname, '../../web/dist')),
 

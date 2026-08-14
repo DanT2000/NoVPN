@@ -1,83 +1,77 @@
 #!/usr/bin/env bash
-# ══════════════════════════════════════════════════════════════════
-#  NoVPN — установка/обновление панели одной командой.
-#  Использование:   cp .env.example .env   &&   ./install.sh
-#  Скрипт сам проверит зависимости, досоздаст секреты, соберёт и
-#  запустит панель в Docker, дождётся готовности и покажет адрес.
-# ══════════════════════════════════════════════════════════════════
+# NoVPN — установка в одну команду. Ставит Docker (если нужно), собирает и поднимает
+# панель. Никаких переменных окружения задавать не нужно — секреты панель заведёт сама.
+#
+#   curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo bash
+#
+# Переменные (необязательно):
+#   PORT=8088   — порт панели на хосте (по умолчанию 3000; поменяйте, если занят,
+#                 например когда ставите на тот же сервер, где уже крутится VPN).
+#   DIR=/opt/novpn                 — куда клонировать (по умолчанию /opt/novpn).
+#   REPO=https://github.com/DanT2000/0VPN  — источник.
 set -euo pipefail
-cd "$(dirname "$0")"
 
-COMPOSE_FILE="deploy/docker-compose.yml"
-red() { printf '\033[31m%s\033[0m\n' "$1"; }
-grn() { printf '\033[32m%s\033[0m\n' "$1"; }
-ylw() { printf '\033[33m%s\033[0m\n' "$1"; }
+REPO="${REPO:-https://github.com/DanT2000/0VPN}"
+DIR="${DIR:-/opt/novpn}"
+PORT="${PORT:-3000}"
 
-# 1) Проверка зависимостей ──────────────────────────────────────────
+log()  { printf '\033[1;36m[NoVPN]\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31m[NoVPN] ОШИБКА:\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" = "0" ] || die "Запустите от root (или через sudo)."
+
+# --- зависимости: git, docker, docker compose ---
+if ! command -v git >/dev/null 2>&1; then
+  log "Ставлю git…"
+  (apt-get update -qq && apt-get install -y -qq git) >/dev/null 2>&1 \
+    || yum install -y git >/dev/null 2>&1 \
+    || die "Не удалось поставить git — установите вручную и повторите."
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
-  red "Не найден Docker. Установите Docker: https://docs.docker.com/engine/install/"
-  exit 1
+  log "Ставлю Docker (официальный скрипт get.docker.com)…"
+  curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 || die "Не удалось установить Docker."
+  systemctl enable --now docker >/dev/null 2>&1 || true
 fi
+
+# compose v2 (плагин) или v1 (бинарь) — подбираем доступный.
 if docker compose version >/dev/null 2>&1; then
-  DC="docker compose"
+  COMPOSE="docker compose"
 elif command -v docker-compose >/dev/null 2>&1; then
-  DC="docker-compose"
+  COMPOSE="docker-compose"
 else
-  red "Не найден docker compose (плагин или docker-compose). Установите Docker Compose v2."
-  exit 1
+  die "Не найден docker compose. Обновите Docker до версии с плагином compose."
 fi
 
-# 2) .env ───────────────────────────────────────────────────────────
-if [ ! -f .env ]; then
-  ylw ".env не найден — создаю из .env.example. Отредактируйте PUBLIC_URL после установки."
-  cp .env.example .env
+# --- проверка порта: не молча падать на занятом ---
+if ss -tuln 2>/dev/null | grep -qE "[:.]${PORT}\b"; then
+  die "Порт ${PORT} уже занят. Запустите с другим портом: PORT=8088 ... (см. шапку скрипта)."
 fi
 
-# Дописать переменную в .env, если она пустая или отсутствует.
-gen_secret() { openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
-ensure_secret() { # $1 = имя переменной
-  local name="$1" val
-  val="$(grep -E "^${name}=" .env | head -1 | cut -d= -f2- || true)"
-  if [ -z "${val}" ]; then
-    local secret; secret="$(gen_secret)"
-    if grep -qE "^${name}=" .env; then
-      # заменить пустое значение (portable sed)
-      tmp="$(mktemp)"; awk -v n="$name" -v s="$secret" 'BEGIN{FS=OFS="="} $1==n{print n"="s; next} {print}' .env > "$tmp" && mv "$tmp" .env
-    else
-      printf '%s=%s\n' "$name" "$secret" >> .env
-    fi
-    grn "Сгенерирован ${name} (записан в .env)."
-  fi
-}
-ensure_secret ENCRYPTION_KEY
-ensure_secret SESSION_SECRET
-
-# Предупредить, если публичный адрес не задан осмысленно.
-PUB="$(grep -E '^PUBLIC_URL=' .env | head -1 | cut -d= -f2- || true)"
-if [ -z "${PUB}" ] || printf '%s' "$PUB" | grep -q 'panel.example.com'; then
-  ylw "PUBLIC_URL не задан (или пример). Панель поднимется, но задайте реальный адрес"
-  ylw "в .env (PUBLIC_URL=https://ваш.домен) или в панели: Настройки → Адрес сайта."
+# --- код: клонируем или обновляем ---
+if [ -d "$DIR/.git" ]; then
+  log "Обновляю $DIR…"
+  git -C "$DIR" pull --ff-only >/dev/null 2>&1 || die "git pull не удался в $DIR."
+else
+  log "Клонирую $REPO в $DIR…"
+  git clone --depth 1 "$REPO" "$DIR" >/dev/null 2>&1 || die "git clone не удался."
 fi
 
-# 3) Сборка и запуск ────────────────────────────────────────────────
-# --env-file указываем явно: compose иначе ищет .env рядом с compose-файлом
-# (в deploy/), а он лежит в корне проекта.
-grn "Собираю и запускаю панель (${DC})…"
-$DC --env-file .env -f "$COMPOSE_FILE" up -d --build
+# --- сборка и запуск ---
+cd "$DIR"
+log "Собираю и запускаю панель (первый раз — несколько минут)…"
+PORT="$PORT" $COMPOSE -f deploy/docker-compose.yml up -d --build
 
-# 4) Ожидание готовности ────────────────────────────────────────────
-PORT="$(grep -E '^PORT=' .env | head -1 | cut -d= -f2- || true)"; PORT="${PORT:-3000}"
-printf 'Жду готовности'
-for i in $(seq 1 30); do
-  if curl -fsS "http://localhost:${PORT}/healthz" >/dev/null 2>&1; then
-    echo; grn "Готово. Панель отвечает на порту ${PORT}."
-    echo "Откройте:  ${PUB:-http://localhost:${PORT}}"
-    echo "Первый вход — паролем администратора (по умолчанию «admin»), затем смените его."
-    exit 0
-  fi
-  printf '.'; sleep 2
-done
+# --- итог ---
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+log "Готово! Панель поднята."
 echo
-red "Панель не ответила на /healthz за отведённое время. Проверьте логи:"
-echo "  $DC --env-file .env -f $COMPOSE_FILE logs --tail=50 manager"
-exit 1
+echo "  Адрес:    http://${IP:-<IP-сервера>}:${PORT}"
+echo "  Логин:    (пароль по умолчанию) admin"
+echo "  Внимание: при первом входе панель заставит сменить пароль администратора."
+echo
+echo "  Логи:     cd $DIR && $COMPOSE -f deploy/docker-compose.yml logs -f manager"
+echo "  Обновить: повторите эту команду (git pull + пересборка)."
+echo
+echo "  Дальше — войдите в панель и добавьте серверы (Xray / AmneziaWG / прокси)"
+echo "  по SSH прямо из веб-интерфейса. ENV настраивать не нужно."
