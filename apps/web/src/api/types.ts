@@ -204,9 +204,10 @@ export interface ApiClient {
 
 export interface StatsPoint {
   at: string;
-  trafficGb: number;
+  trafficGb: number; // накопительный суммарный трафик на момент снимка
   activeUsers: number;
   activeDevices: number;
+  usedDevices: number; // реально используемые (на связи за ~сутки)
   onlineServers: number;
   totalServers: number;
 }

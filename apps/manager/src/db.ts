@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS stats_samples (
   traffic_gb REAL NOT NULL DEFAULT 0,
   active_users INTEGER NOT NULL DEFAULT 0,
   active_devices INTEGER NOT NULL DEFAULT 0,
+  used_devices INTEGER NOT NULL DEFAULT 0,
   online_servers INTEGER NOT NULL DEFAULT 0,
   total_servers INTEGER NOT NULL DEFAULT 0
 );
@@ -294,6 +295,9 @@ for (const stmt of [
   // Прокси-логин снят с сервера по квоте (обратимо, симметрично устройствам): при
   // возврате под лимит логин поднимается заново тем же паролем. is_active остаётся 1.
   'ALTER TABLE proxy_accounts ADD COLUMN quota_blocked INTEGER NOT NULL DEFAULT 0',
+  // Реально используемые конфиги на момент снимка (были на связи за ~сутки) — для
+  // графика «Активность» (реальное использование, а не число выданных).
+  'ALTER TABLE stats_samples ADD COLUMN used_devices INTEGER NOT NULL DEFAULT 0',
 ]) {
   try {
     db.exec(stmt);

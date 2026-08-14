@@ -1,59 +1,68 @@
-// Лёгкий SVG-график (area + line) без внешних зависимостей. Тема-адаптивный через
-// var(--accent). Используется на «Обзоре» для истории трафика/активности.
+// Лёгкие графики без внешних зависимостей. BarChart — «за период» (сутки/день) с
+// наведением и тултипом; AreaChart — накопительная линия (оставлен на всякий случай).
+import { useState } from 'react';
 
-interface Point {
-  t: number; // время (мс) — для равномерности по X
-  v: number; // значение
+export interface Bar {
+  label: string; // подпись точки (напр. «14:00» или «пн, 12 авг»)
+  value: number;
 }
 
-export function AreaChart({
-  points,
-  height = 160,
+export function BarChart({
+  bars,
+  height = 180,
   format = (v: number) => String(Math.round(v)),
-  color = 'var(--accent)',
+  empty = 'Пока мало данных — история копится (снимок раз в ~10 минут).',
 }: {
-  points: Point[];
+  bars: Bar[];
   height?: number;
   format?: (v: number) => string;
-  color?: string;
+  empty?: string;
 }) {
-  if (points.length < 2) {
-    return <div className="small muted" style={{ padding: '24px 0', textAlign: 'center' }}>Пока мало данных для графика — история копится (снимок раз в ~10 минут).</div>;
+  const [hover, setHover] = useState<number | null>(null);
+  if (bars.length === 0) {
+    return <div className="small muted" style={{ padding: '28px 0', textAlign: 'center' }}>{empty}</div>;
   }
-  const W = 600;
-  const H = height;
-  const padY = 10;
-  const xs = points.map((p) => p.t);
-  const vs = points.map((p) => p.v);
-  const minT = Math.min(...xs);
-  const maxT = Math.max(...xs);
-  const minV = Math.min(...vs);
-  const maxV = Math.max(...vs);
-  const spanT = maxT - minT || 1;
-  const spanV = maxV - minV || 1;
-  const x = (t: number) => ((t - minT) / spanT) * W;
-  const y = (v: number) => H - padY - ((v - minV) / spanV) * (H - padY * 2);
-  const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
-  const area = `${line} L${W},${H} L0,${H} Z`;
-  const gid = `g${Math.round(minV)}${Math.round(maxV)}${points.length}`;
+  const max = Math.max(1e-9, ...bars.map((b) => b.value));
+  const gap = bars.length > 40 ? 1 : bars.length > 14 ? 2 : 4;
+  const h = hover != null ? bars[hover] : null;
   return (
-    <div style={{ width: '100%' }}>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width: '100%', height, display: 'block' }}>
-        <defs>
-          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor={color} stopOpacity="0.28" />
-            <stop offset="1" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={area} fill={`url(#${gid})`} />
-        <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      </svg>
-      <div className="row-between small muted" style={{ marginTop: 4 }}>
-        <span className="mono">{format(minV)}</span>
-        <span className="mono">макс {format(maxV)}</span>
+    <div style={{ position: 'relative' }}>
+      {/* тултип */}
+      {h ? (
+        <div
+          style={{
+            position: 'absolute', top: -4, left: `${((hover! + 0.5) / bars.length) * 100}%`,
+            transform: 'translate(-50%, -100%)', pointerEvents: 'none', zIndex: 5, whiteSpace: 'nowrap',
+            background: 'var(--surface-btn-2, #1b2336)', border: '1px solid var(--border-inner, #2b3a63)',
+            borderRadius: 8, padding: '6px 9px', boxShadow: '0 6px 18px rgba(0,0,0,.35)',
+          }}
+        >
+          <div className="mono" style={{ fontSize: 14, fontWeight: 700 }}>{format(h.value)}</div>
+          <div className="small muted" style={{ fontSize: 11 }}>{h.label}</div>
+        </div>
+      ) : null}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap, height }} onMouseLeave={() => setHover(null)}>
+        {bars.map((b, i) => (
+          <div
+            key={i}
+            onMouseEnter={() => setHover(i)}
+            title=""
+            style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'flex-end', cursor: 'default' }}
+          >
+            <div
+              style={{
+                width: '100%', height: `${Math.max(2, (b.value / max) * 100)}%`,
+                background: 'var(--accent)', opacity: hover === i ? 1 : 0.5,
+                borderRadius: '3px 3px 0 0', transition: 'opacity .1s',
+              }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="row-between small muted" style={{ marginTop: 6 }}>
+        <span>{bars[0]!.label}</span>
+        <span>{bars[bars.length - 1]!.label}</span>
       </div>
     </div>
   );
 }
-
-export type { Point as ChartPoint };

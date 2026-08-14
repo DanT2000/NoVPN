@@ -7,7 +7,7 @@ import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import type { StatsPoint, ServerHealth } from '../api/types';
 import { Panel, Dot, ScreenHeader, Loading, Chip } from '../components/ui';
-import { AreaChart } from '../components/Chart';
+import { BarChart, type Bar } from '../components/Chart';
 import { statusOf } from '../lib/status';
 import { gb, rel, daysLeft } from '../lib/format';
 
@@ -17,11 +17,44 @@ const WINDOWS: Array<{ days: number; label: string }> = [
   { days: 30, label: 'Месяц' },
 ];
 
-type Metric = 'trafficGb' | 'activeDevices';
-const METRICS: Array<{ key: Metric; label: string }> = [
-  { key: 'trafficGb', label: 'Трафик' },
-  { key: 'activeDevices', label: 'Активность' },
+type Metric = 'traffic' | 'used';
+const METRICS: Array<{ key: Metric; label: string; hint: string }> = [
+  { key: 'traffic', label: 'Трафик за период', hint: 'Сколько трафика прошло за период — за час (сутки) или за день (неделя/месяц). Не общий накопленный.' },
+  { key: 'used', label: 'Активность', hint: 'Сколько конфигов реально использовалось (были на связи), а не сколько выдано.' },
 ];
+
+const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** Раскладываем накопительную серию по корзинам: сутки → по часам, неделя/месяц → по
+ *  дням. Трафик = ПРИРОСТ за корзину (реальное использование за период), активность =
+ *  пик реально используемых конфигов в корзине. */
+function bucketize(series: StatsPoint[], days: number, metric: Metric): Bar[] {
+  if (series.length === 0) return [];
+  const now = Date.now();
+  const byHour = days <= 1;
+  const bucketMs = byHour ? 3_600_000 : 86_400_000;
+  const start = now - days * 86_400_000;
+  const map = new Map<number, { traffic: number; used: number }>();
+  let prevCum: number | null = null;
+  for (const s of series) {
+    const t = new Date(s.at).getTime();
+    if (t < start) { prevCum = s.trafficGb; continue; }
+    const bk = Math.floor(t / bucketMs) * bucketMs;
+    const b = map.get(bk) ?? { traffic: 0, used: 0 };
+    if (prevCum != null) { const d = s.trafficGb - prevCum; if (d > 0) b.traffic += d; }
+    b.used = Math.max(b.used, s.usedDevices);
+    map.set(bk, b);
+    prevCum = s.trafficGb;
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([bk, v]) => {
+      const d = new Date(bk);
+      const label = byHour ? `${pad(d.getHours())}:00` : `${WD[d.getDay()]}, ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+      return { label, value: metric === 'traffic' ? v.traffic : v.used };
+    });
+}
 
 function rowProps(onClick: () => void) {
   return {
@@ -50,7 +83,7 @@ const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'no
 export function Dashboard() {
   const { data, loading, loadError, isMobile, goAdmin } = useApp();
   const [win, setWin] = useState(7);
-  const [metric, setMetric] = useState<Metric>('trafficGb');
+  const [metric, setMetric] = useState<Metric>('traffic');
   const [series, setSeries] = useState<StatsPoint[] | null>(null);
   const [health, setHealth] = useState<ServerHealth[] | null>(null);
 
@@ -68,7 +101,9 @@ export function Dashboard() {
   if (loadError) return <div className="notice notice-red">{loadError}</div>;
   if (loading || !data) return <Loading text="Загружаем данные…" />;
 
-  const chartPoints = (series ?? []).map((p) => ({ t: new Date(p.at).getTime(), v: p[metric] }));
+  const bars = series ? bucketize(series, win, metric) : [];
+  const periodTotal = bars.reduce((s, b) => s + b.value, 0);
+  const metricInfo = METRICS.find((m) => m.key === metric)!;
 
   const { users, devices, servers, jobErrors, adminLog } = data;
 
@@ -132,17 +167,25 @@ export function Dashboard() {
             </div>
           }
         >
-          <div className="chip-row" style={{ marginBottom: 12 }}>
-            {WINDOWS.map((w) => (
-              <Chip key={w.days} label={w.label} size="sm" active={win === w.days} onClick={() => setWin(w.days)} />
-            ))}
+          <div className="row-between" style={{ marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
+            <div className="chip-row">
+              {WINDOWS.map((w) => (
+                <Chip key={w.days} label={w.label} size="sm" active={win === w.days} onClick={() => setWin(w.days)} />
+              ))}
+            </div>
+            {series && bars.length > 0 ? (
+              <span className="small muted mono">
+                {metric === 'traffic' ? `всего за период: ${gb(periodTotal)}` : `пик: ${Math.max(0, ...bars.map((b) => b.value))} конфигов`}
+              </span>
+            ) : null}
           </div>
+          <div className="body small muted" style={{ marginBottom: 10 }}>{metricInfo.hint}</div>
           {series === null ? (
             <div className="small muted" style={{ padding: '24px 0', textAlign: 'center' }}>Загрузка…</div>
           ) : (
-            <AreaChart
-              points={chartPoints}
-              format={metric === 'trafficGb' ? (v) => gb(v) : (v) => String(Math.round(v))}
+            <BarChart
+              bars={bars}
+              format={metric === 'traffic' ? (v) => gb(v) : (v) => `${Math.round(v)} конф.`}
             />
           )}
         </Panel>

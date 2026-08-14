@@ -896,17 +896,20 @@ export function recordStatsSample(minGapMin = 9): void {
     now,
   );
   const activeDevices = num('SELECT COUNT(*) AS n FROM devices d JOIN users u ON u.id=d.user_id WHERE d.is_active=1 AND u.deleted_at IS NULL');
+  // Реально используемые: конфиги, бывшие на связи за последние сутки (handshake/трафик).
+  const usedSince = new Date(Date.now() - 86400000).toISOString();
+  const usedDevices = num('SELECT COUNT(*) AS n FROM devices d JOIN users u ON u.id=d.user_id WHERE d.is_active=1 AND u.deleted_at IS NULL AND d.last_seen_at IS NOT NULL AND d.last_seen_at >= ?', usedSince);
   const online = num("SELECT COUNT(*) AS n FROM servers WHERE agent='online'");
   const total = num('SELECT COUNT(*) AS n FROM servers');
-  db.prepare('INSERT INTO stats_samples(at,traffic_gb,active_users,active_devices,online_servers,total_servers) VALUES(?,?,?,?,?,?)').run(now, traffic, activeUsers, activeDevices, online, total);
+  db.prepare('INSERT INTO stats_samples(at,traffic_gb,active_users,active_devices,used_devices,online_servers,total_servers) VALUES(?,?,?,?,?,?,?)').run(now, traffic, activeUsers, activeDevices, usedDevices, online, total);
   db.prepare('DELETE FROM stats_samples WHERE at < ?').run(new Date(Date.now() - 120 * 86400000).toISOString());
 }
 
-export interface StatsSample { at: string; trafficGb: number; activeUsers: number; activeDevices: number; onlineServers: number; totalServers: number }
+export interface StatsSample { at: string; trafficGb: number; activeUsers: number; activeDevices: number; usedDevices: number; onlineServers: number; totalServers: number }
 export function getStatsSeries(sinceMs: number): StatsSample[] {
   const since = new Date(Date.now() - sinceMs).toISOString();
   return db
-    .prepare('SELECT at, traffic_gb AS trafficGb, active_users AS activeUsers, active_devices AS activeDevices, online_servers AS onlineServers, total_servers AS totalServers FROM stats_samples WHERE at >= ? ORDER BY at ASC')
+    .prepare('SELECT at, traffic_gb AS trafficGb, active_users AS activeUsers, active_devices AS activeDevices, used_devices AS usedDevices, online_servers AS onlineServers, total_servers AS totalServers FROM stats_samples WHERE at >= ? ORDER BY at ASC')
     .all(since) as StatsSample[];
 }
 

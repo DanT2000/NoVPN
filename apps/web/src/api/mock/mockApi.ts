@@ -500,22 +500,29 @@ export const mockApi: ApiClient = {
   },
   async getStats(days: number) {
     await wait(200);
-    // Синтетическая история для демо/скриншотов: плавный рост трафика + суточные пики.
+    // Синтетическая история для демо/скриншотов: НАКОПИТЕЛЬНЫЙ трафик (растёт быстрее в
+    // пики) → на графике «за период» видны суточные пики; usedDevices — реальная
+    // активность (осциллирует по времени суток).
     const now = Date.now();
-    const points = Math.min(180, Math.max(24, days * 6)); // ~6 точек/день
+    const points = Math.min(220, Math.max(24, days * 8));
     const stepMs = (days * 86400000) / points;
-    const baseTraffic = state.servers.reduce((s, v) => s + (v.trafficGb || 0), 0) || 400;
+    const baseTotal = state.servers.reduce((s, v) => s + (v.trafficGb || 0), 0) || 600;
+    const perStep = (baseTotal * 0.85) / points; // средний прирост за шаг
+    const onlineServers = state.servers.filter((s) => s.agent === 'online').length;
+    let cum = baseTotal * 0.35;
     const series = Array.from({ length: points }, (_, i) => {
       const t = now - (points - 1 - i) * stepMs;
-      const phase = (i / points) * Math.PI * 2 * days;
-      const daily = 0.55 + 0.45 * Math.sin(phase - Math.PI / 2); // суточная волна 0..1
-      const growth = 0.6 + 0.4 * (i / points);
+      const dayFrac = ((t / 86400000) % 1 + 1) % 1; // время суток 0..1
+      const daily = 0.5 + 0.5 * Math.sin(dayFrac * Math.PI * 2 - Math.PI / 2); // пик днём
+      const wobble = 0.85 + 0.3 * Math.sin(i * 1.7); // лёгкая неравномерность
+      cum += perStep * (0.35 + 1.4 * daily) * wobble;
       return {
         at: new Date(t).toISOString(),
-        trafficGb: Math.round(baseTraffic * growth * (0.7 + 0.3 * daily) * 10) / 10,
+        trafficGb: Math.round(cum * 10) / 10,
         activeUsers: Math.round(2 + 3 * daily),
-        activeDevices: Math.round(4 + 4 * daily),
-        onlineServers: state.servers.filter((s) => s.agent === 'online').length,
+        activeDevices: 6,
+        usedDevices: Math.max(1, Math.round(1 + 5 * daily * wobble)),
+        onlineServers,
         totalServers: state.servers.length,
       };
     });
