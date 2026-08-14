@@ -27,6 +27,12 @@ test('parseCommand: /menu и /config распознаются', () => {
   assert.equal(parseCommand('/config@MyVpnBot')?.name, 'config');
 });
 
+test('parseCommand: /id распознаётся (узнать Telegram ID)', () => {
+  assert.equal(parseCommand('/id')?.name, 'id');
+  assert.equal(parseCommand('/id@MyVpnBot')?.name, 'id');
+  assert.equal(parseCommand('/identity'), null); // не ложное срабатывание
+});
+
 test('parseCommand: /configfoo НЕ команда (ложное срабатывание)', () => {
   assert.equal(parseCommand('/configfoo'), null);
 });

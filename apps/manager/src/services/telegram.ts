@@ -6,7 +6,7 @@ import { ProxyAgent } from 'undici';
 import * as repo from '../repo.js';
 import { decryptSecret } from '../lib/crypto.js';
 import { getServerProxy } from './keyvault.js';
-import { issueForUser } from './issue.js';
+import { issueForUser, revokeDeviceOnServer } from './issue.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -341,6 +341,27 @@ async function send(chatId: number | string, text: string, opts: { markdown?: bo
   }
 }
 
+/** Навигация по меню БЕЗ засорения чата: если действие пришло из нажатия кнопки
+ *  (есть message_id), редактируем существующее сообщение вместо новой стопки. При
+ *  ошибке (сообщение слишком старое / идентичное) — фолбэк на обычную отправку. */
+async function editOrSend(chatId: number, msgId: number | undefined, text: string, opts: { kb?: Kb } = {}): Promise<void> {
+  if (msgId != null) {
+    try {
+      await tgApi('editMessageText', {
+        chat_id: chatId,
+        message_id: msgId,
+        text,
+        reply_markup: { inline_keyboard: opts.kb ?? [] },
+        disable_web_page_preview: true,
+      });
+      return;
+    } catch {
+      /* сообщение устарело/идентично/удалено — уходим на send */
+    }
+  }
+  await send(chatId, text, opts);
+}
+
 /** Идентификатор пользователя Telegram для привязки. */
 function handleOf(from: Record<string, any>, chatId: number): string {
   return from?.username ? `@${from.username}` : `id:${chatId}`;
@@ -349,10 +370,10 @@ function handleOf(from: Record<string, any>, chatId: number): string {
 /** Разбор команды бота. Учитывает суффикс @botname (Telegram добавляет его в
  *  группах и подсказках) и отделяет полезную нагрузку. `/configfoo` командой НЕ
  *  считается. */
-export function parseCommand(text: string): { name: 'start' | 'menu' | 'config'; payload: string } | null {
-  const m = /^\/(start|menu|config)(?:@\S+)?(?:\s+([\s\S]*))?$/i.exec(text);
+export function parseCommand(text: string): { name: 'start' | 'menu' | 'config' | 'id'; payload: string } | null {
+  const m = /^\/(start|menu|config|id)(?:@\S+)?(?:\s+([\s\S]*))?$/i.exec(text);
   if (!m) return null;
-  return { name: m[1]!.toLowerCase() as 'start' | 'menu' | 'config', payload: (m[2] ?? '').trim() };
+  return { name: m[1]!.toLowerCase() as 'start' | 'menu' | 'config' | 'id', payload: (m[2] ?? '').trim() };
 }
 
 function siteUrl(): string {
@@ -389,9 +410,9 @@ function mainMenu(user: { name: string; deviceLimit: number | null; id: string }
   return { text, kb };
 }
 
-async function showMenu(chatId: number, user: { name: string; deviceLimit: number | null; id: string }): Promise<void> {
+async function showMenu(chatId: number, user: { name: string; deviceLimit: number | null; id: string }, msgId?: number): Promise<void> {
   const m = mainMenu(user);
-  await send(chatId, m.text, { kb: m.kb });
+  await editOrSend(chatId, msgId, m.text, { kb: m.kb });
 }
 
 async function handleUpdate(u: Record<string, any>): Promise<void> {
@@ -409,6 +430,12 @@ async function handleUpdate(u: Record<string, any>): Promise<void> {
   // команда (с опциональным @botname), а «/configfoo» — нет. «/start <payload>» —
   // это привязка, обрабатываем её ниже.
   const cmd = parseCommand(text);
+  // /id — узнать свой Telegram ID (работает всегда, даже без привязки). Нужен, чтобы
+  // передать администратору для выдачи доступа/админки по ID.
+  if (cmd?.name === 'id') {
+    await send(chatId, `Ваш Telegram ID: ${chatId}\n\nСкопируйте его и передайте администратору — по нему можно выдать доступ или права в панели.`);
+    return;
+  }
   if (cmd && cmd.name !== 'start') {
     const linked = findUser(chatId, handle);
     if (linked) {
@@ -486,20 +513,52 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
     return;
   }
   repo.setTelegramChatId(user.id, chatId); // бэкофилл chat_id для рассылки
-  if (data === 'menu') return showMenu(chatId, user);
-  if (data === 'getcfg') return startGetConfig(chatId, user);
+  const msgId = typeof cb.message?.message_id === 'number' ? (cb.message.message_id as number) : undefined;
+  if (data === 'menu') return showMenu(chatId, user, msgId);
+  if (data === 'getcfg') return startGetConfig(chatId, user, msgId);
   // Выпуск не блокирует poll-loop: SSH может тянуться 30–60с, и await заморозил бы бота
   // для ВСЕХ. issueAndSend сам шлёт «Выпускаю…» и результат/ошибку — запускаем в фоне.
   if (data.startsWith('proto:')) {
     void issueAndSend(chatId, user, data.slice(6) as 'xray' | 'amneziawg').catch(() => {});
     return;
   }
-  if (data === 'devices') return sendDevices(chatId, user);
-  if (data === 'howto') return sendHowto(chatId, user);
-  if (data === 'apps') return sendApps(chatId);
+  if (data === 'devices') return sendDevices(chatId, user, msgId);
+  if (data.startsWith('del:')) return confirmDeleteDevice(chatId, user, data.slice(4), msgId);
+  if (data.startsWith('delyes:')) {
+    // Отзыв на сервере идёт по SSH (может тянуться) — в фоне, не блокируя poll-loop.
+    void deleteDevice(chatId, user, data.slice(7), msgId).catch(() => {});
+    return;
+  }
+  if (data === 'howto') return sendHowto(chatId, user, msgId);
+  if (data === 'apps') return sendApps(chatId, msgId);
 }
 
-async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> & object): Promise<void> {
+/** Подтверждение удаления конфига (F). Проверяем владение прежде чем предлагать. */
+async function confirmDeleteDevice(chatId: number, user: ReturnType<typeof findUser> & object, deviceId: string, msgId?: number): Promise<void> {
+  const d = repo.getDevice(deviceId);
+  if (!d || d.userId !== user.id) return sendDevices(chatId, user, msgId);
+  await editOrSend(chatId, msgId, `Удалить конфиг «${d.name}» (${PROTO_LABEL[d.protocol] ?? d.protocol})?\n\nДоступ по нему сразу перестанет работать. Это действие необратимо — при необходимости выпустите новый конфиг.`, {
+    kb: [
+      [{ text: '🗑 Да, удалить', callback_data: `delyes:${d.id}` }],
+      [{ text: '‹ Отмена', callback_data: 'devices' }],
+    ],
+  });
+}
+
+/** Удаление конфига через бота: реальный отзыв на сервере + отметка в БД (как в
+ *  веб-кабинете). Сервер недоступен → revoke_pending, sync повторит (ключ не осиротеет). */
+async function deleteDevice(chatId: number, user: ReturnType<typeof findUser> & object, deviceId: string, msgId?: number): Promise<void> {
+  const d = repo.getDevice(deviceId);
+  if (!d || d.userId !== user.id) return sendDevices(chatId, user, msgId);
+  await editOrSend(chatId, msgId, `Удаляю «${d.name}»…`);
+  const revoked = await revokeDeviceOnServer(d.id);
+  repo.updateDeviceFields(d.id, revoked ? { is_active: 0, revoked_at: repo.nowIso(), revoke_pending: 0 } : { is_active: 0, revoked_at: null, revoke_pending: 1 });
+  repo.addHistory(user.id, `Удалён конфиг «${d.name}» через Telegram`);
+  if (!revoked) await send(chatId, 'Сервер сейчас недоступен — доступ снят, отзыв на сервере повторится автоматически.');
+  await sendDevices(chatId, user, msgId);
+}
+
+async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> & object, msgId?: number): Promise<void> {
   if (!user.isActive) return void send(chatId, 'Доступ отключён администратором.');
   if (user.expiresAt && new Date(user.expiresAt) < new Date()) return void send(chatId, 'Срок действия доступа истёк.');
   // Лимит устройств НЕ проверяем здесь: переиспользование существующего Xray-конфига
@@ -521,7 +580,8 @@ async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> 
     return;
   }
   const kb: Kb = protos.map((p) => [{ text: PROTO_LABEL[p]!, callback_data: `proto:${p}` }]);
-  await send(chatId, 'Какой протокол выпустить?', { kb });
+  kb.push([{ text: '‹ Меню', callback_data: 'menu' }]);
+  await editOrSend(chatId, msgId, 'Какой протокол выпустить?', { kb });
 }
 
 /** Отправить блок с содержимым (ссылка/.conf) отдельным сообщением, безопасно.
@@ -590,22 +650,23 @@ async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & 
   }
 }
 
-async function sendDevices(chatId: number, user: ReturnType<typeof findUser> & object): Promise<void> {
+async function sendDevices(chatId: number, user: ReturnType<typeof findUser> & object, msgId?: number): Promise<void> {
   const devices = repo.listDevicesOfUser(user.id).filter((d) => d.isActive);
   if (devices.length === 0) {
-    await send(chatId, 'У вас пока нет активных конфигов.', { kb: [[{ text: '➕ Получить конфиг', callback_data: 'getcfg' }], [{ text: '‹ Меню', callback_data: 'menu' }]] });
+    await editOrSend(chatId, msgId, 'У вас пока нет активных конфигов.', { kb: [[{ text: '➕ Получить конфиг', callback_data: 'getcfg' }], [{ text: '‹ Меню', callback_data: 'menu' }]] });
     return;
   }
   const lines = devices.map((d, i) => {
     const srv = repo.getServer(d.serverId);
     return `${i + 1}. ${d.name} — ${PROTO_LABEL[d.protocol] ?? d.protocol}${srv ? ` · ${srv.name}` : ''}`;
   });
-  await send(chatId, `📱 Ваши устройства (${devices.length}):\n\n` + lines.join('\n'), {
-    kb: [[{ text: '➕ Получить конфиг', callback_data: 'getcfg' }], [{ text: '‹ Меню', callback_data: 'menu' }]],
-  });
+  // Кнопка удаления на каждый конфиг (F): нажатие → подтверждение → отзыв на сервере.
+  const kb: Kb = devices.map((d, i) => [{ text: `🗑 Удалить #${i + 1} — ${d.name}`, callback_data: `del:${d.id}` }]);
+  kb.push([{ text: '➕ Получить конфиг', callback_data: 'getcfg' }, { text: '‹ Меню', callback_data: 'menu' }]);
+  await editOrSend(chatId, msgId, `📱 Ваши устройства (${devices.length}):\n\n` + lines.join('\n'), { kb });
 }
 
-async function sendHowto(chatId: number, user: ReturnType<typeof findUser> & object): Promise<void> {
+async function sendHowto(chatId: number, user: ReturnType<typeof findUser> & object, msgId?: number): Promise<void> {
   const site = siteUrl();
   const protos = user.allowedProtocols;
   const parts = ['📖 Как подключить:', ''];
@@ -613,7 +674,7 @@ async function sendHowto(chatId: number, user: ReturnType<typeof findUser> & obj
   if (protos.includes('amneziawg')) parts.push('• AmneziaWG: приложение AmneziaWG/AmneziaVPN → импорт .conf или скан QR.');
   parts.push('', 'Нажмите «Получить конфиг», затем импортируйте его в приложение.');
   if (site) parts.push('', `Все приложения и инструкции: ${site}`);
-  await send(chatId, parts.join('\n'), {
+  await editOrSend(chatId, msgId, parts.join('\n'), {
     kb: [
       [{ text: '➕ Получить конфиг', callback_data: 'getcfg' }, { text: '⬇️ Приложения', callback_data: 'apps' }],
       [{ text: '‹ Меню', callback_data: 'menu' }],
@@ -621,7 +682,7 @@ async function sendHowto(chatId: number, user: ReturnType<typeof findUser> & obj
   });
 }
 
-async function sendApps(chatId: number): Promise<void> {
+async function sendApps(chatId: number, msgId?: number): Promise<void> {
   const site = siteUrl();
   const apps = repo.listApps().filter((a) => a.enabled).slice(0, 8);
   const lines = ['⬇️ Приложения:', ''];
@@ -630,5 +691,5 @@ async function sendApps(chatId: number): Promise<void> {
     lines.push(`• ${a.client}${link ? ` — ${link}` : ''}`);
   }
   if (site) lines.push('', `Полный список с инструкциями по платформам: ${site}`);
-  await send(chatId, lines.join('\n'), { kb: [[{ text: '‹ Меню', callback_data: 'menu' }]] });
+  await editOrSend(chatId, msgId, lines.join('\n'), { kb: [[{ text: '‹ Меню', callback_data: 'menu' }]] });
 }
