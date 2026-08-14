@@ -18,7 +18,7 @@
 Композиция: слева — вордмарк «novpn» крупно и подзаголовок «Своя панель для AmneziaWG и Xray ·
 пользователь сам выдаёт себе ключ». Справа — макет **ноутбука** с реальным скриншотом
 `admin-dashboard-dark-desktop.png` на экране, чуть развёрнут в 3/4. Тёмный градиентный фон,
-мятное свечение справа‑сверху. Внизу мелким моно — `github.com/DanT2000/0VPN`.
+мятное свечение справа‑сверху. Внизу мелким моно — `github.com/DanT2000/NoVPN`.
 
 > Prompt: "Clean dark product hero, 1200x630. Left: large wordmark 'novpn' (no = white, vpn =
 > #5b8cff) and subtitle. Right: a modern laptop mockup at slight 3/4 angle showing the provided

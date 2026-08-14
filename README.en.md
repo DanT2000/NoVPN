@@ -69,7 +69,7 @@ More in [`press/screenshots/`](press/screenshots/) (desktop, mobile, dark theme)
 On a clean Linux server (Ubuntu/Debian; may be the same box that will run the VPN):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo bash
 ```
 
 The script installs Docker (if missing), builds and starts the panel, **generates all
@@ -80,7 +80,7 @@ secrets**, and prints the address and starting password. No ENV needed — unpac
 
 ```bash
 PORT=8088 DIR=/opt/novpn bash -c \
-  "curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo -E bash"
+  "curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo -E bash"
 ```
 </details>
 
@@ -88,7 +88,7 @@ PORT=8088 DIR=/opt/novpn bash -c \
 <summary>For those who want manual control (docker compose)</summary>
 
 ```bash
-git clone https://github.com/DanT2000/0VPN.git novpn && cd novpn
+git clone https://github.com/DanT2000/NoVPN.git novpn && cd novpn
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
@@ -156,7 +156,7 @@ UI screenshots are in [`press/`](press/) (see the [capture guide](press/screensh
 
 ```bash
 # same command as install — does git pull + rebuild
-curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo bash
 ```
 
 The `novpn_data` volume survives rebuilds; migrations apply automatically.
@@ -175,7 +175,16 @@ npm run build
 
 ## License
 
-See [LICENSE](LICENSE).
+NoVPN is **source-available**: the code is open, but this is not "do whatever you want."
+It is licensed under the [**PolyForm Noncommercial License 1.0.0**](LICENSE):
+
+- **Noncommercial use is permitted** (personal, educational, research, noncommercial
+  organizations, etc.) under the PolyForm Noncommercial 1.0.0 terms.
+- **Commercial use is NOT permitted** under the public license. It requires a **separate
+  commercial license** or explicit written permission from the copyright holder.
+
+For a commercial license, contact the copyright holder via the project repository:
+<https://github.com/DanT2000/NoVPN>. See also [`NOTICE`](NOTICE) and [`LICENSE`](LICENSE).
 
 > Legal note: use only on your own servers and within the laws of your jurisdiction. This
 > project is a tool for administering your own access, not a means to break the law.

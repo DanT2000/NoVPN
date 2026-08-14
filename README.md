@@ -71,7 +71,7 @@ NoVPN построен вокруг двух идей:
 На чистом Linux‑сервере (Ubuntu/Debian; можно на том же, где будет VPN):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo bash
 ```
 
 Скрипт сам поставит Docker (если нет), соберёт и поднимет панель, **сгенерирует все
@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sud
 
 ```bash
 PORT=8088 DIR=/opt/novpn bash -c \
-  "curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo -E bash"
+  "curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo -E bash"
 ```
 </details>
 
@@ -91,7 +91,7 @@ PORT=8088 DIR=/opt/novpn bash -c \
 <summary>Вариант для тех, кто хочет контролировать сам (docker compose)</summary>
 
 ```bash
-git clone https://github.com/DanT2000/0VPN.git novpn && cd novpn
+git clone https://github.com/DanT2000/NoVPN.git novpn && cd novpn
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
@@ -159,7 +159,7 @@ flowchart LR
 
 ```bash
 # та же команда, что при установке — сделает git pull + пересборку
-curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo bash
 ```
 
 База в томе `novpn_data` переживает пересборку; миграции применяются автоматически.
@@ -191,7 +191,16 @@ npm run build      # прод-сборка
 
 ## Лицензия
 
-См. [LICENSE](LICENSE).
+NoVPN — **source-available**: код открыт, но это не «делай что хочешь». Лицензия —
+[**PolyForm Noncommercial License 1.0.0**](LICENSE):
+
+- **Некоммерческое использование — разрешено** (личное, учебное, исследовательское,
+  некоммерческие организации и т. п.) на условиях PolyForm Noncommercial 1.0.0.
+- **Коммерческое использование — НЕ разрешено** публичной лицензией. Для него нужна
+  **отдельная коммерческая лицензия** или явное письменное разрешение правообладателя.
+
+За коммерческой лицензией обращайтесь к правообладателю через репозиторий проекта:
+<https://github.com/DanT2000/NoVPN>. См. также [`NOTICE`](NOTICE) и [`LICENSE`](LICENSE).
 
 > Легальная памятка: используйте только на своих серверах и в рамках законодательства
 > вашей юрисдикции. Проект — инструмент администрирования собственного доступа, а не

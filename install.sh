@@ -2,16 +2,16 @@
 # NoVPN — установка в одну команду. Ставит Docker (если нужно), собирает и поднимает
 # панель. Никаких переменных окружения задавать не нужно — секреты панель заведёт сама.
 #
-#   curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo bash
 #
 # Переменные (необязательно):
 #   PORT=8088   — порт панели на хосте (по умолчанию 3000; поменяйте, если занят,
 #                 например когда ставите на тот же сервер, где уже крутится VPN).
 #   DIR=/opt/novpn                 — куда клонировать (по умолчанию /opt/novpn).
-#   REPO=https://github.com/DanT2000/0VPN  — источник.
+#   REPO=https://github.com/DanT2000/NoVPN  — источник.
 set -euo pipefail
 
-REPO="${REPO:-https://github.com/DanT2000/0VPN}"
+REPO="${REPO:-https://github.com/DanT2000/NoVPN}"
 DIR="${DIR:-/opt/novpn}"
 PORT="${PORT:-3000}"
 

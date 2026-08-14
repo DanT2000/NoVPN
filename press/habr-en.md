@@ -8,7 +8,7 @@ repeat every time someone's phone changes. I got tired of it and built a panel w
 gets **one link** and issues access to themselves, from any device. Without me.
 
 Below, no fluff: why it exists, how it differs from off-the-shelf panels, how you use it and what's
-inside. Open source: **https://github.com/DanT2000/0VPN**
+inside. Open source: **https://github.com/DanT2000/NoVPN**
 
 ![Panel overview: metrics, traffic chart, server uptime](screenshots/admin-dashboard-dark-desktop.png)
 
@@ -51,7 +51,7 @@ I didn't try to build an everything‑box. The opposite — a narrow tool about 
 **One command** on a clean server (may be the same box that runs the VPN):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DanT2000/0VPN/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DanT2000/NoVPN/main/install.sh | sudo bash
 ```
 
 It installs Docker, builds the image, starts the panel and **generates all secrets** — no `.env`,
@@ -103,6 +103,6 @@ access to servers.
 If, like me, you wanted **AmneziaWG with a proper panel** and users **issuing access to themselves**
 — grab it, one command to install, everything else via the web:
 
-**https://github.com/DanT2000/0VPN**
+**https://github.com/DanT2000/NoVPN**
 
 It's a live personal project; I polish it as I go. Issues/PRs welcome.

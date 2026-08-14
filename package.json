@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "NoVPN — панель управления VPN-доступами (control plane, web, agent)",
-  "license": "UNLICENSED",
+  "author": "DanT2000",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": "https://github.com/DanT2000/NoVPN",
   "workspaces": [
     "packages/*",
     "apps/*"
