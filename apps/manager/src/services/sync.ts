@@ -73,6 +73,7 @@ export async function syncAllServers(): Promise<void> {
       repo.addJobError('панель', `Автоотключение устройств: ${e instanceof Error ? e.message : 'ошибка'}`);
     }
     for (const s of repo.listServers()) {
+      if (s.detached) continue; // endpoint сохранён, физического сервера нет — sync пропускает
       if (!(await sshHasSshAccess(s.id))) continue;
 
       const hasAwg = s.protocols.includes('amneziawg');
@@ -301,7 +302,7 @@ export async function syncAllServers(): Promise<void> {
     // Мониторинг: аптайм серверов (событие при смене online/offline), снимок метрик
     // для графиков истории, и ежедневная сводка администратору в Telegram.
     try {
-      for (const s of repo.listServers()) repo.recordServerStatus(s.id, s.agent === 'online');
+      for (const s of repo.listServers()) if (!s.detached) repo.recordServerStatus(s.id, s.agent === 'online');
       repo.recordStatsSample();
       if (repo.getSettings().dailyDigest !== false) {
         const digest = repo.buildDailyDigestIfDue();

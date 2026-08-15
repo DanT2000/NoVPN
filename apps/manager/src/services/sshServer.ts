@@ -274,6 +274,24 @@ openp(){ pr="\${2:-tcp}"; if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev
 echo INSTALL_DONE`;
 }
 
+/** Подобрать СВОБОДНЫЙ публичный порт на сервере (через ss по SSH). prefer — желаемый
+ *  (напр. 443 для Xray, если свободен). Иначе случайный высокий, независимо от других
+ *  компонентов (не последовательный). Избегаем занятых и явно исключённых портов. */
+export async function sshPickPort(server: Server, proto: 'tcp' | 'udp', prefer?: number, exclude: number[] = []): Promise<number> {
+  const bad = new Set([22, 80, 443, ...exclude].filter(Boolean));
+  const cand: number[] = [];
+  if (prefer && !bad.has(prefer)) cand.push(prefer);
+  for (let i = 0; i < 16 && cand.length < 16; i++) {
+    const p = 20000 + Math.floor(Math.random() * 40000);
+    if (!bad.has(p) && !cand.includes(p)) cand.push(p);
+  }
+  const flag = proto === 'udp' ? '-uln' : '-tln';
+  const list = cand.join(' ');
+  const out = await runScript(creds(server.id), `for p in ${list}; do ss ${flag} 2>/dev/null | grep -qE "[:.]$p " && echo "$p=busy" || echo "$p=free"; done`, 20000);
+  for (const c of cand) if (new RegExp(`(^|\\n)${c}=free`).test(out)) return c;
+  return prefer && !bad.has(prefer) ? prefer : cand[cand.length - 1]!;
+}
+
 /** Настроить/снять алиас старого публичного порта на новый (для совместимости со
  *  старыми конфигами при смене порта). Redirect на входе: OLD → NEW. proto tcp|udp. */
 export async function sshSetPortAlias(server: Server, proto: 'tcp' | 'udp', oldPort: number, newPort: number, enable: boolean): Promise<void> {

@@ -632,6 +632,7 @@ export function getLegacyPorts(host: string): LegacyPort[] {
   }
 }
 export function addLegacyPort(host: string, proto: LegacyPort['proto'], port: number): void {
+  db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
   const list = getLegacyPorts(host).filter((l) => !(l.proto === proto && l.port === port));
   list.push({ proto, port, since: nowIso() });
   db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list), host);
@@ -656,6 +657,46 @@ export function getEndpointProfile(host: string): { exists: boolean; ports: Serv
 }
 export function deleteEndpointProfile(host: string): void {
   db.prepare('DELETE FROM server_keys WHERE domain = ?').run(host);
+}
+
+/** Пер-серверные настройки генерации конфига (маршрутизация НА УСТРОЙСТВЕ). Каждое
+ *  поле: значение сервера или наследование глобальной настройки (NULL). fallbackTypes
+ *  фильтрует, какие прокси-каналы использовать как запасные. */
+export type FallbackType = 'https' | 'http' | 'socks';
+export interface EndpointConfig {
+  xrayWhitelist: boolean;
+  whitelistDomains: string[] | undefined;
+  lanAccess: boolean;
+  fallbackTypes: FallbackType[] | null; // null = все доступные
+}
+export function getEndpointConfig(host: string): EndpointConfig {
+  const r = db.prepare('SELECT xray_whitelist, whitelist_domains, lan_access, fallback_types FROM server_keys WHERE domain = ?').get(host) as any;
+  const g = getSettings();
+  const jsonArr = (s: unknown): string[] | undefined => {
+    if (typeof s !== 'string') return undefined;
+    try {
+      const a = JSON.parse(s);
+      return Array.isArray(a) ? a : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    xrayWhitelist: r?.xray_whitelist == null ? g.xrayWhitelist !== false : r.xray_whitelist === 1,
+    whitelistDomains: r?.whitelist_domains != null ? jsonArr(r.whitelist_domains) : g.whitelistDomains,
+    lanAccess: r?.lan_access == null ? g.lanAccess === true : r.lan_access === 1,
+    fallbackTypes: (jsonArr(r?.fallback_types) as FallbackType[] | undefined) ?? null,
+  };
+}
+export function setEndpointConfig(host: string, patch: Partial<{ xrayWhitelist: boolean | null; whitelistDomains: string[] | null; lanAccess: boolean | null; fallbackTypes: FallbackType[] | null }>): void {
+  db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
+  const set: string[] = [];
+  const vals: Record<string, unknown> = { host };
+  if ('xrayWhitelist' in patch) { set.push('xray_whitelist = @xw'); vals.xw = patch.xrayWhitelist == null ? null : patch.xrayWhitelist ? 1 : 0; }
+  if ('lanAccess' in patch) { set.push('lan_access = @la'); vals.la = patch.lanAccess == null ? null : patch.lanAccess ? 1 : 0; }
+  if ('whitelistDomains' in patch) { set.push('whitelist_domains = @wd'); vals.wd = patch.whitelistDomains == null ? null : JSON.stringify(patch.whitelistDomains); }
+  if ('fallbackTypes' in patch) { set.push('fallback_types = @ft'); vals.ft = patch.fallbackTypes == null ? null : JSON.stringify(patch.fallbackTypes); }
+  if (set.length) db.prepare(`UPDATE server_keys SET ${set.join(', ')}, updated_at = @now WHERE domain = @host`).run({ ...vals, now: nowIso() });
 }
 function withEndpoint(s: Server): Server {
   s.ports = getEndpointPorts(s.host);

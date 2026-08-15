@@ -14,7 +14,7 @@ import { buildWhitelistXrayConfig } from '@novpn/shared';
 import type { ProxyFallback } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, REALITY_SNI } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -122,27 +122,32 @@ router.get('/sub/:token/full', (req, res) => {
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
   const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
   if (links.length === 0) return res.status(404).send('');
-  // Аварийный фоллбэк: прокси-каналы пользователя В ПОРЯДКЕ ПРИОРИТЕТА HTTPS→HTTP→SOCKS.
-  // Если Xray заблокируют — конфиг сам переключится на них (observatory+balancer).
-  const typeOrder: Record<string, number> = { https: 0, http: 1, socks5: 2 };
-  const proxies: ProxyFallback[] = [];
-  if (!overQuota) {
-    for (const row of repo.listProxyAccountRowsOfUser(u.id)) {
-      const view = repo.buildProxyAccountView(row);
-      if (!view) continue;
-      for (const e of [...view.endpoints].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9))) {
-        proxies.push({ kind: e.type === 'socks5' ? 'socks' : (e.type as 'https' | 'http'), host: e.host, port: e.port, user: view.login, pass: view.password });
-      }
-    }
-  }
   // Название профиля — по основному (первому) Xray-серверу пользователя: флаг + имя,
   // напр. «🇫🇮 Finland | Обход белых списков». country хранится как «🇫🇮 Финляндия».
   const primaryDev = repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link);
   const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
   const flag = (primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '';
   const title = primarySrv ? [flag, primarySrv.name].filter(Boolean).join(' ') : '';
-  // Список доменов обхода — из редактируемой настройки (пусто/absent → дефолт в билдере).
-  const json = buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, repo.getSettings().whitelistDomains, repo.getSettings().lanAccess === true);
+  // Настройки генерации — ПЕР-СЕРВЕР (по основному серверу), с фолбэком на глобальные:
+  // обход-домены, LAN-доступ и набор запасных прокси у каждого сервера могут быть свои.
+  const cfg = primarySrv ? repo.getEndpointConfig(primarySrv.host) : { xrayWhitelist: repo.getSettings().xrayWhitelist !== false, whitelistDomains: repo.getSettings().whitelistDomains, lanAccess: repo.getSettings().lanAccess === true, fallbackTypes: null as null };
+  // Аварийный фоллбэк: прокси-каналы В ПОРЯДКЕ ПРИОРИТЕТА HTTPS→HTTP→SOCKS, отфильтрованные
+  // по разрешённым для этого сервера типам (fallbackTypes). Если Xray заблокируют —
+  // конфиг сам переключится на них (observatory+balancer).
+  const typeOrder: Record<string, number> = { https: 0, http: 1, socks5: 2 };
+  const allowFb = (t: 'https' | 'http' | 'socks5') => !cfg.fallbackTypes || cfg.fallbackTypes.includes(t === 'socks5' ? 'socks' : t);
+  const proxies: ProxyFallback[] = [];
+  if (!overQuota) {
+    for (const row of repo.listProxyAccountRowsOfUser(u.id)) {
+      const view = repo.buildProxyAccountView(row);
+      if (!view) continue;
+      for (const e of [...view.endpoints].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9))) {
+        if (!allowFb(e.type as 'https' | 'http' | 'socks5')) continue;
+        proxies.push({ kind: e.type === 'socks5' ? 'socks' : (e.type as 'https' | 'http'), host: e.host, port: e.port, user: view.login, pass: view.password });
+      }
+    }
+  }
+  const json = buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, cfg.whitelistDomains, cfg.lanAccess);
   if (!json) return res.status(404).send(''); // все ссылки битые → не отдаём all-direct утечку
   // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
   // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.
@@ -824,7 +829,9 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
 // Статус установки в памяти (установка длится минуты — делаем асинхронно, edge рвёт долгие запросы).
 const provisionStatus = new Map<string, { state: 'running' | 'done' | 'error'; message: string; restored?: boolean; at: number }>();
 
-async function runProvision(serverId: string, comps: string[]): Promise<void> {
+async function runProvision(serverId: string, comps: string[], ports: { xray?: number; awg?: number } = {}): Promise<void> {
+  const req_portXray = ports.xray;
+  const req_portAwg = ports.awg;
   const s = repo.getServer(serverId);
   if (!s) return;
   const want = {
@@ -850,6 +857,20 @@ async function runProvision(serverId: string, comps: string[]): Promise<void> {
     if (!awgParams) awgParams = await sshReadAwgParams(s);
     if (!awgParams) awgParams = genAwgParams();
 
+    // Публичные порты endpoint'а. Восстановление по домену → берём сохранённые (старые
+    // конфиги живут). Новый endpoint → auto-pick: Xray предпочитает 443 (если свободен),
+    // AmneziaWG — случайный НЕ-дефолтный UDP (Amnezia рекомендует нестандартный).
+    // Явные значения из формы (portXray/portAwg) имеют приоритет.
+    const savedPorts = repo.getEndpointProfile(s.host);
+    const reqPortXray = Number(req_portXray);
+    const reqPortAwg = Number(req_portAwg);
+    let portXray = savedPorts.exists ? savedPorts.ports.xray : 443;
+    let portAwg = savedPorts.exists ? savedPorts.ports.awg : 51820;
+    if (Number.isInteger(reqPortXray) && reqPortXray >= 1 && reqPortXray <= 65535) portXray = reqPortXray;
+    else if (!savedPorts.exists && want.xray) portXray = await sshPickPort(s, 'tcp', 443).catch(() => 443);
+    if (Number.isInteger(reqPortAwg) && reqPortAwg >= 1 && reqPortAwg <= 65535) portAwg = reqPortAwg;
+    else if (!savedPorts.exists && want.awg) portAwg = await sshPickPort(s, 'udp', undefined, [portXray]).catch(() => 51820);
+
     const installed = want.xray || want.awg
       ? await sshInstallServer(s, {
           xray: want.xray, awg: want.awg,
@@ -858,8 +879,10 @@ async function runProvision(serverId: string, comps: string[]): Promise<void> {
           shortId: restoring ? prev?.xrayShortId : undefined,
           awgPriv: restoring ? prev?.awgServerPrivKey : undefined,
           awgParams,
+          xrayPort: portXray, awgPort: portAwg,
         })
       : {};
+    repo.saveEndpointPorts(s.host, { xray: portXray, awg: portAwg });
     saveServerKeys(s.host, {
       xrayRealityPrivKey: installed.realityPriv, xrayRealityPubKey: installed.realityPub,
       xrayShortId: installed.shortId, xraySni: installed.sni,
@@ -899,8 +922,10 @@ router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) =
   if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
   if (provisionStatus.get(s.id)?.state === 'running') return res.json({ ok: true, running: true });
   const comps: string[] = Array.isArray(req.body?.components) ? req.body.components : ['xray', 'amneziawg'];
+  // Явные порты из формы (режим «Вручную»). Пусто → auto/сохранённые в runProvision.
+  const ports = { xray: Number(req.body?.portXray) || undefined, awg: Number(req.body?.portAwg) || undefined };
   provisionStatus.set(s.id, { state: 'running', message: 'Запуск установки…', at: Date.now() });
-  void runProvision(s.id, comps); // не ждём — статус опрашивается отдельно
+  void runProvision(s.id, comps, ports); // не ждём — статус опрашивается отдельно
   res.json({ ok: true, running: true });
 });
 
@@ -981,11 +1006,92 @@ router.post('/api/admin/servers/:id/auto-issue', requireAdmin, (req, res) => {
   res.json(repo.updateServerFields(req.params.id!, { auto_issue: on ? 1 : 0 }));
 });
 
+// По умолчанию — ОТВЯЗАТЬ физический сервер, СОХРАНИВ endpoint (домен/порты/ключи/
+// конфиги живут; можно позже подключить новый сервер на тот же домен). Полное удаление
+// endpoint'а с ключами — только при явном purgeEndpoint=true (опасное действие).
 router.delete('/api/admin/servers/:id', requireAdmin, (req, res) => {
   const s = repo.getServer(req.params.id!);
-  repo.deleteServer(req.params.id!);
-  if (s) repo.addLog(`Удалён сервер «${s.name}»`);
-  res.json({ ok: true });
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const purge = req.body?.purgeEndpoint === true;
+  if (purge) {
+    repo.deleteServer(s.id);
+    repo.deleteEndpointProfile(s.host);
+    deleteServerKeys(s.host);
+    repo.addLog(`Полностью удалён сервер и endpoint «${s.name}» (${s.host}) — старые конфиги больше не работают`);
+  } else {
+    repo.detachServer(s.id);
+    repo.addLog(`Сервер «${s.name}» отвязан (endpoint сохранён: домен/порты/ключи/конфиги живут)`);
+  }
+  res.json({ ok: true, purged: purge });
+});
+
+// Профиль endpoint'а по домену — для мастера (нашли сохранённую конфигурацию?).
+router.get('/api/admin/endpoint-profile', requireAdmin, (req, res) => {
+  const host = String(req.query.host ?? '').trim();
+  if (!host) return res.status(400).json(err('validation', 'Не указан host.'));
+  res.json({ profile: repo.getEndpointProfile(host), config: repo.getEndpointConfig(host) });
+});
+
+// Пер-серверные настройки генерации конфига (обход/LAN/фоллбэк). null-поле = наследовать
+// глобальную настройку. Хранится по домену (переживает замену физического сервера).
+router.put('/api/admin/servers/:id/endpoint-config', requireAdmin, (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const b = req.body ?? {};
+  const patch: Parameters<typeof repo.setEndpointConfig>[1] = {};
+  if ('xrayWhitelist' in b) patch.xrayWhitelist = b.xrayWhitelist === null ? null : !!b.xrayWhitelist;
+  if ('lanAccess' in b) patch.lanAccess = b.lanAccess === null ? null : !!b.lanAccess;
+  if ('whitelistDomains' in b) patch.whitelistDomains = b.whitelistDomains === null ? null : (Array.isArray(b.whitelistDomains) ? b.whitelistDomains.map((x: unknown) => String(x).trim()).filter(Boolean) : null);
+  if ('fallbackTypes' in b) patch.fallbackTypes = b.fallbackTypes === null ? null : (Array.isArray(b.fallbackTypes) ? b.fallbackTypes.filter((x: unknown) => x === 'https' || x === 'http' || x === 'socks') : null);
+  repo.setEndpointConfig(s.host, patch);
+  res.json({ ok: true, config: repo.getEndpointConfig(s.host) });
+});
+
+// Смена публичного порта БЕЗ поломки старых конфигов: старый порт становится legacy
+// (iptables REDIRECT old→new), новый — primary. Старые выданные конфиги продолжают
+// работать через alias. keepLegacy=false — сразу без совместимости (старые отвалятся).
+router.post('/api/admin/servers/:id/change-port', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const comp = String(req.body?.component ?? '');
+  const newPort = Number(req.body?.port);
+  const keepLegacy = req.body?.keepLegacy !== false;
+  if (comp !== 'xray' && comp !== 'awg') return res.status(400).json(err('validation', 'component: xray|awg.'));
+  if (!Number.isInteger(newPort) || newPort < 1 || newPort > 65535) return res.status(400).json(err('validation', 'Некорректный порт.'));
+  const proto = comp === 'xray' ? 'tcp' : 'udp';
+  const oldPort = comp === 'xray' ? s.ports!.xray : s.ports!.awg;
+  if (oldPort === newPort) return res.json({ ok: true, unchanged: true });
+  try {
+    // Переустанавливаем службу на новом порту (ключи/uuid сохраняются — из профиля).
+    await runProvision(s.id, s.protocols as string[], comp === 'xray' ? { xray: newPort } : { awg: newPort });
+    if (keepLegacy) {
+      await sshSetPortAlias(s, proto, oldPort, newPort, true);
+      repo.addLegacyPort(s.host, comp === 'xray' ? 'xray' : 'awg', oldPort);
+    }
+    repo.addLog(`Сервер «${s.name}»: порт ${comp} ${oldPort} → ${newPort}${keepLegacy ? ` (старый ${oldPort} оставлен для совместимости)` : ''}`);
+    res.json({ ok: true, oldPort, newPort, legacyKept: keepLegacy });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка смены порта.'));
+  }
+});
+
+// Отключить legacy-порт (после отключения старые конфиги через него перестанут работать).
+router.post('/api/admin/servers/:id/disable-legacy', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const proto0 = String(req.body?.proto ?? ''); // 'xray' | 'awg'
+  const port = Number(req.body?.port);
+  const proto = proto0 === 'awg' ? 'udp' : 'tcp';
+  const cur = proto0 === 'awg' ? s.ports!.awg : s.ports!.xray;
+  if (!Number.isInteger(port)) return res.status(400).json(err('validation', 'Некорректный порт.'));
+  try {
+    await sshSetPortAlias(s, proto, port, cur || port, false);
+    repo.removeLegacyPort(s.host, (proto0 === 'awg' ? 'awg' : 'xray'), port);
+    repo.addLog(`Сервер «${s.name}»: отключён legacy-порт ${proto0}:${port}`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка.'));
+  }
 });
 
 // ── admin: telegram ──
