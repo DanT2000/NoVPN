@@ -406,7 +406,7 @@ export const mockApi: ApiClient = {
     const s = state.servers.find((x) => x.id === id)!;
     return { proxy: null, host: s.host };
   },
-  async provisionServer(id: string, components: string[]) {
+  async provisionServer(id: string, components: string[], _ports?: { portXray?: number; portAwg?: number }) {
     await wait(600);
     const s = state.servers.find((x) => x.id === id)!;
     s.protocols = components.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)) as Server['protocols'];
@@ -440,10 +440,49 @@ export const mockApi: ApiClient = {
     return clone(s);
   },
 
-  async deleteServer(id: string): Promise<Ok> {
+  async deleteServer(id: string, purgeEndpoint?: boolean): Promise<Ok> {
     await wait(250);
-    state.servers = state.servers.filter((s) => s.id !== id);
-    state.devices = state.devices.filter((d) => d.serverId !== id);
+    if (purgeEndpoint) {
+      state.servers = state.servers.filter((s) => s.id !== id);
+      state.devices = state.devices.filter((d) => d.serverId !== id);
+    } else {
+      const s = state.servers.find((x) => x.id === id);
+      if (s) { s.detached = true; s.agent = 'never'; s.endpointOk = false; }
+    }
+    return { ok: true };
+  },
+  async getEndpointProfile(host: string) {
+    await wait(150);
+    const s = state.servers.find((x) => x.host === host);
+    return {
+      profile: { exists: !!s, ports: s?.ports ?? { xray: 443, awg: 51820, http: 8080, socks: 1080, https: 8443 }, legacyPorts: s?.legacyPorts ?? [], hasXrayKeys: !!s, hasAwgKeys: !!s, updatedAt: s ? new Date().toISOString() : null },
+      config: (s as any)?._cfg ?? { xrayWhitelist: true, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null },
+    };
+  },
+  async saveEndpointConfig(id: string, patch: any) {
+    await wait(200);
+    const s = state.servers.find((x) => x.id === id) as any;
+    const cur = s?._cfg ?? { xrayWhitelist: true, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null };
+    const next = { ...cur, ...patch };
+    if (s) s._cfg = next;
+    return { ok: true, config: next };
+  },
+  async changeServerPort(id: string, component: 'xray' | 'awg', port: number, keepLegacy: boolean) {
+    await wait(400);
+    const s = state.servers.find((x) => x.id === id);
+    if (s) {
+      s.ports = s.ports ?? { xray: 443, awg: 51820, http: 8080, socks: 1080, https: 8443 };
+      const old = component === 'xray' ? s.ports.xray : s.ports.awg;
+      if (keepLegacy && old !== port) { s.legacyPorts = [...(s.legacyPorts ?? []), { proto: component, port: old, since: new Date().toISOString() }]; }
+      if (component === 'xray') s.ports.xray = port; else s.ports.awg = port;
+      return { ok: true, oldPort: old, newPort: port, legacyKept: keepLegacy };
+    }
+    return { ok: true };
+  },
+  async disableLegacyPort(id: string, proto: 'xray' | 'awg', port: number): Promise<Ok> {
+    await wait(200);
+    const s = state.servers.find((x) => x.id === id);
+    if (s) s.legacyPorts = (s.legacyPorts ?? []).filter((l) => !(l.proto === proto && l.port === port));
     return { ok: true };
   },
 

@@ -112,7 +112,7 @@ interface AppContextValue {
   editServer(id: string, input: EditServerInput): Promise<Server>;
   setServerDefault(id: string): Promise<void>;
   setServerAutoIssue(id: string, on: boolean): Promise<void>;
-  deleteServer(id: string): Promise<void>;
+  deleteServer(id: string, purgeEndpoint?: boolean): Promise<void>;
 
   // telegram / apps / settings
   saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings>;
@@ -507,11 +507,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [patchData],
   );
   const deleteServer = useCallback(
-    async (id: string) => {
-      await api.deleteServer(id);
-      patchData((d) => ({ ...d, servers: d.servers.filter((x) => x.id !== id), devices: d.devices.filter((x) => x.serverId !== id) }));
+    async (id: string, purgeEndpoint?: boolean) => {
+      await api.deleteServer(id, purgeEndpoint);
+      if (purgeEndpoint) {
+        patchData((d) => ({ ...d, servers: d.servers.filter((x) => x.id !== id), devices: d.devices.filter((x) => x.serverId !== id) }));
+      } else {
+        // detach: сервер остаётся (endpoint жив), помечаем detached — перезагрузим данные.
+        void reload();
+      }
     },
-    [patchData],
+    [patchData, reload],
   );
 
   // ── telegram / apps / settings ──

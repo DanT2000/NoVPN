@@ -176,12 +176,18 @@ export interface ApiClient {
   editServer(id: string, input: EditServerInput): Promise<Server>;
   installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
   getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
-  provisionServer(id: string, components: string[]): Promise<{ ok: boolean; running: boolean }>;
+  provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }): Promise<{ ok: boolean; running: boolean }>;
   provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;
   uninstallServer(id: string, purgeKeys?: boolean): Promise<Ok>;
   setServerDefault(id: string): Promise<Server[]>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
-  deleteServer(id: string): Promise<Ok>;
+  deleteServer(id: string, purgeEndpoint?: boolean): Promise<Ok>;
+
+  // ── admin: endpoint profile (порты + пер-серверные настройки конфига) ──
+  getEndpointProfile(host: string): Promise<{ profile: EndpointProfileView; config: EndpointConfigView }>;
+  saveEndpointConfig(id: string, patch: Partial<EndpointConfigView>): Promise<{ ok: boolean; config: EndpointConfigView }>;
+  changeServerPort(id: string, component: 'xray' | 'awg', port: number, keepLegacy: boolean): Promise<{ ok: boolean; oldPort?: number; newPort?: number; legacyKept?: boolean }>;
+  disableLegacyPort(id: string, proto: 'xray' | 'awg', port: number): Promise<Ok>;
 
   // ── admin: telegram ──
   saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings>;
@@ -210,6 +216,22 @@ export interface StatsPoint {
   usedDevices: number; // реально используемые (на связи за ~сутки)
   onlineServers: number;
   totalServers: number;
+}
+
+export interface EndpointProfileView {
+  exists: boolean;
+  ports: { xray: number; awg: number; http: number; socks: number; https: number };
+  legacyPorts: Array<{ proto: 'xray' | 'awg' | 'http' | 'socks' | 'https'; port: number; since: string }>;
+  hasXrayKeys: boolean;
+  hasAwgKeys: boolean;
+  updatedAt: string | null;
+}
+
+export interface EndpointConfigView {
+  xrayWhitelist: boolean;
+  whitelistDomains: string[] | undefined;
+  lanAccess: boolean;
+  fallbackTypes: Array<'https' | 'http' | 'socks'> | null;
 }
 
 export interface ServerHealth {

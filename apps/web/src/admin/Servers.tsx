@@ -1,12 +1,12 @@
 // A6 — Серверы. Список серверов с метриками, редактированием и управлением выдачей.
 
 import type React from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Server } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
-import type { ServerProxyConfig } from '../api/types';
+import type { ServerProxyConfig, EndpointConfigView } from '../api/types';
 import { copyText } from '../lib/clipboard';
 import { Chip, Dot, EmptyState, Field, ScreenHeader, Toggle } from '../components/ui';
 import { serverAgentView, serverEndpointView } from '../lib/status';
@@ -52,6 +52,89 @@ function ProxyBox({ proxy }: { proxy: ServerProxyConfig }) {
       >
         Копировать
       </button>
+    </div>
+  );
+}
+
+const FB_TYPES: Array<{ v: 'https' | 'http' | 'socks'; label: string }> = [
+  { v: 'https', label: 'HTTPS' },
+  { v: 'http', label: 'HTTP' },
+  { v: 'socks', label: 'SOCKS5' },
+];
+
+/** Пер-серверные настройки генерации конфига (маршрутизация НА УСТРОЙСТВЕ). У каждого
+ *  сервера могут быть свои обход-домены, LAN-доступ и набор запасных прокси. */
+function EndpointConfigPanel({ server }: { server: Server }) {
+  const { showToast } = useApp();
+  const [cfg, setCfg] = useState<EndpointConfigView | null>(null);
+  const [wl, setWl] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.getEndpointProfile(server.host).then((r) => {
+      if (!alive) return;
+      setCfg(r.config);
+      setWl((r.config.whitelistDomains ?? []).join('\n'));
+    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null }); });
+    return () => { alive = false; };
+  }, [server.host]);
+
+  if (!cfg) return <div className="small muted">Загрузка настроек…</div>;
+
+  const save = async (patch: Partial<EndpointConfigView>) => {
+    setBusy(true);
+    try {
+      const r = await api.saveEndpointConfig(server.id, patch);
+      setCfg(r.config);
+      showToast('Настройки сервера сохранены');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось сохранить');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const fb = cfg.fallbackTypes; // null = все
+  const toggleFb = (v: 'https' | 'http' | 'socks') => {
+    const cur = fb ?? ['https', 'http', 'socks'];
+    const next = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
+    void save({ fallbackTypes: next.length === 3 ? null : next });
+  };
+
+  return (
+    <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+      <span className="field-label">Настройки конфига (этот сервер)</span>
+      <div className="body small muted" style={{ marginBottom: 10 }}>
+        Это параметры, которые уходят <b>в конфиг на устройство</b> пользователя (маршрутизация
+        для стабильного соединения) — не серверная служба. У каждого сервера свои: например,
+        в одной стране один список обхода, в другой — другой.
+      </div>
+
+      <div className="chip-row" style={{ marginBottom: 6 }}>
+        <Chip label={cfg.lanAccess ? 'Доступ в локалку: вкл' : 'Доступ в локалку: выкл'} active={cfg.lanAccess} disabled={busy} onClick={() => void save({ lanAccess: !cfg.lanAccess })} />
+      </div>
+
+      <div className="body small muted" style={{ margin: '10px 0 4px' }}>Запасные каналы (если Xray заблокируют) — только то, что реально работает на этом сервере:</div>
+      <div className="chip-row" style={{ marginBottom: 6 }}>
+        {FB_TYPES.map((t) => {
+          const on = !fb || fb.includes(t.v);
+          return <Chip key={t.v} label={t.label} size="sm" active={on} disabled={busy} onClick={() => toggleFb(t.v)} />;
+        })}
+      </div>
+
+      <Field label="Домены обхода этого сервера (по одному в строке)" hint="Идут напрямую, мимо VPN. Пусто → берётся глобальный список. Меняется без переустановки.">
+        <textarea
+          className="textarea mono"
+          style={{ minHeight: 120, fontSize: 12 }}
+          spellCheck={false}
+          value={wl}
+          onChange={(e) => setWl(e.target.value)}
+          onBlur={() => {
+            const lines = wl.split('\n').map((l) => l.trim()).filter(Boolean);
+            void save({ whitelistDomains: lines.length ? lines : null } as Partial<EndpointConfigView>);
+          }}
+        />
+      </Field>
     </div>
   );
 }
@@ -334,6 +417,29 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         </span>
       </div>
 
+      {/* Публичные порты endpoint'а */}
+      {server.ports ? (
+        <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+          <span className="field-label">Публичные порты</span>
+          <div className="body small mono" style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            <span>Xray: <b>{server.ports.xray}</b></span>
+            <span>AmneziaWG: <b>{server.ports.awg}</b> UDP</span>
+          </div>
+          {server.legacyPorts && server.legacyPorts.length > 0 ? (
+            <div className="body small muted" style={{ marginTop: 6 }}>
+              Совместимость (старые порты, работают через alias): {server.legacyPorts.map((l) => `${l.proto}:${l.port}`).join(', ')}
+            </div>
+          ) : null}
+          <div className="body small muted" style={{ marginTop: 6 }}>
+            Порт задаётся при установке. Смена порта — через переустановку с указанием порта;
+            старый порт можно оставить для совместимости, чтобы уже выданные конфиги не сломались.
+          </div>
+        </div>
+      ) : null}
+
+      {/* Пер-серверные настройки конфига (на устройстве) */}
+      <EndpointConfigPanel server={server} />
+
       <div className="row" style={{ gap: 8 }}>
         <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>
           {saving ? 'Сохраняем…' : 'Сохранить сервер'}
@@ -466,16 +572,32 @@ export function Servers() {
                       </button>
                     ) : null}
                     <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() =>
+                        showConfirm({
+                          title: 'Отвязать сервер?',
+                          text: `«${s.name}» будет отвязан, но endpoint (домен ${s.host}, порты, ключи) и все выданные конфиги СОХРАНЯТСЯ. Позже можно подключить новый сервер на тот же домен — старые конфиги снова заработают.`,
+                          confirmLabel: 'Отвязать',
+                          onConfirm: async () => {
+                            await deleteServer(s.id, false);
+                            showToast('Сервер отвязан (endpoint сохранён)');
+                          },
+                        })
+                      }
+                    >
+                      Отвязать
+                    </button>
+                    <button
                       className="btn btn-danger-outline btn-sm"
                       onClick={() =>
                         showConfirm({
-                          title: 'Удалить сервер?',
-                          text: `«${s.name}» и все подписки, выпущенные на этот сервер, будут удалены. Действие нельзя отменить.`,
-                          confirmLabel: 'Удалить',
+                          title: 'Удалить полностью?',
+                          text: `ОПАСНО: «${s.name}», его ключи endpoint'а и ВСЕ выданные на него конфиги будут удалены безвозвратно. Старые конфиги перестанут работать навсегда. Обычно нужно «Отвязать».`,
+                          confirmLabel: 'Удалить полностью',
                           danger: true,
                           onConfirm: async () => {
-                            await deleteServer(s.id);
-                            showToast('Сервер удалён');
+                            await deleteServer(s.id, true);
+                            showToast('Сервер и endpoint удалены');
                           },
                         })
                       }

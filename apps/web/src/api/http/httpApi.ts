@@ -104,14 +104,18 @@ export const httpApi: ApiClient = {
   installServerProxies: (id: string, types: { http: boolean; https: boolean; socks: boolean }) =>
     req<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
   getServerProxy: (id: string) => req<{ proxy: ServerProxyConfig | null; host: string }>('GET', `/api/admin/servers/${id}/proxy`),
-  provisionServer: (id: string, components: string[]) =>
-    req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components }),
+  provisionServer: (id: string, components: string[], ports?: { portXray?: number; portAwg?: number }) =>
+    req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports }),
   provisionStatus: (id: string) =>
     req<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>('GET', `/api/admin/servers/${id}/provision-status`),
   uninstallServer: (id: string, purgeKeys?: boolean) => req<Ok>('POST', `/api/admin/servers/${id}/uninstall`, { purgeKeys: !!purgeKeys }),
   setServerDefault: (id) => req<Server[]>('POST', `/api/admin/servers/${id}/default`),
   setServerAutoIssue: (id, on) => req<Server>('POST', `/api/admin/servers/${id}/auto-issue`, { on }),
-  deleteServer: (id) => req<Ok>('DELETE', `/api/admin/servers/${id}`),
+  deleteServer: (id, purgeEndpoint?: boolean) => req<Ok>('DELETE', `/api/admin/servers/${id}`, { purgeEndpoint: !!purgeEndpoint }),
+  getEndpointProfile: (host: string) => req<{ profile: import('../types').EndpointProfileView; config: import('../types').EndpointConfigView }>('GET', `/api/admin/endpoint-profile?host=${encodeURIComponent(host)}`),
+  saveEndpointConfig: (id: string, patch) => req<{ ok: boolean; config: import('../types').EndpointConfigView }>('PUT', `/api/admin/servers/${id}/endpoint-config`, patch),
+  changeServerPort: (id, component, port, keepLegacy) => req<{ ok: boolean; oldPort?: number; newPort?: number; legacyKept?: boolean }>('POST', `/api/admin/servers/${id}/change-port`, { component, port, keepLegacy }),
+  disableLegacyPort: (id, proto, port) => req<Ok>('POST', `/api/admin/servers/${id}/disable-legacy`, { proto, port }),
 
   saveTelegram: (input: SaveTelegramInput) => req<TelegramSettings>('PUT', '/api/admin/telegram', input),
   testTelegram: (token) => req<TestTelegramResult>('POST', '/api/admin/telegram/test', { token }),
