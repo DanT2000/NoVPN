@@ -1,11 +1,12 @@
-// Подключение устройства: имя → сервер → протокол → готовая конфигурация.
+// Подключение устройства: ПРОТОКОЛ → (для AmneziaWG — сервер) → готовая конфигурация.
 //
-// Шаги, где выбирать не из чего, пропускаются: один сервер — не спрашиваем
-// сервер, один разрешённый протокол — не спрашиваем протокол.
+// Xray — сервер НЕ спрашиваем: одна ЕДИНАЯ подписка на все доступные серверы
+// (конфиг выпускается на каждом, приложение получает по профилю на сервер и
+// человек переключается внутри приложения). AmneziaWG — выбор сервера, у каждого
+// устройства свой .conf. Шаги, где выбирать не из чего, пропускаются.
 //
-// Результат зависит от протокола:
-//   Xray      — показываем ССЫЛКУ-ПОДПИСКУ: она разом даёт все конфигурации
-//               и обновляется сама. Отдельная ссылка конфига — второстепенно.
+// Результат:
+//   Xray      — ССЫЛКА-ПОДПИСКА (общая): все серверы разом, обновляется сама.
 //   AmneziaWG — ссылка vpn:// (открывает приложение AmneziaVPN) и файл .conf
 //               (для отдельного приложения AmneziaWG, ссылку оно не понимает).
 
@@ -44,22 +45,28 @@ export function Wizard() {
 
   const [name, setName] = useState('');
   const [serverId, setServerId] = useState<string | null>(null);
-  const [proto, setProto] = useState<Proto | null>(null);
-  const [platform, setPlatform] = useState<Platform>(detectPlatform());
-  // Стартовый шаг (без отдельного шага имени): сервер(2), если их несколько; иначе
-  // протокол(3), если их несколько; иначе сразу результат(4). Имя спрашиваем только
-  // для AmneziaWG уже на шаге результата — Xray это одна общая подписка без имени.
-  const [rawStep, setRawStep] = useState<1 | 2 | 3 | 4>(() => {
-    if (!user || !data) return 2;
+  const [proto, setProto] = useState<Proto | null>(() => {
+    // Ровно один доступный протокол → он и выбран (шаг выбора пропускается).
+    if (!user || !data) return null;
     const online = data.servers.filter((s) => user.allowedServers.includes(s.id) && s.online);
-    if (online.length !== 1) return 2;
-    const protos = (['xray', 'amneziawg'] as Proto[]).filter(
-      (p) => (user.allowedProtocols as string[]).includes(p) && (online[0]!.protocols as string[]).includes(p),
+    const ps = (['xray', 'amneziawg'] as Proto[]).filter(
+      (p) => (user.allowedProtocols as string[]).includes(p) && online.some((s) => (s.protocols as string[]).includes(p)),
     );
-    // Ровно один протокол → сразу результат(4). Ноль (сервер не делит с пользователем
-    // ни одного протокола) → шаг 3 с пустым состоянием, а НЕ мёртвый экран результата
-    // без выбранного протокола. Несколько → шаг 3 (выбор).
-    return protos.length === 1 ? 4 : 3;
+    return ps.length === 1 ? ps[0]! : null;
+  });
+  const [platform, setPlatform] = useState<Platform>(detectPlatform());
+  // Порядок шагов: протокол(3) → для AmneziaWG сервер(2) → результат(4). Для Xray
+  // сервер не спрашиваем (единая подписка на все серверы). Шаги без выбора пропускаются.
+  const [rawStep, setRawStep] = useState<1 | 2 | 3 | 4>(() => {
+    if (!user || !data) return 3;
+    const online = data.servers.filter((s) => user.allowedServers.includes(s.id) && s.online);
+    const ps = (['xray', 'amneziawg'] as Proto[]).filter(
+      (p) => (user.allowedProtocols as string[]).includes(p) && online.some((s) => (s.protocols as string[]).includes(p)),
+    );
+    if (ps.length !== 1) return 3; // выбор протокола (или пустое состояние при 0)
+    if (ps[0] === 'xray') return 4; // единая подписка — сразу результат
+    const awgServers = online.filter((s) => (s.protocols as string[]).includes('amneziawg'));
+    return awgServers.length === 1 ? 4 : 2; // AmneziaWG: один сервер → сразу, иначе выбор
   });
   const [issuing, setIssuing] = useState(false);
   const [result, setResult] = useState<IssueDeviceResult | null>(null);
@@ -84,21 +91,19 @@ export function Wizard() {
   // Серверы, доступные пользователю и живые.
   const servers = data.servers.filter((s) => user.allowedServers.includes(s.id));
   const onlineServers = servers.filter((s) => s.online);
-  // Один сервер — выбирать нечего.
-  const autoServer = onlineServers.length === 1 ? onlineServers[0]! : null;
-  const effServerId = serverId ?? autoServer?.id ?? null;
+  // Протоколы, доступные ХОТЬ ГДЕ-ТО (разрешены пользователю и стоят на живом сервере).
+  const protoOptions = (['xray', 'amneziawg'] as Proto[]).filter(
+    (p) => (user.allowedProtocols as string[]).includes(p) && onlineServers.some((s) => (s.protocols as string[]).includes(p)),
+  );
+  const effProto: Proto | null = proto;
+  // Серверы под ВЫБРАННЫЙ протокол (для AmneziaWG — шаг выбора; Xray — все разом).
+  const awgServers = onlineServers.filter((s) => (s.protocols as string[]).includes('amneziawg'));
+  const xrayServers = onlineServers.filter((s) => (s.protocols as string[]).includes('xray'));
+  const autoAwgServer = awgServers.length === 1 ? awgServers[0]! : null;
+  const effServerId = serverId ?? autoAwgServer?.id ?? null;
   const chosenServer: PublicServerView | undefined =
     (mode === 'view' && viewDevice ? data.servers.find((s) => s.id === viewDevice.serverId) : undefined) ??
     data.servers.find((s) => s.id === effServerId);
-
-  // Протоколы: и пользователю разрешены, и на сервере установлены.
-  const protosOf = (srv?: PublicServerView): Proto[] =>
-    (['xray', 'amneziawg'] as Proto[]).filter(
-      (p) => (user.allowedProtocols as string[]).includes(p) && (srv?.protocols as string[] | undefined)?.includes(p),
-    );
-  const protoOptions = protosOf(chosenServer);
-  const autoProto = protoOptions.length === 1 ? protoOptions[0]! : null;
-  const effProto: Proto | null = proto ?? autoProto;
 
   const step: 1 | 2 | 3 | 4 = mode === 'view' || result ? 4 : rawStep;
 
@@ -106,11 +111,28 @@ export function Wizard() {
   const defaultName = `Устройство ${data.devices.filter((d) => d.userId === user.id && d.protocol === 'amneziawg').length + 1}`;
 
   const doIssue = async () => {
-    if (!chosenServer || !effProto || issuing) return;
+    if (!effProto || issuing) return;
     setIssuing(true);
     try {
-      const res = await issueDevice({ userId: user.id, name: name.trim() || defaultName, serverId: chosenServer.id, protocol: effProto });
-      setResult(res);
+      if (effProto === 'xray') {
+        // ЕДИНАЯ подписка: выпускаем конфиг на КАЖДОМ доступном Xray-сервере (повторный
+        // выпуск переиспользуется на сервере, дублей нет) — подписка отдаст все серверы.
+        let last: IssueDeviceResult | null = null;
+        let firstErr: string | null = null;
+        for (const s of xrayServers) {
+          try {
+            last = await issueDevice({ userId: user.id, name: 'Подписка', serverId: s.id, protocol: 'xray' });
+          } catch (e) {
+            firstErr = firstErr ?? (e instanceof Error ? e.message : 'Не удалось создать конфигурацию');
+          }
+        }
+        if (last) setResult(last);
+        else showToast(firstErr ?? 'Нет доступных серверов Xray');
+      } else {
+        if (!chosenServer) return;
+        const res = await issueDevice({ userId: user.id, name: name.trim() || defaultName, serverId: chosenServer.id, protocol: effProto });
+        setResult(res);
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не удалось создать конфигурацию');
     } finally {
@@ -120,9 +142,12 @@ export function Wizard() {
 
   const back = () => {
     if (mode === 'view' || result) return goPublic('devices');
-    // Назад: результат(4) → протокол(3), если он был; иначе сервер(2), если был; иначе кабинет.
-    if (rawStep === 4) return autoProto ? (autoServer ? goPublic('cabinet') : setRawStep(2)) : setRawStep(3);
-    if (rawStep === 3) return autoServer ? goPublic('cabinet') : setRawStep(2);
+    // Назад: результат(4) → сервер(2) для AmneziaWG с выбором; иначе протокол(3); иначе кабинет.
+    if (rawStep === 4) {
+      if (proto === 'amneziawg' && awgServers.length > 1) return setRawStep(2);
+      return protoOptions.length > 1 ? setRawStep(3) : goPublic('cabinet');
+    }
+    if (rawStep === 2) return protoOptions.length > 1 ? setRawStep(3) : goPublic('cabinet');
     goPublic('cabinet');
   };
 
@@ -133,9 +158,9 @@ export function Wizard() {
   const cfgConf = result?.conf ?? viewDevice?.conf ?? null;
   const vpnKey = result?.vpnKey ?? viewDevice?.vpnKey ?? null;
   const cfgName = dev?.name ?? name;
-  // Пер-серверная подписка выбранного сервера (свой обход/полный туннель этого сервера).
-  // Фоллбэк на агрегированную ссылку, если у сервера нет пер-серверной (напр. не xray).
-  const subUrl = chosenServer?.subLink ?? (data.subLink ? (data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink) : '');
+  // ЕДИНАЯ подписка: все серверы пользователя, у каждого свой профиль со своей
+  // маршрутизацией (JSON-массив в /full). Одна ссылка/QR на всё.
+  const subUrl = data.subLink ? (data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink) : '';
 
   const apps = data.apps.filter(
     (a) =>
@@ -162,42 +187,7 @@ export function Wizard() {
         </div>
       </div>
 
-      {/* ШАГ 2 — сервер (только если их несколько) */}
-      {step === 2 ? (
-        <div className="stack" style={{ gap: 12 }}>
-          <p className="body small" style={{ margin: 0 }}>Выберите сервер.</p>
-          {onlineServers.length === 0 ? (
-            <EmptyState title="Нет доступных серверов" text="Все серверы сейчас недоступны. Попробуйте позже." />
-          ) : (
-            onlineServers.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => {
-                  setServerId(s.id);
-                  // Протоколы берём у выбранного сервера, а не у прежнего.
-                  const ps = protosOf(s);
-                  if (ps.length === 1) setProto(ps[0]!);
-                  setRawStep(ps.length === 1 ? 4 : 3);
-                }}
-                className="card"
-                style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
-              >
-                <Dot color="var(--green-dot)" />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="row" style={{ gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>{s.country ? `${s.country} ` : ''}{s.name}</span>
-                    {s.recommended ? <span className="badge">Рекомендуемый</span> : null}
-                  </div>
-                  <div className="small muted">{s.host}</div>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      ) : null}
-
-      {/* ШАГ 3 — протокол (только если их несколько) */}
+      {/* ШАГ 3 — протокол (первый шаг) */}
       {step === 3 ? (
         <div className="stack" style={{ gap: 12 }}>
           <p className="body small" style={{ margin: 0 }}>Выберите способ подключения.</p>
@@ -208,21 +198,61 @@ export function Wizard() {
                 <span className="badge">рекомендуем</span>
               </div>
               <span className="body small muted">
-                Одна ссылка-подписка на все устройства, конфигурации обновляются сами.
+                Одна подписка на все серверы и устройства: каждый сервер появится в
+                приложении отдельным профилем, конфигурации обновляются сами.
               </span>
             </button>
           ) : null}
           {protoOptions.includes('amneziawg') ? (
-            <button className="card stack" style={{ gap: 6, textAlign: 'left', cursor: 'pointer' }} onClick={() => { setProto('amneziawg'); setRawStep(4); }}>
+            <button
+              className="card stack"
+              style={{ gap: 6, textAlign: 'left', cursor: 'pointer' }}
+              onClick={() => {
+                setProto('amneziawg');
+                setRawStep(awgServers.length === 1 ? 4 : 2);
+              }}
+            >
               <div style={{ fontWeight: 700, fontSize: 16 }}>AmneziaWG</div>
               <span className="body small muted">
-                Отдельная конфигурация на устройство. Берите, если Xray блокируют.
+                Отдельная конфигурация на устройство, с выбором сервера. Берите, если Xray блокируют.
               </span>
             </button>
           ) : null}
           {protoOptions.length === 0 ? (
-            <EmptyState title="Нет доступных протоколов" text="На этом сервере нет протоколов, разрешённых вам." />
+            <EmptyState title="Нет доступных протоколов" text="Нет живых серверов с разрешёнными вам протоколами." />
           ) : null}
+        </div>
+      ) : null}
+
+      {/* ШАГ 2 — сервер (только AmneziaWG с несколькими серверами) */}
+      {step === 2 ? (
+        <div className="stack" style={{ gap: 12 }}>
+          <p className="body small" style={{ margin: 0 }}>Выберите сервер для AmneziaWG.</p>
+          {awgServers.length === 0 ? (
+            <EmptyState title="Нет доступных серверов" text="Все серверы с AmneziaWG сейчас недоступны. Попробуйте позже." />
+          ) : (
+            awgServers.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => {
+                  setServerId(s.id);
+                  setRawStep(4);
+                }}
+                className="card"
+                style={{ textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
+              >
+                <Dot color="var(--green-dot)" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="row" style={{ gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>{[(s.flagEmoji || '').trim(), s.country ?? ''].filter(Boolean).join(' ')} {s.name}</span>
+                    {s.recommended ? <span className="badge">Рекомендуемый</span> : null}
+                  </div>
+                  <div className="small muted">{s.host}</div>
+                </div>
+              </button>
+            ))
+          )}
         </div>
       ) : null}
 
@@ -245,10 +275,13 @@ export function Wizard() {
                 </div>
               ) : null}
               <div className="card stack" style={{ gap: 6 }}>
-                <div className="row-between"><span className="muted">Сервер</span><b>{chosenServer?.name ?? '—'}</b></div>
-                <div className="row-between"><span className="muted">Способ</span><b>{effProto === 'xray' ? 'Xray — общая подписка' : 'AmneziaWG'}</b></div>
+                <div className="row-between">
+                  <span className="muted">{effProto === 'xray' ? 'Серверы' : 'Сервер'}</span>
+                  <b>{effProto === 'xray' ? xrayServers.map((s) => s.name).join(' · ') || '—' : chosenServer?.name ?? '—'}</b>
+                </div>
+                <div className="row-between"><span className="muted">Способ</span><b>{effProto === 'xray' ? 'Xray — единая подписка' : 'AmneziaWG'}</b></div>
               </div>
-              <button className="btn btn-primary btn-lg btn-block" disabled={issuing || !effProto} onClick={() => void doIssue()}>
+              <button className="btn btn-primary btn-lg btn-block" disabled={issuing || !effProto || (effProto === 'amneziawg' && !chosenServer)} onClick={() => void doIssue()}>
                 {issuing ? 'Создаём…' : effProto === 'xray' ? 'Получить подписку' : 'Создать конфигурацию'}
               </button>
             </>

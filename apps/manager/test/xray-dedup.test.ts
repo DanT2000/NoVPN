@@ -16,6 +16,7 @@ process.env.SESSION_SECRET = 'test-secret';
 
 const repo = await import('../src/repo.js');
 const { issueForUser } = await import('../src/services/issue.js');
+const { buildWhitelistXrayConfig } = await import('@novpn/shared');
 
 let seq = 0;
 function seed() {
@@ -76,7 +77,7 @@ test('subscriptionXrayEntries: serverId у каждой ссылки, поряд
   assert.equal(entries[entries.length - 1]!.serverId, s1.id, 'старейший последним (стабильный «основной»)');
 });
 
-test('агрегированная подписка не смешивает полный туннель: full-tunnel сервер отделён', () => {
+test('единая подписка: у каждого сервера свой конфиг со СВОЕЙ политикой (массив, без смешивания)', () => {
   seq += 1;
   const wl = repo.insertServer({ name: 'WL', country: null, host: `10.6.1.${seq}`, protocols: ['xray'], endpointOk: true });
   const ft = repo.insertServer({ name: 'FT', country: null, host: `10.6.2.${seq}`, protocols: ['xray'], endpointOk: true });
@@ -87,15 +88,23 @@ test('агрегированная подписка не смешивает по
     deviceLimit: 1, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
     allowedServers: [wl.id, ft.id], allowedProtocols: ['xray'],
   });
-  repo.insertDevice({ userId: user.id, name: 'w', serverId: wl.id, protocol: 'xray', uuid: 'w1', publicKey: 'kw', link: `vless://w1@${wl.host}:443?type=tcp` });
-  repo.insertDevice({ userId: user.id, name: 'f', serverId: ft.id, protocol: 'xray', uuid: 'f1', publicKey: 'kf', link: `vless://f1@${ft.host}:443?type=tcp` });
+  repo.insertDevice({ userId: user.id, name: 'w', serverId: wl.id, protocol: 'xray', uuid: 'w1', publicKey: 'kw', link: `vless://w1@${wl.host}:443?type=tcp&security=reality&pbk=A&sni=x&sid=1` });
+  repo.insertDevice({ userId: user.id, name: 'f', serverId: ft.id, protocol: 'xray', uuid: 'f1', publicKey: 'kf', link: `vless://f1@${ft.host}:443?type=tcp&security=reality&pbk=B&sni=x&sid=2` });
+  // Единая подписка = ОДИН элемент на КАЖДЫЙ сервер, каждый со своей политикой:
+  // WL с RU-direct правилами (обход), FT без direct-исключений (полный туннель).
   const entries = repo.subscriptionXrayEntries(user.id);
-  // Модель роутинга /full: whitelist-серверы в агрегированной, full-tunnel отдельно.
-  const isFT = (sid: string) => repo.getEndpointConfig(repo.getServer(sid)!.host).xrayWhitelist === false;
-  const wlOnly = entries.filter((e) => !isFT(e.serverId));
-  assert.equal(wlOnly.length, 1);
-  assert.equal(wlOnly[0]!.serverId, wl.id, 'в агрегированной остаётся только whitelist-сервер');
-  // Пер-серверная полнотуннельная ссылка живёт отдельно.
+  assert.equal(entries.length, 2, 'оба сервера в единой подписке');
+  const cfgOf = (sid: string) => {
+    const e = entries.find((x) => x.serverId === sid)!;
+    const srv = repo.getServer(sid)!;
+    const cfg = repo.getEndpointConfig(srv.host);
+    return JSON.parse(buildWhitelistXrayConfig([e.link], 'NoVPN', [], srv.name, cfg.whitelistDomains, cfg.lanAccess, cfg.xrayWhitelist === false));
+  };
+  const wlCfg = cfgOf(wl.id);
+  const ftCfg = cfgOf(ft.id);
+  assert.ok(wlCfg.routing.rules.some((r: any) => r.outboundTag === 'direct' && r.domain), 'WL: обход есть');
+  assert.ok(!ftCfg.routing.rules.some((r: any) => r.outboundTag === 'direct' && r.domain), 'FT: полный туннель, direct-доменов нет');
+  // Пер-серверная полнотуннельная ссылка тоже жива (роут /server/:id/full).
   assert.equal(repo.subscriptionXrayLinks(user.id, ft.id).length, 1);
 });
 

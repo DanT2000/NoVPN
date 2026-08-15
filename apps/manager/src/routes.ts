@@ -170,32 +170,27 @@ function sendUserXrayFull(res: import('express').Response, u: NonNullable<Return
   res.send(json);
 }
 
-// Агрегированная подписка: ВСЕ серверы пользователя в одном конфиге с балансировщиком
-// и ОДНОЙ политикой (основного сервера). Историческая ссылка — не ломаем.
+// ЕДИНАЯ подписка: у КАЖДОГО сервера свой полный конфиг со СВОЕЙ маршрутизацией
+// (обход у Finland, полный туннель у домашнего — без смешивания). Несколько серверов →
+// JSON-МАССИВ конфигов (формат экосистемы: Happ/v2rayNG/Streisand создают по профилю
+// на элемент из одной подписки, человек переключается в приложении). Один сервер →
+// один JSON-объект (прежнее поведение, совместимость с уже добавленными ссылками).
 router.get('/sub/:token/full', (req, res) => {
   const u = repo.getUserBySubToken(String(req.params.token ?? ''));
   if (!u || !u.isActive) return res.status(404).send('');
   if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
-  const entries = overQuota ? [] : repo.subscriptionXrayEntries(u.id);
-  // Полнотуннельные серверы (xrayWhitelist=false) — ОТДЕЛЬНЫЕ подписки: у них другая
-  // маршрутизация, смешивать с обходом в одном балансировщике нельзя. Иначе выпуск
-  // конфига на таком сервере «перекрашивал» бы ВСЮ агрегированную подписку в полный
-  // туннель (реальный случай: HomeVPN). Если же ВСЕ серверы полнотуннельные —
-  // включаем их: политика едина, агрегированная ссылка остаётся рабочей.
-  const isFullTunnel = (sid: string) => {
-    const s = repo.getServer(sid);
-    return !!s && repo.getEndpointConfig(s.host).xrayWhitelist === false;
-  };
-  const wlEntries = entries.filter((e) => !isFullTunnel(e.serverId));
-  const chosen = wlEntries.length ? wlEntries : entries;
-  // «Основной» сервер (имя профиля + политика) — СТАБИЛЬНО по СТАРЕЙШЕМУ конфигу
-  // (entries идут новые-первыми). Раньше брался новейший — выпуск конфига на новом
-  // сервере молча менял имя и политику всей подписки у уже подключённых людей.
-  const primarySrv = chosen.length ? repo.getServer(chosen[chosen.length - 1]!.serverId) : null;
-  const json = buildUserXrayFull(u, chosen.map((e) => e.link), primarySrv, overQuota);
-  if (!json) return res.status(404).send('');
-  sendUserXrayFull(res, u, json);
+  // Старейший конфиг первым: у уже подключённых людей первый профиль в приложении
+  // остаётся их исходным сервером (entries идут новые-первыми — разворачиваем).
+  const entries = (overQuota ? [] : repo.subscriptionXrayEntries(u.id)).reverse();
+  const parts: string[] = [];
+  for (const e of entries) {
+    const srv = repo.getServer(e.serverId);
+    const json = buildUserXrayFull(u, [e.link], srv, overQuota);
+    if (json) parts.push(json);
+  }
+  if (parts.length === 0) return res.status(404).send(''); // пусто/битое → не отдаём all-direct утечку
+  sendUserXrayFull(res, u, parts.length === 1 ? parts[0]! : `[\n${parts.join(',\n')}\n]`);
 });
 
 // Пер-серверная подписка: ОДИН сервер со СВОИМ обходом/политикой (не общий балансир).

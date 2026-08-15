@@ -114,6 +114,10 @@ export function Cabinet() {
         </div>
       </div>
 
+      <button className="btn btn-primary btn-lg btn-block" onClick={() => goPublic('wizard', { wizardMode: 'issue' })}>
+        + Подключить новое устройство
+      </button>
+
       <div className="card" style={{ padding: '4px 16px' }}>
         <Row label="Срок">
           <div style={{ fontWeight: 700 }}>
@@ -152,53 +156,40 @@ export function Cabinet() {
         </Row>
       </div>
 
-      {/* Подписки Xray — ПЕР-СЕРВЕР: у каждого сервера своя ссылка со СВОИМИ правилами
-          обхода/полным туннелем. Показываем только те серверы, где у пользователя есть
-          активный Xray-конфиг (иначе ссылка вернула бы 404). Одна ссылка = один профиль
-          в приложении, оно само тянет конфиг и держит актуальным. */}
+      {/* ЕДИНАЯ подписка Xray: одна ссылка/QR на ВСЕ серверы — у каждого сервера свой
+          профиль со своей маршрутизацией (JSON-массив в /full), человек переключается
+          в приложении. Показываем, когда есть хоть один активный Xray-конфиг. */}
       {(() => {
-        if (!user.allowedProtocols.includes('xray') || !hasActiveXray) return null;
+        if (!user.allowedProtocols.includes('xray') || !hasActiveXray || !data.subLink) return null;
+        const subUrl = data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink;
         const xrayServerIds = new Set(devices.filter((d) => d.isActive && d.protocol === 'xray').map((d) => d.serverId));
-        const xrayServers = data.servers.filter((s) => s.subLink && xrayServerIds.has(s.id));
-        if (xrayServers.length === 0) return null;
-        const multi = xrayServers.length > 1;
-        // Значок сервера и флаг страны — вместе (🏠🇫🇮), а не либо-либо.
-        const flagOf = (s: (typeof xrayServers)[number]) =>
+        const flagOf = (s: (typeof data.servers)[number]) =>
           [(s.flagEmoji || '').trim(), (s.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? ''].filter(Boolean).join('');
+        const inSub = data.servers.filter((s) => xrayServerIds.has(s.id)).map((s) => [flagOf(s), s.name].filter(Boolean).join(' '));
         return (
           <div className="card stack" style={{ gap: 10 }}>
             <div>
-              <div className="eyebrow" style={{ marginBottom: 4 }}>{multi ? 'Подписки по серверам' : 'Подписка Xray'}</div>
+              <div className="eyebrow" style={{ marginBottom: 4 }}>Подписка Xray</div>
               <div className="body small muted">
-                {multi
-                  ? 'У каждого сервера своя подписка со своими правилами. Добавьте нужные — каждый появится в приложении отдельным профилем, между ними можно переключаться.'
-                  : 'Добавьте ссылку в приложение один раз — оно само подтянет конфигурацию и будет держать её актуальной. Если X-Ray заблокируют — включится резервный канал.'}
+                Одна ссылка на все ваши серверы{inSub.length ? ` (${inSub.join(' · ')})` : ''}: добавьте её в
+                приложение один раз — каждый сервер появится отдельным профилем и будет обновляться сам.
               </div>
             </div>
-            {xrayServers.map((s) => {
-              const subUrl = s.subLink!;
-              const label = [flagOf(s), s.name].filter(Boolean).join(' ');
-              return (
-                <div key={s.id} className="card stack" style={{ gap: 8, background: 'var(--surface-2)' }}>
-                  <b>{label}</b>
-                  {!multi ? <Qr text={subUrl} caption="Отсканируйте в приложении" /> : null}
-                  <input className="input mono" readOnly value={subUrl} style={{ fontSize: 12 }} />
-                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={async () => {
-                        showToast((await copyText(subUrl)) ? 'Ссылка подписки скопирована' : 'Не удалось скопировать');
-                      }}
-                    >
-                      Копировать{multi ? ` · ${s.name}` : ' подписку'}
-                    </button>
-                    <button className="btn btn-outline btn-sm" onClick={() => goPublic('apps')}>
-                      Куда вставить?
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+            <Qr text={subUrl} caption="Отсканируйте в приложении" />
+            <input className="input mono" readOnly value={subUrl} style={{ fontSize: 12 }} />
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={async () => {
+                  showToast((await copyText(subUrl)) ? 'Ссылка подписки скопирована' : 'Не удалось скопировать');
+                }}
+              >
+                Копировать подписку
+              </button>
+              <button className="btn btn-outline btn-sm" onClick={() => goPublic('apps')}>
+                Куда вставить?
+              </button>
+            </div>
           </div>
         );
       })()}
@@ -257,10 +248,6 @@ export function Cabinet() {
           ) : null}
         </div>
       ) : null}
-
-      <button className="btn btn-primary btn-lg btn-block" onClick={() => goPublic('wizard', { wizardMode: 'issue' })}>
-        + Подключить новое устройство
-      </button>
 
       <div className="grid-2">
         <Tile title="Мои устройства" sub={devSub} onClick={() => goPublic('devices')} />
