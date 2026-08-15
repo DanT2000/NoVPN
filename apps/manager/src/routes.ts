@@ -124,7 +124,15 @@ router.get('/sub/:token/full', (req, res) => {
   if (links.length === 0) return res.status(404).send('');
   // Название профиля — по основному (первому) Xray-серверу пользователя: флаг + имя,
   // напр. «🇫🇮 Finland | Обход белых списков». country хранится как «🇫🇮 Финляндия».
-  const primaryDev = repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link);
+  // ВАЖНО: основной сервер выбираем из ТОГО ЖЕ отфильтрованного набора, что и links
+  // (subscriptionXrayLinks фильтрует по allowedProtocols/allowedServers и detached).
+  // Иначе имя/флаг И пер-серверные настройки (whitelist/lan/fallback/полный туннель)
+  // могли бы прийти с сервера, которого НЕТ в выданных ссылках, и тихо сломать маршрутизацию.
+  const xrayAllowed = u.allowedProtocols.includes('xray');
+  const allowedSet = new Set(u.allowedServers);
+  const primaryDev = xrayAllowed
+    ? repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link && allowedSet.has(d.serverId) && !repo.getServer(d.serverId)?.detached)
+    : null;
   const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
   // Свой значок сервера (эмодзи) приоритетнее флага страны; иначе флаг из country.
   const flag = (primarySrv?.flagEmoji || '').trim() || ((primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '');
@@ -791,7 +799,7 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
     sshPassEnc: b.secret ? encryptSecret(String(b.secret)) : null,
     enrollSecretEnc: encryptSecret(enrollToken),
   });
-  if (b.flagEmoji) repo.updateServerFields(s.id, { flag_emoji: String(b.flagEmoji).slice(0, 16) });
+  if (b.flagEmoji) repo.updateServerFields(s.id, { flag_emoji: [...String(b.flagEmoji)].slice(0, 8).join('') });
   if (hasKeys) {
     // Принимаем и ПРИВАТНЫЕ ключи + параметры обфускации — это регистрация уже
     // установленного сервера (или восстановление панели): с ними ранее выданные
@@ -817,7 +825,7 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   const fields: Record<string, unknown> = {};
   if (b.name !== undefined) fields.name = String(b.name);
   if (b.country !== undefined) fields.country = b.country || null;
-  if (b.flagEmoji !== undefined) fields.flag_emoji = b.flagEmoji ? String(b.flagEmoji).slice(0, 16) : null;
+  if (b.flagEmoji !== undefined) fields.flag_emoji = b.flagEmoji ? [...String(b.flagEmoji)].slice(0, 8).join('') : null;
   const vpnHost = b.vpnHost ?? b.host;
   if (vpnHost !== undefined && String(vpnHost).trim()) fields.host = String(vpnHost).trim();
   if (b.sshHost !== undefined) fields.ssh_host = b.sshHost;
@@ -1099,6 +1107,12 @@ router.post('/api/admin/servers/:id/change-port', requireAdmin, async (req, res)
   try {
     // Переустанавливаем службу на новом порту (ключи/uuid сохраняются — из профиля).
     await runProvision(s.id, s.protocols as string[], comp === 'xray' ? { xray: newPort } : { awg: newPort });
+    // runProvision ГАСИТ ошибки внутрь provisionStatus и НЕ бросает. Если переустановка
+    // на новом порту не удалась (порт занят/сбой install) — в БД остаётся СТАРЫЙ порт,
+    // подписка ещё отдаёт старый, а мы НЕ должны ставить REDIRECT старый→новый (увёл бы
+    // клиентов на мёртвый порт). Проверяем успех и при провале выходим с ошибкой. #HIGH
+    const pst = provisionStatus.get(s.id);
+    if (pst?.state !== 'done') throw new Error(pst?.message || 'Переустановка на новом порту не удалась — порт не изменён.');
     // REDIRECT в iptables НЕ цепочечный, поэтому все существующие legacy-порты
     // пере-указываем на НОВЫЙ primary (снимаем старое правило по сохранённому target,
     // ставим port→newPort), иначе самые старые конфиги отвалились бы. #3/#5
@@ -1141,8 +1155,9 @@ router.post('/api/admin/servers/:id/disable-legacy', requireAdmin, async (req, r
   if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
   const proto0 = String(req.body?.proto ?? ''); // 'xray' | 'awg'
   const port = Number(req.body?.port);
+  if (proto0 !== 'xray' && proto0 !== 'awg') return res.status(400).json(err('validation', 'proto: xray|awg.'));
   const proto = proto0 === 'awg' ? 'udp' : 'tcp';
-  if (!Number.isInteger(port)) return res.status(400).json(err('validation', 'Некорректный порт.'));
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return res.status(400).json(err('validation', 'Некорректный порт.'));
   // Снимаем правило по СОХРАНЁННОМУ target алиаса (а не по текущему primary — они
   // совпадают после retarget, но так надёжнее). #3
   const legacy = repo.getLegacyPorts(s.host).find((l) => l.proto === (proto0 === 'awg' ? 'awg' : 'xray') && l.port === port);

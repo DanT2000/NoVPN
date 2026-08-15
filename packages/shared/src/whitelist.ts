@@ -151,6 +151,11 @@ export function buildWhitelistXrayConfig(
   // Блокируем UDP/443 → браузер сразу падает на надёжный HTTP/2 (TCP). RU-домены уже ушли
   // direct правилами выше, их QUIC этот блок не затрагивает (порядок правил: whitelist → quic).
   const quicBlock = { type: 'field', outboundTag: 'block', network: 'udp', port: 443 };
+  // Терминальный аварийный fallback балансировщиков. В обычном режиме — 'direct' (все
+  // каналы мертвы → остаёмся в сети напрямую, осознанный компромисс). В полном туннеле
+  // (disableWhitelist) пользователь ЯВНО выбрал «весь трафик через VPN» — падать в direct
+  // = утечка реального IP открытым текстом, поэтому fail-close: 'block' (blackhole).
+  const failFallback = disableWhitelist ? 'block' : 'direct';
 
   // Один тир (только Xray или только прокси) — без аварийного переключения между тирами.
   if (tiers.length <= 1) {
@@ -168,7 +173,7 @@ export function buildWhitelistXrayConfig(
       // Несколько Xray-серверов (без прокси) — балансируем по ним (leastPing), иначе
       // использовался бы только первый; все мертвы → напрямую.
       cfg.observatory = { subjectSelector: ['proxy-t0-'], probeUrl: 'https://www.cloudflare.com/cdn-cgi/trace', probeInterval: '30s', enableConcurrency: true };
-      (cfg.routing as Record<string, unknown>).balancers = [{ tag: 'lb0', selector: ['proxy-t0-'], fallbackTag: 'direct', strategy: { type: 'leastPing' } }];
+      (cfg.routing as Record<string, unknown>).balancers = [{ tag: 'lb0', selector: ['proxy-t0-'], fallbackTag: failFallback, strategy: { type: 'leastPing' } }];
       rules.push({ type: 'field', inboundTag: ['socks', 'http'], balancerTag: 'lb0', network: 'tcp,udp' });
     } else {
       rules.push({ type: 'field', outboundTag: tier0.length ? 'proxy-t0-0' : 'direct', network: 'tcp,udp' });
@@ -199,7 +204,7 @@ export function buildWhitelistXrayConfig(
     balancers.push({
       tag: `lb${i}`,
       selector: [`proxy-t${i}-`],
-      fallbackTag: i < n - 1 ? `loop-${i + 1}` : 'direct',
+      fallbackTag: i < n - 1 ? `loop-${i + 1}` : failFallback,
       strategy: { type: 'leastPing' },
     });
   }

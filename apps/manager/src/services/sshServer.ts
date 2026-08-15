@@ -575,6 +575,10 @@ echo "UUID=$UUID"`;
  *  звать из авто-сверки). Пишем во временный файл, тестируем и только потом
  *  подменяем боевой конфиг. Возвращает true, если реально применили изменение. */
 export async function sshSetXraySni(server: Server, sni: string = REALITY_SNI): Promise<boolean> {
+  // sni подставляется в shell/python argv — валидируем как хостнейм (буквы/цифры/.-),
+  // чтобы кавычка/`$(...)` не могли вырваться в команду (защита на будущее: сейчас все
+  // вызывающие передают только константу REALITY_SNI, но подпись допускает произвольный SNI).
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(sni)) throw new Error('Некорректный SNI (только буквы, цифры, точки и дефис).');
   const out = await withServerLock(server.id, () => {
     const script = `set -e
 for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done

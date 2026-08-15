@@ -81,6 +81,21 @@ test('disableWhitelist=true + lanAccess=true: полный туннель — Н
   assert.match(cfg.remarks, /через VPN/);
 });
 
+test('полный туннель fail-close: терминальный fallback балансировщиков = block (не direct)', () => {
+  // многотировый (xray + прокси): при disableWhitelist последний тир падает в block, не в direct
+  const proxies: ProxyFallback[] = [{ kind: 'socks', host: '1.vpn.example.com', port: 1080, user: 'u', pass: 'p' }];
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', proxies, '', undefined, true, true));
+  const bs = cfg.routing.balancers;
+  assert.equal(bs[bs.length - 1].fallbackTag, 'block', 'при падении всех каналов в полном туннеле — блок, не утечка в direct');
+  // несколько xray-серверов без прокси: балансировщик тоже fail-close в полном туннеле
+  const LINK2 = 'vless://11111111-2222-3333-4444-555555555555@2.vpn.example.com:443?type=tcp&security=reality&pbk=DEF&fp=edge&sni=cdn.dodostatic.net&sid=aa&spx=%2F&flow=xtls-rprx-vision&encryption=none#NoVPN-x2';
+  const cfg2 = JSON.parse(buildWhitelistXrayConfig([LINK, LINK2], 'NoVPN', [], '', undefined, true, true));
+  assert.equal(cfg2.routing.balancers[0].fallbackTag, 'block');
+  // обычный режим не затронут — по-прежнему direct
+  const cfg3 = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', proxies));
+  assert.equal(cfg3.routing.balancers[cfg3.routing.balancers.length - 1].fallbackTag, 'direct');
+});
+
 test('QUIC-блок: UDP/443 в blackhole, ПОСЛЕ whitelist-direct (RU QUIC остаётся direct)', () => {
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN'));
   const rules = cfg.routing.rules;
