@@ -762,6 +762,19 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
   const b = req.body ?? {};
   const components: string[] = Array.isArray(b.components) ? b.components : [];
   const protocols = components.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p));
+  const publicHost = String(b.vpnHost || b.host || '');
+  // Reattach: если по этому домену уже есть ОТВЯЗАННЫЙ сервер — переиспользуем его
+  // строку (endpoint/ключи/конфиги живы), а не плодим дубль. Возвращаем восстановленный.
+  const detachedSame = repo.listServers().find((x) => x.detached && x.host === publicHost);
+  if (detachedSame) {
+    repo.reattachServer(detachedSame.id, {
+      host: b.host, port: b.sshPort, user: b.sshUser,
+      passEnc: b.secret ? encryptSecret(String(b.secret)) : undefined,
+    });
+    if (protocols.length) repo.updateServerFields(detachedSame.id, { protocols: JSON.stringify(protocols) });
+    repo.addLog(`Переподключён сервер к сохранённому endpoint «${detachedSame.name}» (${publicHost}) — старые конфиги восстановлены`);
+    return res.json(repo.getServer(detachedSame.id));
+  }
   // Одноразовый enrollment-token (для будущего агент-режима).
   const enrollToken = randomToken();
   // Если переданы серверные ключи — сервер уже установлен, панель работает по SSH.

@@ -507,7 +507,7 @@ export function Servers() {
           {servers.map((s) => {
             const agentV = serverAgentView(s);
             const endpointV = serverEndpointView(s);
-            const dotColor = s.agent === 'online' ? 'var(--green-dot)' : 'var(--red-fg)';
+            const dotColor = s.detached ? 'var(--text-faint, #888)' : s.agent === 'online' ? 'var(--green-dot)' : 'var(--red-fg)';
             const title = s.country ? `${s.name} · ${s.country}` : s.name;
             const protocols = s.protocols.length
               ? s.protocols.map((p) => PROTOCOL_LABELS[p]).join(', ')
@@ -521,6 +521,7 @@ export function Servers() {
                     <Dot color={dotColor} />
                     <span style={{ fontWeight: 700, fontSize: 15 }}>{title}</span>
                     {s.isDefault ? <span className="badge">по умолчанию</span> : null}
+                    {s.detached ? <span className="badge" style={{ background: 'var(--surface-btn-2, #333)', color: 'var(--text-muted-2)' }} title="Физический сервер отвязан. Endpoint (домен/порты/ключи/конфиги) сохранён — подключите новый сервер на тот же домен.">endpoint сохранён</span> : null}
                   </div>
                   <span
                     className="mono small"

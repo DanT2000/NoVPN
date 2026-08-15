@@ -82,6 +82,11 @@ export function ServerWizard() {
   const [compAwg, setCompAwg] = useState(true);
   const [compHttp, setCompHttp] = useState(false);
   const [compSocks, setCompSocks] = useState(false);
+  // Порты: пусто = авто (Xray → 443 если свободен, иначе случайный; AWG → случайный UDP).
+  const [portXray, setPortXray] = useState('');
+  const [portAwg, setPortAwg] = useState('');
+  // Найден сохранённый endpoint по этому домену (порты/ключи восстановятся).
+  const [epFound, setEpFound] = useState<null | { xray: number; awg: number }>(null);
 
   // Шаг 4 — установка
   const [pct, setPct] = useState(0);
@@ -113,6 +118,20 @@ export function ServerWizard() {
     country: country || null,
   });
 
+  // При переходе к выбору компонентов — ищем сохранённый endpoint по домену:
+  // если есть, восстановим порты/ключи (старые конфиги снова заработают).
+  useEffect(() => {
+    if (step !== 3 || !host.trim()) return;
+    let alive = true;
+    api.getEndpointProfile(host.trim()).then((r) => {
+      if (!alive || !r.profile.exists) return;
+      setEpFound({ xray: r.profile.ports.xray, awg: r.profile.ports.awg });
+      setPortXray(String(r.profile.ports.xray));
+      setPortAwg(String(r.profile.ports.awg));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [step, host]);
+
   // РЕАЛЬНАЯ установка на шаге 4: добавляем сервер и провижиним его по SSH.
   useEffect(() => {
     if (step !== 4 || addedRef.current) return;
@@ -132,7 +151,7 @@ export function ServerWizard() {
           createdIdRef.current = srv.id;
           srvId = srv.id;
         }
-        await api.provisionServer(srvId, components()); // запуск (асинхронно на сервере)
+        await api.provisionServer(srvId, components(), { portXray: Number(portXray) || undefined, portAwg: Number(portAwg) || undefined }); // запуск (асинхронно на сервере)
         const started = Date.now();
         let lastMsg = '';
         for (;;) {
@@ -367,6 +386,29 @@ export function ServerWizard() {
             sub="Только для служебного доступа"
             onToggle={() => setCompSocks((v) => !v)}
           />
+
+          {compXray || compAwg ? (
+            <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+              <span className="field-label">Публичные порты</span>
+              {epFound ? (
+                <div className="notice notice-amber small" style={{ marginBottom: 8 }}>
+                  Найдена сохранённая конфигурация для <b>{host.trim()}</b> — порты и ключи будут восстановлены,
+                  ранее выданные конфиги снова заработают.
+                </div>
+              ) : null}
+              {compXray ? (
+                <Field label="Порт Xray (TCP)" hint="Пусто = авто: 443, если свободен (рекомендуется), иначе случайный. Reality не проксируется через Nginx/NPM — ему нужен свой порт.">
+                  <input className="input mono" placeholder="443 (по умолчанию)" value={portXray} onChange={(e) => setPortXray(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" />
+                </Field>
+              ) : null}
+              {compAwg ? (
+                <Field label="Порт AmneziaWG (UDP)" hint="Пусто = авто: случайный не-дефолтный UDP (Amnezia рекомендует нестандартный порт).">
+                  <input className="input mono" placeholder="авто (случайный UDP)" value={portAwg} onChange={(e) => setPortAwg(e.target.value.replace(/[^0-9]/g, ''))} inputMode="numeric" />
+                </Field>
+              ) : null}
+            </div>
+          ) : null}
+
           <button className="btn btn-primary" onClick={() => setStep(4)}>
             Начать установку
           </button>
