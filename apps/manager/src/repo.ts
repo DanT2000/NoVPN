@@ -1167,8 +1167,15 @@ export function listDevicesOfUser(userId: string): Device[] {
  *  «кучу разных девайсов» и могло цепляться за устаревший. Оставляем по одному
  *  самому свежему на сервер (список отсортирован created_at DESC). */
 export function subscriptionXrayLinks(userId: string, onlyServerId?: string): string[] {
+  return subscriptionXrayEntries(userId, onlyServerId).map((e) => e.link);
+}
+
+/** То же, но с serverId у каждой ссылки: агрегированной подписке нужно отделять
+ *  серверы с полным туннелем и стабильно выбирать «основной» сервер. Порядок —
+ *  как у listDevicesOfUser (новые конфиги первыми). */
+export function subscriptionXrayEntries(userId: string, onlyServerId?: string): Array<{ serverId: string; link: string }> {
   const seen = new Set<string>();
-  const links: string[] = [];
+  const links: Array<{ serverId: string; link: string }> = [];
   // Защита на чтении: подписка отдаёт конфиги ТОЛЬКО с серверов/протоколов, которые
   // пользователю разрешены СЕЙЧАС. Иначе сужение allowedServers/allowedProtocols в
   // профиле не убирало бы уже выданные out-of-scope конфиги из подписки до серверного
@@ -1187,7 +1194,7 @@ export function subscriptionXrayLinks(userId: string, onlyServerId?: string): st
     // Endpoint в ссылке подменяем на ТЕКУЩИЙ host:port сервера: смена порта/домена
     // доезжает до подписчиков автоматически, без перевыпуска (uuid/ключи те же).
     const srv = getServer(d.serverId);
-    links.push(srv && !srv.detached ? patchXrayLinkEndpoint(d.link, srv.host, srv.ports?.xray ?? DEFAULT_PORTS.xray) : d.link);
+    links.push({ serverId: d.serverId, link: srv && !srv.detached ? patchXrayLinkEndpoint(d.link, srv.host, srv.ports?.xray ?? DEFAULT_PORTS.xray) : d.link });
   }
   return links;
 }

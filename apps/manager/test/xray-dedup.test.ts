@@ -56,6 +56,49 @@ test('findActiveXrayDevice не возвращает отозванный кон
   assert.equal(repo.findActiveXrayDevice(user.id, server.id), null);
 });
 
+test('subscriptionXrayEntries: serverId у каждой ссылки, порядок новые-первыми', () => {
+  seq += 1;
+  const s1 = repo.insertServer({ name: 'A', country: null, host: `10.7.1.${seq}`, protocols: ['xray'], endpointOk: true });
+  const s2 = repo.insertServer({ name: 'B', country: null, host: `10.7.2.${seq}`, protocols: ['xray'], endpointOk: true });
+  const user = repo.insertUser({
+    name: 'Е', comment: '', category: null, tags: [], code: `e${seq}`,
+    deviceLimit: 1, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
+    allowedServers: [s1.id, s2.id], allowedProtocols: ['xray'],
+  });
+  repo.insertDevice({ userId: user.id, name: 'старый', serverId: s1.id, protocol: 'xray', uuid: 'e1', publicKey: 'k1', link: `vless://e1@${s1.host}:443?type=tcp` });
+  // Гарантируем разный created_at (ISO-строки с миллисекундами могут совпасть в быстром тесте).
+  const past = new Date(Date.now() - 60000).toISOString();
+  repo.updateDeviceFields(repo.listDevicesOfUser(user.id)[0]!.id, { created_at: past });
+  repo.insertDevice({ userId: user.id, name: 'новый', serverId: s2.id, protocol: 'xray', uuid: 'e2', publicKey: 'k2', link: `vless://e2@${s2.host}:443?type=tcp` });
+  const entries = repo.subscriptionXrayEntries(user.id);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0]!.serverId, s2.id, 'новый конфиг первым');
+  assert.equal(entries[entries.length - 1]!.serverId, s1.id, 'старейший последним (стабильный «основной»)');
+});
+
+test('агрегированная подписка не смешивает полный туннель: full-tunnel сервер отделён', () => {
+  seq += 1;
+  const wl = repo.insertServer({ name: 'WL', country: null, host: `10.6.1.${seq}`, protocols: ['xray'], endpointOk: true });
+  const ft = repo.insertServer({ name: 'FT', country: null, host: `10.6.2.${seq}`, protocols: ['xray'], endpointOk: true });
+  // FT — полный туннель (пер-серверный xrayWhitelist=false), WL — обычный обход.
+  repo.setEndpointConfig(ft.host, { xrayWhitelist: false });
+  const user = repo.insertUser({
+    name: 'Ф', comment: '', category: null, tags: [], code: `f${seq}`,
+    deviceLimit: 1, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
+    allowedServers: [wl.id, ft.id], allowedProtocols: ['xray'],
+  });
+  repo.insertDevice({ userId: user.id, name: 'w', serverId: wl.id, protocol: 'xray', uuid: 'w1', publicKey: 'kw', link: `vless://w1@${wl.host}:443?type=tcp` });
+  repo.insertDevice({ userId: user.id, name: 'f', serverId: ft.id, protocol: 'xray', uuid: 'f1', publicKey: 'kf', link: `vless://f1@${ft.host}:443?type=tcp` });
+  const entries = repo.subscriptionXrayEntries(user.id);
+  // Модель роутинга /full: whitelist-серверы в агрегированной, full-tunnel отдельно.
+  const isFT = (sid: string) => repo.getEndpointConfig(repo.getServer(sid)!.host).xrayWhitelist === false;
+  const wlOnly = entries.filter((e) => !isFT(e.serverId));
+  assert.equal(wlOnly.length, 1);
+  assert.equal(wlOnly[0]!.serverId, wl.id, 'в агрегированной остаётся только whitelist-сервер');
+  // Пер-серверная полнотуннельная ссылка живёт отдельно.
+  assert.equal(repo.subscriptionXrayLinks(user.id, ft.id).length, 1);
+});
+
 test('пер-серверная подписка: onlyServerId фильтрует ссылки одним сервером', () => {
   seq += 1;
   const s1 = repo.insertServer({ name: 'FIN', country: 'FI', host: `10.9.0.${seq}`, protocols: ['xray'], endpointOk: true });

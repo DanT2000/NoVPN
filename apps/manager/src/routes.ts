@@ -176,14 +176,23 @@ router.get('/sub/:token/full', (req, res) => {
   if (!u || !u.isActive) return res.status(404).send('');
   if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
-  const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
-  // Основной сервер (имя/политика) — первый из ТОГО ЖЕ отфильтрованного набора, что и links.
-  const allowedSet = new Set(u.allowedServers);
-  const primaryDev = u.allowedProtocols.includes('xray')
-    ? repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link && allowedSet.has(d.serverId) && !repo.getServer(d.serverId)?.detached)
-    : null;
-  const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
-  const json = buildUserXrayFull(u, links, primarySrv, overQuota);
+  const entries = overQuota ? [] : repo.subscriptionXrayEntries(u.id);
+  // Полнотуннельные серверы (xrayWhitelist=false) — ОТДЕЛЬНЫЕ подписки: у них другая
+  // маршрутизация, смешивать с обходом в одном балансировщике нельзя. Иначе выпуск
+  // конфига на таком сервере «перекрашивал» бы ВСЮ агрегированную подписку в полный
+  // туннель (реальный случай: HomeVPN). Если же ВСЕ серверы полнотуннельные —
+  // включаем их: политика едина, агрегированная ссылка остаётся рабочей.
+  const isFullTunnel = (sid: string) => {
+    const s = repo.getServer(sid);
+    return !!s && repo.getEndpointConfig(s.host).xrayWhitelist === false;
+  };
+  const wlEntries = entries.filter((e) => !isFullTunnel(e.serverId));
+  const chosen = wlEntries.length ? wlEntries : entries;
+  // «Основной» сервер (имя профиля + политика) — СТАБИЛЬНО по СТАРЕЙШЕМУ конфигу
+  // (entries идут новые-первыми). Раньше брался новейший — выпуск конфига на новом
+  // сервере молча менял имя и политику всей подписки у уже подключённых людей.
+  const primarySrv = chosen.length ? repo.getServer(chosen[chosen.length - 1]!.serverId) : null;
+  const json = buildUserXrayFull(u, chosen.map((e) => e.link), primarySrv, overQuota);
   if (!json) return res.status(404).send('');
   sendUserXrayFull(res, u, json);
 });
