@@ -193,6 +193,15 @@ H1=${a.H1}; H2=${a.H2}; H3=${a.H3}; H4=${a.H4}
 
 if [ "$WANT_XRAY" = "1" ]; then
   echo "== xray =="
+  # Docker нужен для Xray (контейнер teddysun/xray). Ставим/поднимаем, если его нет
+  # или демон не запущен (на домашних серверах Docker может быть не установлен).
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "  ставлю docker…"
+    curl -fsSL https://get.docker.com | sh >/tmp/docker-install.log 2>&1 || true
+  fi
+  systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+  for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  docker info >/dev/null 2>&1 || { echo "DOCKER_FAIL: демон не запустился"; exit 1; }
   mkdir -p /opt/amnezia/xray
   docker pull -q teddysun/xray >/dev/null 2>&1 || true
   if [ -z "$REALITY_PRIV" ]; then
