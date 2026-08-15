@@ -14,7 +14,7 @@ import { buildWhitelistXrayConfig } from '@novpn/shared';
 import type { ProxyFallback } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, REALITY_SNI } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshHardenToKey, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -1085,6 +1085,22 @@ router.post('/api/admin/servers/:id/change-port', requireAdmin, async (req, res)
     res.json({ ok: true, oldPort, newPort, legacyKept: keepLegacy });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка смены порта.'));
+  }
+});
+
+// Перевести сервер на вход по SSH-ключу (key-only) БЕЗОПАСНО: ставим ключ → тест-вход
+// ключом → и только при успехе отключаем пароль. Приватный ключ шифруется, наружу не отдаётся.
+router.post('/api/admin/servers/:id/harden-ssh', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const privateKey = String(req.body?.privateKey ?? '').trim();
+  if (!privateKey || !/PRIVATE KEY/.test(privateKey)) return res.status(400).json(err('validation', 'Вставьте приватный SSH-ключ (OpenSSH/PEM).'));
+  try {
+    const r = await sshHardenToKey(s, privateKey);
+    repo.addLog(`Сервер «${s.name}»: включён вход по SSH-ключу, парольная аутентификация отключена`);
+    res.json({ ok: true, publicKey: r.publicKey });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось перевести на ключ.'));
   }
 });
 

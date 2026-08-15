@@ -139,6 +139,66 @@ function EndpointConfigPanel({ server }: { server: Server }) {
   );
 }
 
+/** Безопасный перевод сервера на вход по SSH-ключу: ставим ключ → тест-вход → только
+ *  потом отключаем пароль (никогда не отключаем пароль до подтверждённого входа ключом). */
+function SshHardenPanel({ server }: { server: Server }) {
+  const { showToast, reload } = useApp();
+  const [open, setOpen] = useState(false);
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  if (server.sshKeyAuth) {
+    return (
+      <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+        <span className="field-label">SSH-доступ</span>
+        <div className="body small" style={{ color: 'var(--ok-fg, #2a9d3c)' }}>✓ Вход по ключу включён, парольная аутентификация отключена.</div>
+      </div>
+    );
+  }
+  return (
+    <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+      <span className="field-label">SSH-доступ (вход по ключу)</span>
+      <div className="body small muted" style={{ marginBottom: 8 }}>
+        Перевод на вход <b>только по ключу</b>: панель поставит публичный ключ, сделает тест-вход
+        и <b>только при успехе</b> отключит пароль. Если тест не пройдёт — пароль останется, ничего
+        не сломается. Приватный ключ шифруется и наружу не отдаётся.
+      </div>
+      {!open ? (
+        <button className="btn btn-outline btn-sm" onClick={() => setOpen(true)}>Перевести на вход по ключу</button>
+      ) : (
+        <>
+          <Field label="Приватный SSH-ключ (OpenSSH/PEM)" hint="Вставьте содержимое приватного ключа целиком. Публичный ключ панель выведет сама.">
+            <textarea className="textarea mono" style={{ minHeight: 120, fontSize: 12 }} spellCheck={false} placeholder={'-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----'} value={key} onChange={(e) => setKey(e.target.value)} />
+          </Field>
+          <div className="row" style={{ gap: 8, marginTop: 8 }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={busy || !key.trim()}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await api.hardenServerSsh(server.id, key.trim());
+                  showToast('Готово: вход по ключу включён, пароль отключён');
+                  setOpen(false);
+                  setKey('');
+                  await reload();
+                } catch (e) {
+                  showToast(e instanceof Error ? e.message : 'Не удалось перевести на ключ');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? 'Проверяем ключ…' : 'Проверить и включить'}
+            </button>
+            <button className="btn btn-outline btn-sm" onClick={() => { setOpen(false); setKey(''); }}>Отмена</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
   const { editServer, showToast, reload, showConfirm } = useApp();
   const [provBusy, setProvBusy] = useState<string | null>(null);
@@ -436,6 +496,9 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
           </div>
         </div>
       ) : null}
+
+      {/* SSH hardening: перевод на вход по ключу */}
+      <SshHardenPanel server={server} />
 
       {/* Пер-серверные настройки конфига (на устройстве) */}
       <EndpointConfigPanel server={server} />

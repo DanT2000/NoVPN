@@ -485,6 +485,12 @@ export const mockApi: ApiClient = {
     if (s) s.legacyPorts = (s.legacyPorts ?? []).filter((l) => !(l.proto === proto && l.port === port));
     return { ok: true };
   },
+  async hardenServerSsh(id: string, _privateKey: string) {
+    await wait(500);
+    const s = state.servers.find((x) => x.id === id);
+    if (s) s.sshKeyAuth = true;
+    return { ok: true, publicKey: 'ssh-ed25519 AAAA...demo novpn-panel' };
+  },
 
   async saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings> {
     await wait(350);

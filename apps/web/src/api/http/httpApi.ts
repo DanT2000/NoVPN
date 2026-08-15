@@ -116,6 +116,7 @@ export const httpApi: ApiClient = {
   saveEndpointConfig: (id: string, patch) => req<{ ok: boolean; config: import('../types').EndpointConfigView }>('PUT', `/api/admin/servers/${id}/endpoint-config`, patch),
   changeServerPort: (id, component, port, keepLegacy) => req<{ ok: boolean; oldPort?: number; newPort?: number; legacyKept?: boolean }>('POST', `/api/admin/servers/${id}/change-port`, { component, port, keepLegacy }),
   disableLegacyPort: (id, proto, port) => req<Ok>('POST', `/api/admin/servers/${id}/disable-legacy`, { proto, port }),
+  hardenServerSsh: (id, privateKey) => req<{ ok: boolean; publicKey?: string }>('POST', `/api/admin/servers/${id}/harden-ssh`, { privateKey }),
 
   saveTelegram: (input: SaveTelegramInput) => req<TelegramSettings>('PUT', '/api/admin/telegram', input),
   testTelegram: (token) => req<TestTelegramResult>('POST', '/api/admin/telegram/test', { token }),

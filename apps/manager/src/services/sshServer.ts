@@ -3,9 +3,10 @@
 // panel по SSH выполняет те же команды (xray через docker exec, awg через awg set).
 
 import { Client } from 'ssh2';
+import ssh2 from 'ssh2';
 import type { Server } from '@novpn/shared';
-import { decryptSecret } from '../lib/crypto.js';
-import { getServerSsh } from '../repo.js';
+import { decryptSecret, encryptSecret } from '../lib/crypto.js';
+import { getServerSsh, setServerSshKey, disableServerSshPassword } from '../repo.js';
 import { getServerKeys } from './keyvault.js';
 
 // Параметры маскировки Xray-reality. SNI vk.com оказался заезжен reality-серверами
@@ -272,6 +273,43 @@ openp(){ pr="\${2:-tcp}"; if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev
 [ "$WANT_XRAY" = "1" ] && openp ${xrayPort} tcp
 [ "$WANT_AWG" = "1" ] && openp ${awgPort} udp
 echo INSTALL_DONE`;
+}
+
+/** Безопасный перевод сервера на вход по SSH-КЛЮЧУ (key-only). Строго по порядку:
+ *  1) ставим публичный ключ в authorized_keys ПАРОЛЕМ; 2) делаем НОВЫЙ тест-вход этим
+ *  ключом; 3) только при успехе сохраняем ключ в БД и отключаем PasswordAuthentication.
+ *  Пароль в БД остаётся до подтверждённого серверного отключения — не запираем себя. */
+export async function sshHardenToKey(server: Server, privateKey: string): Promise<{ publicKey: string }> {
+  const s = getServerSsh(server.id);
+  if (!s) throw new Error('Сервер не найден.');
+  if (!s.passwordEnc) throw new Error('Для перевода на ключ нужен текущий доступ по паролю.');
+  const pw = decryptSecret(s.passwordEnc);
+  const parsed = ssh2.utils.parseKey(privateKey);
+  if (!parsed || parsed instanceof Error) throw new Error('Некорректный приватный SSH-ключ.');
+  const key = Array.isArray(parsed) ? parsed[0]! : parsed;
+  const pubLine = `${key.type} ${key.getPublicSSH().toString('base64')} novpn-panel`;
+  if (!/^[A-Za-z0-9@:. _+/=-]+$/.test(pubLine)) throw new Error('Не удалось сформировать публичный ключ.');
+  const pwCreds = { host: s.host, port: s.port, username: s.user, password: pw };
+  // 1) установить публичный ключ (паролем)
+  await runScript(pwCreds, `set -e
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+grep -qxF '${pubLine}' ~/.ssh/authorized_keys || echo '${pubLine}' >> ~/.ssh/authorized_keys
+echo KEY_ADDED`, 30000);
+  // 2) НОВЫЙ тест-вход ключом
+  const keyCreds = { host: s.host, port: s.port, username: s.user, privateKey };
+  const t = await runScript(keyCreds, 'echo KEY_LOGIN_OK', 20000).catch(() => '');
+  if (!/KEY_LOGIN_OK/.test(t)) throw new Error('Тестовый вход по ключу не удался — пароль НЕ отключён, ничего не менял.');
+  // 3) ключ подтверждён → сохраняем в БД (панель теперь ходит ключом)
+  setServerSshKey(server.id, encryptSecret(privateKey));
+  // 4) отключаем пароль на сервере (ключом) и в БД
+  await runScript(keyCreds, `set +e
+sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || true
+echo HARDENED`, 30000);
+  disableServerSshPassword(server.id);
+  return { publicKey: pubLine };
 }
 
 /** Подобрать СВОБОДНЫЙ публичный порт на сервере (через ss по SSH). prefer — желаемый

@@ -188,6 +188,7 @@ export interface ApiClient {
   saveEndpointConfig(id: string, patch: Partial<EndpointConfigView>): Promise<{ ok: boolean; config: EndpointConfigView }>;
   changeServerPort(id: string, component: 'xray' | 'awg', port: number, keepLegacy: boolean): Promise<{ ok: boolean; oldPort?: number; newPort?: number; legacyKept?: boolean }>;
   disableLegacyPort(id: string, proto: 'xray' | 'awg', port: number): Promise<Ok>;
+  hardenServerSsh(id: string, privateKey: string): Promise<{ ok: boolean; publicKey?: string }>;
 
   // ── admin: telegram ──
   saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings>;
