@@ -298,6 +298,31 @@ for (const stmt of [
   // Реально используемые конфиги на момент снимка (были на связи за ~сутки) — для
   // графика «Активность» (реальное использование, а не число выданных).
   'ALTER TABLE stats_samples ADD COLUMN used_devices INTEGER NOT NULL DEFAULT 0',
+  // ── Endpoint Profile: server_keys (по домену) хранит и ПОРТЫ endpoint'а ──
+  // Публичные порты компонентов. NULL = легаси-дефолт (443/51820/8080/1080/8443),
+  // поэтому существующие установки продолжают работать без изменений.
+  'ALTER TABLE server_keys ADD COLUMN port_xray INTEGER',
+  'ALTER TABLE server_keys ADD COLUMN port_awg INTEGER',
+  'ALTER TABLE server_keys ADD COLUMN port_http INTEGER',
+  'ALTER TABLE server_keys ADD COLUMN port_socks INTEGER',
+  'ALTER TABLE server_keys ADD COLUMN port_https INTEGER',
+  // Legacy-алиасы портов: [{proto,'port',since}] — старый порт продолжает вести на
+  // новый (iptables), чтобы уже выданные конфиги оставались живыми после смены порта.
+  "ALTER TABLE server_keys ADD COLUMN legacy_ports TEXT NOT NULL DEFAULT '[]'",
+  // Сервер «отвязан»: физическая машина удалена/недоступна, но endpoint (домен, порты,
+  // ключи, связь с выданными конфигами) сохранён — серый статус, sync пропускает.
+  'ALTER TABLE servers ADD COLUMN detached INTEGER NOT NULL DEFAULT 0',
+  // SSH-ключ панели для входа на сервер (взамен пароля после hardening).
+  'ALTER TABLE servers ADD COLUMN ssh_key_enc TEXT',
+  // Выдача помечена «нужно обновить» (legacy-порт отключён — старый конфиг больше не работает).
+  'ALTER TABLE devices ADD COLUMN needs_refresh INTEGER NOT NULL DEFAULT 0',
+  // ── Пер-серверные настройки генерации конфига (в Endpoint Profile) ──
+  // Всё это — параметры конфига НА УСТРОЙСТВЕ (маршрутизация/фоллбэк), не серверная
+  // служба. NULL = наследовать глобальную настройку (обратная совместимость).
+  'ALTER TABLE server_keys ADD COLUMN xray_whitelist INTEGER',      // продвинутый режим для этого сервера
+  'ALTER TABLE server_keys ADD COLUMN whitelist_domains TEXT',       // свой список обхода (JSON), NULL=глоб/дефолт
+  'ALTER TABLE server_keys ADD COLUMN lan_access INTEGER',           // доступ в локалку для этого сервера
+  "ALTER TABLE server_keys ADD COLUMN fallback_types TEXT",         // какие прокси-фоллбэки использовать (JSON ['https','http','socks'])
 ]) {
   try {
     db.exec(stmt);

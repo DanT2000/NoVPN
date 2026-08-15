@@ -16,11 +16,11 @@ const NO_SSH =
 // Лучше честная ошибка, чем нерабочий конфиг на руках у пользователя.
 export async function createXrayCfg(server: Server, name: string) {
   if (!(await sshHasSshAccess(server.id))) throw new Error(NO_SSH);
-  return sshCreateXray(server, name, repo.brandName());
+  return sshCreateXray(server, name, repo.brandName(), repo.getEndpointPorts(server.host).xray);
 }
 export async function createAwgCfg(server: Server, name: string) {
   if (!(await sshHasSshAccess(server.id))) throw new Error(NO_SSH);
-  return sshCreateAwg(server, name);
+  return sshCreateAwg(server, name, repo.getEndpointPorts(server.host).awg);
 }
 
 // Сериализация выпуска ПО ПОЛЬЗОВАТЕЛЮ: check-then-act (посчитать активные → SSH →

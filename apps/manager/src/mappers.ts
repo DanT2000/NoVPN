@@ -78,6 +78,8 @@ export function rowToServer(r: any): Server {
     lastSyncAt: r.last_sync_at ?? null,
     recommended: b(r.recommended),
     agentVersion: r.agent_version ?? null,
+    detached: b(r.detached),
+    sshKeyAuth: !!r.ssh_key_enc,
   };
 }
 

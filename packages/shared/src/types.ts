@@ -16,11 +16,35 @@ import type {
   UserProtocol,
 } from './enums.js';
 
+/** Публичные порты endpoint'а (часть Endpoint Profile, хранится по домену и
+ *  переживает удаление физического сервера). */
+export interface ServerPorts {
+  xray: number;
+  awg: number;
+  http: number;
+  socks: number;
+  https: number;
+}
+
+export interface LegacyPort {
+  proto: keyof ServerPorts;
+  port: number;
+  since: string;
+}
+
 export interface Server {
   id: string;
   name: string;
   country: string | null;
   host: string;
+  /** Публичные порты компонентов (дефолты 443/51820/8080/1080/8443, если не менялись). */
+  ports?: ServerPorts;
+  /** Старые порты, оставленные для совместимости с ранее выданными конфигами. */
+  legacyPorts?: LegacyPort[];
+  /** Физический сервер отвязан: endpoint (домен/порты/ключи/конфиги) сохранён, SSH нет. */
+  detached?: boolean;
+  /** SSH-вход по ключу настроен (пароль отключён после hardening). */
+  sshKeyAuth?: boolean;
   /** Агент подключён к панели. */
   agent: AgentConnectivity;
   /** Публичный VPN-endpoint доступен снаружи. */

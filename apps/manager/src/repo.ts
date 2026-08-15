@@ -11,9 +11,11 @@ import type {
   ProxyAccount,
   ProxyEndpoint,
   ProxyType,
+  LegacyPort,
   PublicBootstrapData,
   PublicUserView,
   Server,
+  ServerPorts,
   TelegramSettings,
   User,
 } from '@novpn/shared';
@@ -586,14 +588,100 @@ export function listServers(): Server[] {
     )
     .all() as Array<{ sid: string; n: number }>;
   const byServer = new Map(counts.map((c) => [c.sid, c.n]));
-  return (db.prepare('SELECT * FROM servers ORDER BY created_at ASC').all() as any[]).map((r) => ({
-    ...rowToServer(r),
-    users: byServer.get(r.id) ?? 0,
-  }));
+  return (db.prepare('SELECT * FROM servers ORDER BY created_at ASC').all() as any[]).map((r) =>
+    withEndpoint({
+      ...rowToServer(r),
+      users: byServer.get(r.id) ?? 0,
+    }),
+  );
 }
 export function getServer(id: string): Server | null {
   const r = db.prepare('SELECT * FROM servers WHERE id = ?').get(id) as any;
-  return r ? rowToServer(r) : null;
+  return r ? withEndpoint(rowToServer(r)) : null;
+}
+
+// ── Endpoint Profile: порты и legacy-алиасы (в server_keys, по домену — переживают
+// удаление физического сервера, как и ключи) ──
+export const DEFAULT_PORTS: ServerPorts = { xray: 443, awg: 51820, http: 8080, socks: 1080, https: 8443 };
+
+export function getEndpointPorts(host: string): ServerPorts {
+  const r = db.prepare('SELECT port_xray, port_awg, port_http, port_socks, port_https FROM server_keys WHERE domain = ?').get(host) as any;
+  return {
+    xray: r?.port_xray ?? DEFAULT_PORTS.xray,
+    awg: r?.port_awg ?? DEFAULT_PORTS.awg,
+    http: r?.port_http ?? DEFAULT_PORTS.http,
+    socks: r?.port_socks ?? DEFAULT_PORTS.socks,
+    https: r?.port_https ?? DEFAULT_PORTS.https,
+  };
+}
+export function saveEndpointPorts(host: string, p: Partial<ServerPorts>): void {
+  // upsert: строка server_keys может ещё не существовать (порты выбраны до установки).
+  db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
+  const cur = getEndpointPorts(host);
+  const next = { ...cur, ...p };
+  db.prepare('UPDATE server_keys SET port_xray=?, port_awg=?, port_http=?, port_socks=?, port_https=?, updated_at=? WHERE domain=?')
+    .run(next.xray, next.awg, next.http, next.socks, next.https, nowIso(), host);
+}
+export function getLegacyPorts(host: string): LegacyPort[] {
+  const r = db.prepare('SELECT legacy_ports FROM server_keys WHERE domain = ?').get(host) as { legacy_ports?: string } | undefined;
+  try {
+    const arr = JSON.parse(r?.legacy_ports || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+export function addLegacyPort(host: string, proto: LegacyPort['proto'], port: number): void {
+  const list = getLegacyPorts(host).filter((l) => !(l.proto === proto && l.port === port));
+  list.push({ proto, port, since: nowIso() });
+  db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list), host);
+}
+export function removeLegacyPort(host: string, proto: LegacyPort['proto'], port: number): LegacyPort | null {
+  const list = getLegacyPorts(host);
+  const found = list.find((l) => l.proto === proto && l.port === port) ?? null;
+  db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list.filter((l) => l !== found)), host);
+  return found;
+}
+/** Профиль endpoint'а для мастера: есть ли сохранённые ключи/порты по этому домену. */
+export function getEndpointProfile(host: string): { exists: boolean; ports: ServerPorts; legacyPorts: LegacyPort[]; hasXrayKeys: boolean; hasAwgKeys: boolean; updatedAt: string | null } {
+  const r = db.prepare('SELECT xray_reality_pubkey, awg_server_pubkey, updated_at FROM server_keys WHERE domain = ?').get(host) as any;
+  return {
+    exists: !!r,
+    ports: getEndpointPorts(host),
+    legacyPorts: getLegacyPorts(host),
+    hasXrayKeys: !!r?.xray_reality_pubkey,
+    hasAwgKeys: !!r?.awg_server_pubkey,
+    updatedAt: r?.updated_at ?? null,
+  };
+}
+export function deleteEndpointProfile(host: string): void {
+  db.prepare('DELETE FROM server_keys WHERE domain = ?').run(host);
+}
+function withEndpoint(s: Server): Server {
+  s.ports = getEndpointPorts(s.host);
+  s.legacyPorts = getLegacyPorts(s.host);
+  return s;
+}
+
+/** Патч публичного endpoint'а в уже выданной vless-ссылке: host:port подменяются на
+ *  ТЕКУЩИЕ (uuid/ключи/метка сохраняются). Так смена порта/домена доезжает до
+ *  подписки без перевыпуска устройства. */
+export function patchXrayLinkEndpoint(link: string, host: string, port: number): string {
+  return link.replace(/@[^:@/?#]+:\d+\?/, `@${host}:${port}?`);
+}
+/** То же для AmneziaWG .conf: строка Endpoint. */
+export function patchAwgConfEndpoint(conf: string, host: string, port: number): string {
+  return conf.replace(/^Endpoint\s*=.*$/m, `Endpoint = ${host}:${port}`);
+}
+
+/** Отвязать физический сервер, СОХРАНИВ endpoint: домен, порты, ключи (server_keys)
+ *  и все выданные конфиги остаются; SSH-доступ очищается, sync пропускает. */
+export function detachServer(id: string): void {
+  db.prepare("UPDATE servers SET detached = 1, agent = 'never', endpoint_ok = 0, ssh_pass_enc = NULL, ssh_key_enc = NULL WHERE id = ?").run(id);
+}
+export function reattachServer(id: string, ssh: { host?: string; port?: number; user?: string; passEnc?: string | null }): void {
+  db.prepare('UPDATE servers SET detached = 0, ssh_host = COALESCE(?, ssh_host), ssh_port = COALESCE(?, ssh_port), ssh_user = COALESCE(?, ssh_user), ssh_pass_enc = COALESCE(?, ssh_pass_enc) WHERE id = ?')
+    .run(ssh.host ?? null, ssh.port ?? null, ssh.user ?? null, ssh.passEnc ?? null, id);
 }
 export function insertServer(s: {
   name: string; country: string | null; host: string; protocols: string[]; agent?: string; endpointOk?: boolean;
@@ -614,10 +702,16 @@ export function insertServer(s: {
 }
 
 /** SSH-доступ к серверу (расшифрованный) — для выпуска конфигов из панели. */
-export function getServerSsh(id: string): { host: string; port: number; user: string; passwordEnc: string | null } | null {
-  const r = db.prepare('SELECT host, ssh_host, ssh_port, ssh_user, ssh_pass_enc FROM servers WHERE id = ?').get(id) as any;
+export function getServerSsh(id: string): { host: string; port: number; user: string; passwordEnc: string | null; keyEnc: string | null } | null {
+  const r = db.prepare('SELECT host, ssh_host, ssh_port, ssh_user, ssh_pass_enc, ssh_key_enc FROM servers WHERE id = ?').get(id) as any;
   if (!r) return null;
-  return { host: r.ssh_host || r.host, port: r.ssh_port || 22, user: r.ssh_user || 'root', passwordEnc: r.ssh_pass_enc ?? null };
+  return { host: r.ssh_host || r.host, port: r.ssh_port || 22, user: r.ssh_user || 'root', passwordEnc: r.ssh_pass_enc ?? null, keyEnc: r.ssh_key_enc ?? null };
+}
+export function setServerSshKey(id: string, keyEnc: string | null): void {
+  db.prepare('UPDATE servers SET ssh_key_enc = ? WHERE id = ?').run(keyEnc, id);
+}
+export function disableServerSshPassword(id: string): void {
+  db.prepare('UPDATE servers SET ssh_pass_enc = NULL WHERE id = ?').run(id);
 }
 export function setServerDefault(id: string): Server[] {
   const tx = db.transaction(() => {
@@ -1035,7 +1129,10 @@ export function subscriptionXrayLinks(userId: string): string[] {
     if (allowedServers && allowedServers.size > 0 && !allowedServers.has(d.serverId)) continue;
     if (seen.has(d.serverId)) continue;
     seen.add(d.serverId);
-    links.push(d.link);
+    // Endpoint в ссылке подменяем на ТЕКУЩИЙ host:port сервера: смена порта/домена
+    // доезжает до подписчиков автоматически, без перевыпуска (uuid/ключи те же).
+    const srv = getServer(d.serverId);
+    links.push(srv && !srv.detached ? patchXrayLinkEndpoint(d.link, srv.host, srv.ports?.xray ?? DEFAULT_PORTS.xray) : d.link);
   }
   return links;
 }

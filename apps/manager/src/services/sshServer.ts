@@ -19,6 +19,10 @@ export const REALITY_SPX = '/';
 function creds(serverId: string) {
   const s = getServerSsh(serverId);
   if (!s) throw new Error('Сервер не найден.');
+  // SSH-ключ панели приоритетнее пароля (после hardening пароль может быть отключён).
+  if (s.keyEnc) {
+    return { host: s.host, port: s.port, username: s.user, privateKey: decryptSecret(s.keyEnc) };
+  }
   if (!s.passwordEnc) throw new Error('Для сервера не задан SSH-доступ — выпуск конфигов невозможен.');
   const secret = decryptSecret(s.passwordEnc);
   // Приватный ключ или пароль — определяем по содержимому.
@@ -154,7 +158,12 @@ for k in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do echo "$k=$(p $k)"; done`,
 // Параметры обфускации AWG фиксированы → восстановление по домену требует только приватный ключ.
 function buildInstallScript(o: {
   sni: string; realityPriv: string; shortId: string; awgPriv: string; xray: boolean; awg: boolean; awgParams: AwgParams;
+  xrayPort: number; awgPort: number;
 }): string {
+  // Порты — целые в допустимом диапазоне (защита от инъекции: идут в bash без кавычек).
+  const port = (v: number, def: number) => (Number.isInteger(v) && v >= 1 && v <= 65535 ? v : def);
+  const xrayPort = port(o.xrayPort, 443);
+  const awgPort = port(o.awgPort, 51820);
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
   // Параметры обфускации подставляются в bash БЕЗ кавычек — приводим каждый к целому
   // в разумных границах (защита от инъекции, если awgParams пришли из админ-ввода/импорта).
@@ -213,7 +222,7 @@ cfg={"log":{"loglevel":"warning"},
 print(json.dumps(cfg,indent=2))
 PY
   docker rm -f amnezia-xray >/dev/null 2>&1 || true
-  docker run -d --name amnezia-xray --restart always -p 443:443 -v /opt/amnezia/xray:/opt/amnezia/xray teddysun/xray xray run -c /opt/amnezia/xray/server.json >/dev/null
+  docker run -d --name amnezia-xray --restart always -p ${xrayPort}:443 -v /opt/amnezia/xray:/opt/amnezia/xray teddysun/xray xray run -c /opt/amnezia/xray/server.json >/dev/null
   sleep 3
   docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null || { echo "XRAY_FAIL"; exit 1; }
   echo "REALITY_PRIV=$REALITY_PRIV"; echo "REALITY_PUB=$REALITY_PUB"; echo "SHORT_ID=$SHORT_ID"; echo "SNI=$SNI"
@@ -235,7 +244,7 @@ if [ "$WANT_AWG" = "1" ]; then
 [Interface]
 PrivateKey = $AWG_PRIV
 Address = 10.8.1.1/24
-ListenPort = 51820
+ListenPort = ${awgPort}
 Jc = $JC
 Jmin = $JMIN
 Jmax = $JMAX
@@ -257,7 +266,32 @@ CONF
   ip link show awg0 >/dev/null || { echo "AWG0_FAIL"; exit 1; }
   echo "AWG_PRIV=$AWG_PRIV"; echo "AWG_PUB=$AWG_PUB"
 fi
+# Открыть выбранные публичные порты в файрволе (ufw персистентно + iptables немедленно).
+# Нестандартные порты иначе снаружи недоступны, хотя служба слушает.
+openp(){ pr="\${2:-tcp}"; if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiw active; then ufw allow "$1"/"$pr" >/dev/null 2>&1 || true; fi; iptables -C INPUT -p "$pr" --dport "$1" -j ACCEPT 2>/dev/null || iptables -I INPUT -p "$pr" --dport "$1" -j ACCEPT 2>/dev/null || true; }
+[ "$WANT_XRAY" = "1" ] && openp ${xrayPort} tcp
+[ "$WANT_AWG" = "1" ] && openp ${awgPort} udp
 echo INSTALL_DONE`;
+}
+
+/** Настроить/снять алиас старого публичного порта на новый (для совместимости со
+ *  старыми конфигами при смене порта). Redirect на входе: OLD → NEW. proto tcp|udp. */
+export async function sshSetPortAlias(server: Server, proto: 'tcp' | 'udp', oldPort: number, newPort: number, enable: boolean): Promise<void> {
+  const op = (v: number) => (Number.isInteger(v) && v >= 1 && v <= 65535 ? v : 0);
+  const o = op(oldPort);
+  const n = op(newPort);
+  if (!o || !n || o === n) return;
+  const rule = `PREROUTING -p ${proto} --dport ${o} -j REDIRECT --to-port ${n}`;
+  const script = enable
+    ? `set +e
+iptables -t nat -C ${rule} 2>/dev/null || iptables -t nat -A ${rule}
+command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiw active && ufw allow ${o}/${proto} >/dev/null 2>&1
+echo ALIAS_ON`
+    : `set +e
+iptables -t nat -D ${rule} 2>/dev/null
+command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiw active && ufw delete allow ${o}/${proto} >/dev/null 2>&1
+echo ALIAS_OFF`;
+  await runScript(creds(server.id), script, 30000);
 }
 
 // Удаляем ТОЛЬКО то, что ставили сами. Чужой Amnezia/VPN на сервере не трогаем:
@@ -284,7 +318,7 @@ echo UNINSTALL_DONE`;
 /** Установить VPN-комплект (xray/awg). Если переданы ключи — восстановление по домену. */
 export async function sshInstallServer(
   server: Server,
-  opts: { xray: boolean; awg: boolean; sni?: string; realityPriv?: string; shortId?: string; awgPriv?: string; awgParams: AwgParams },
+  opts: { xray: boolean; awg: boolean; sni?: string; realityPriv?: string; shortId?: string; awgPriv?: string; awgParams: AwgParams; xrayPort?: number; awgPort?: number },
 ): Promise<{ realityPriv?: string; realityPub?: string; shortId?: string; sni?: string; awgPriv?: string; awgPub?: string }> {
   const script = buildInstallScript({
     sni: opts.sni || REALITY_SNI,
@@ -294,6 +328,8 @@ export async function sshInstallServer(
     xray: opts.xray,
     awg: opts.awg,
     awgParams: opts.awgParams,
+    xrayPort: opts.xrayPort ?? 443,
+    awgPort: opts.awgPort ?? 51820,
   });
   const out = await runScript(creds(server.id), script, 600000);
   if (!/INSTALL_DONE/.test(out)) throw new Error('Установка не завершилась: ' + out.slice(-300));
@@ -403,7 +439,7 @@ echo PROBE_DONE`;
   return res;
 }
 
-export async function sshCreateXray(server: Server, deviceName: string, brand = 'NoVPN'): Promise<{ uuid: string; link: string; publicKey: string }> {
+export async function sshCreateXray(server: Server, deviceName: string, brand = 'NoVPN', xrayPort = 443): Promise<{ uuid: string; link: string; publicKey: string }> {
   const keys = getServerKeys(server.host);
   const pbk = keys?.xrayRealityPubKey;
   const sid = keys?.xrayShortId;
@@ -441,7 +477,7 @@ echo "UUID=$UUID"`;
   const uuid = grab(out, 'UUID');
   if (!uuid) throw new Error('Не удалось создать Xray-клиента на сервере.');
   const link =
-    `vless://${uuid}@${server.host}:443?type=tcp&security=reality&pbk=${pbk}` +
+    `vless://${uuid}@${server.host}:${xrayPort}?type=tcp&security=reality&pbk=${pbk}` +
     `&fp=${REALITY_FP}&sni=${encodeURIComponent(sni)}&sid=${sid}&spx=${encodeURIComponent(REALITY_SPX)}` +
     `&flow=xtls-rprx-vision&encryption=none#${encodeURIComponent(brand)}-${encodeURIComponent(nm)}`;
   return { uuid, link, publicKey: pbk };
@@ -488,6 +524,7 @@ fi`;
 export async function sshCreateAwg(
   server: Server,
   deviceName: string,
+  awgPort = 51820,
 ): Promise<{ conf: string; publicKey: string; privateKey: string; presharedKey: string; clientIp: string }> {
   const keys = getServerKeys(server.host);
   const srvPub = keys?.awgServerPubKey;
@@ -540,7 +577,7 @@ H4 = ${obf.H4}
 [Peer]
 PublicKey = ${srvPub}
 PresharedKey = ${psk}
-Endpoint = ${server.host}:51820
+Endpoint = ${server.host}:${awgPort}
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25`;
   return { conf, publicKey: cpub, privateKey: cpriv, presharedKey: psk, clientIp: cip };
