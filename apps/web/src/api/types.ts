@@ -222,7 +222,7 @@ export interface StatsPoint {
 export interface EndpointProfileView {
   exists: boolean;
   ports: { xray: number; awg: number; http: number; socks: number; https: number };
-  legacyPorts: Array<{ proto: 'xray' | 'awg' | 'http' | 'socks' | 'https'; port: number; since: string }>;
+  legacyPorts: Array<{ proto: 'xray' | 'awg' | 'http' | 'socks' | 'https'; port: number; target: number; since: string }>;
   hasXrayKeys: boolean;
   hasAwgKeys: boolean;
   updatedAt: string | null;

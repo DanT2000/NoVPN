@@ -874,15 +874,18 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     // конфиги живут). Новый endpoint → auto-pick: Xray предпочитает 443 (если свободен),
     // AmneziaWG — случайный НЕ-дефолтный UDP (Amnezia рекомендует нестандартный).
     // Явные значения из формы (portXray/portAwg) имеют приоритет.
-    const savedPorts = repo.getEndpointProfile(s.host);
+    // Восстановление (реальные ключи по домену) → сохранённые порты (старые конфиги
+    // живут). Свежий endpoint → auto-pick. Гейт по `restoring` (реальные ключи), а НЕ
+    // по факту строки server_keys — она могла появиться от upsert настроек без ключей. #7.
+    const savedPorts = repo.getEndpointPorts(s.host);
     const reqPortXray = Number(req_portXray);
     const reqPortAwg = Number(req_portAwg);
-    let portXray = savedPorts.exists ? savedPorts.ports.xray : 443;
-    let portAwg = savedPorts.exists ? savedPorts.ports.awg : 51820;
+    let portXray = restoring ? savedPorts.xray : 443;
+    let portAwg = restoring ? savedPorts.awg : 51820;
     if (Number.isInteger(reqPortXray) && reqPortXray >= 1 && reqPortXray <= 65535) portXray = reqPortXray;
-    else if (!savedPorts.exists && want.xray) portXray = await sshPickPort(s, 'tcp', 443).catch(() => 443);
+    else if (!restoring && want.xray) portXray = await sshPickPort(s, 'tcp', 443).catch(() => 443);
     if (Number.isInteger(reqPortAwg) && reqPortAwg >= 1 && reqPortAwg <= 65535) portAwg = reqPortAwg;
-    else if (!savedPorts.exists && want.awg) portAwg = await sshPickPort(s, 'udp', undefined, [portXray]).catch(() => 51820);
+    else if (!restoring && want.awg) portAwg = await sshPickPort(s, 'udp', undefined, [portXray]).catch(() => 51820);
 
     const installed = want.xray || want.awg
       ? await sshInstallServer(s, {
@@ -1072,14 +1075,27 @@ router.post('/api/admin/servers/:id/change-port', requireAdmin, async (req, res)
   if (comp !== 'xray' && comp !== 'awg') return res.status(400).json(err('validation', 'component: xray|awg.'));
   if (!Number.isInteger(newPort) || newPort < 1 || newPort > 65535) return res.status(400).json(err('validation', 'Некорректный порт.'));
   const proto = comp === 'xray' ? 'tcp' : 'udp';
+  const protoKey = comp === 'xray' ? 'xray' : 'awg';
   const oldPort = comp === 'xray' ? s.ports!.xray : s.ports!.awg;
+  const otherPort = comp === 'xray' ? s.ports!.awg : s.ports!.xray;
   if (oldPort === newPort) return res.json({ ok: true, unchanged: true });
+  // Не даём конфликтующий порт (SSH/ACME/встречный компонент). #11
+  if ([22, 80, otherPort].includes(newPort)) return res.status(400).json(err('validation', `Порт ${newPort} занят (SSH/80/другой компонент). Выберите другой.`));
   try {
     // Переустанавливаем службу на новом порту (ключи/uuid сохраняются — из профиля).
     await runProvision(s.id, s.protocols as string[], comp === 'xray' ? { xray: newPort } : { awg: newPort });
+    // REDIRECT в iptables НЕ цепочечный, поэтому все существующие legacy-порты
+    // пере-указываем на НОВЫЙ primary (снимаем старое правило по сохранённому target,
+    // ставим port→newPort), иначе самые старые конфиги отвалились бы. #3/#5
+    for (const l of repo.getLegacyPorts(s.host).filter((x) => x.proto === protoKey)) {
+      await sshSetPortAlias(s, proto, l.port, l.target, false);
+      await sshSetPortAlias(s, proto, l.port, newPort, true);
+    }
+    repo.retargetLegacyPorts(s.host, protoKey, newPort);
+    // Только что заменённый primary oldPort сам становится legacy → newPort.
     if (keepLegacy) {
       await sshSetPortAlias(s, proto, oldPort, newPort, true);
-      repo.addLegacyPort(s.host, comp === 'xray' ? 'xray' : 'awg', oldPort);
+      repo.addLegacyPort(s.host, protoKey, oldPort, newPort);
     }
     repo.addLog(`Сервер «${s.name}»: порт ${comp} ${oldPort} → ${newPort}${keepLegacy ? ` (старый ${oldPort} оставлен для совместимости)` : ''}`);
     res.json({ ok: true, oldPort, newPort, legacyKept: keepLegacy });
@@ -1097,8 +1113,8 @@ router.post('/api/admin/servers/:id/harden-ssh', requireAdmin, async (req, res) 
   if (!privateKey || !/PRIVATE KEY/.test(privateKey)) return res.status(400).json(err('validation', 'Вставьте приватный SSH-ключ (OpenSSH/PEM).'));
   try {
     const r = await sshHardenToKey(s, privateKey);
-    repo.addLog(`Сервер «${s.name}»: включён вход по SSH-ключу, парольная аутентификация отключена`);
-    res.json({ ok: true, publicKey: r.publicKey });
+    repo.addLog(`Сервер «${s.name}»: включён вход по SSH-ключу${r.passwordDisabled ? ', парольная аутентификация отключена' : ' (пароль отключить не удалось подтвердить — проверьте sshd_config)'}`);
+    res.json({ ok: true, publicKey: r.publicKey, passwordDisabled: r.passwordDisabled });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось перевести на ключ.'));
   }
@@ -1111,10 +1127,13 @@ router.post('/api/admin/servers/:id/disable-legacy', requireAdmin, async (req, r
   const proto0 = String(req.body?.proto ?? ''); // 'xray' | 'awg'
   const port = Number(req.body?.port);
   const proto = proto0 === 'awg' ? 'udp' : 'tcp';
-  const cur = proto0 === 'awg' ? s.ports!.awg : s.ports!.xray;
   if (!Number.isInteger(port)) return res.status(400).json(err('validation', 'Некорректный порт.'));
+  // Снимаем правило по СОХРАНЁННОМУ target алиаса (а не по текущему primary — они
+  // совпадают после retarget, но так надёжнее). #3
+  const legacy = repo.getLegacyPorts(s.host).find((l) => l.proto === (proto0 === 'awg' ? 'awg' : 'xray') && l.port === port);
+  const target = legacy?.target ?? (proto0 === 'awg' ? s.ports!.awg : s.ports!.xray);
   try {
-    await sshSetPortAlias(s, proto, port, cur || port, false);
+    await sshSetPortAlias(s, proto, port, target, false);
     repo.removeLegacyPort(s.host, (proto0 === 'awg' ? 'awg' : 'xray'), port);
     repo.addLog(`Сервер «${s.name}»: отключён legacy-порт ${proto0}:${port}`);
     res.json({ ok: true });

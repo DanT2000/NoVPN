@@ -279,7 +279,7 @@ echo INSTALL_DONE`;
  *  1) ставим публичный ключ в authorized_keys ПАРОЛЕМ; 2) делаем НОВЫЙ тест-вход этим
  *  ключом; 3) только при успехе сохраняем ключ в БД и отключаем PasswordAuthentication.
  *  Пароль в БД остаётся до подтверждённого серверного отключения — не запираем себя. */
-export async function sshHardenToKey(server: Server, privateKey: string): Promise<{ publicKey: string }> {
+export async function sshHardenToKey(server: Server, privateKey: string): Promise<{ publicKey: string; passwordDisabled: boolean }> {
   const s = getServerSsh(server.id);
   if (!s) throw new Error('Сервер не найден.');
   if (!s.passwordEnc) throw new Error('Для перевода на ключ нужен текущий доступ по паролю.');
@@ -302,21 +302,30 @@ echo KEY_ADDED`, 30000);
   if (!/KEY_LOGIN_OK/.test(t)) throw new Error('Тестовый вход по ключу не удался — пароль НЕ отключён, ничего не менял.');
   // 3) ключ подтверждён → сохраняем в БД (панель теперь ходит ключом)
   setServerSshKey(server.id, encryptSecret(privateKey));
-  // 4) отключаем пароль на сервере (ключом) и в БД
-  await runScript(keyCreds, `set +e
+  // 4) отключаем пароль: пишем ПРИОРИТЕТНЫЙ drop-in (00-*, читается раньше при Include)
+  //    + правим основной конфиг, reload, и ПРОВЕРЯЕМ эффективное значение через sshd -T.
+  //    Пароль в БД чистим ТОЛЬКО если реально отключён (иначе ложное чувство защиты). #4
+  const out = await runScript(keyCreds, `set +e
+mkdir -p /etc/ssh/sshd_config.d
+printf 'PasswordAuthentication no\\nKbdInteractiveAuthentication no\\n' > /etc/ssh/sshd_config.d/00-novpn-harden.conf
 sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
-systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || true
+(systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || true)
+sleep 1
+echo "EFFECTIVE=$(sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}')"
 echo HARDENED`, 30000);
-  disableServerSshPassword(server.id);
-  return { publicKey: pubLine };
+  const effOff = /EFFECTIVE=no/.test(out);
+  if (effOff) disableServerSshPassword(server.id);
+  return { publicKey: pubLine, passwordDisabled: effOff };
 }
 
 /** Подобрать СВОБОДНЫЙ публичный порт на сервере (через ss по SSH). prefer — желаемый
  *  (напр. 443 для Xray, если свободен). Иначе случайный высокий, независимо от других
  *  компонентов (не последовательный). Избегаем занятых и явно исключённых портов. */
 export async function sshPickPort(server: Server, proto: 'tcp' | 'udp', prefer?: number, exclude: number[] = []): Promise<number> {
-  const bad = new Set([22, 80, 443, ...exclude].filter(Boolean));
+  // 22/80 избегаем всегда (SSH + ACME/веб). 443 НЕ исключаем — Xray его законно
+  // предпочитает (prefer=443), а занятость всё равно проверит ss ниже. #12.
+  const bad = new Set([22, 80, ...exclude].filter(Boolean));
   const cand: number[] = [];
   if (prefer && !bad.has(prefer)) cand.push(prefer);
   for (let i = 0; i < 16 && cand.length < 16; i++) {
@@ -467,7 +476,10 @@ PY`,
 
 export async function sshHasSshAccess(serverId: string): Promise<boolean> {
   const s = getServerSsh(serverId);
-  return !!s?.passwordEnc;
+  // Доступ есть, если задан ПАРОЛЬ ИЛИ КЛЮЧ. Раньше смотрели только на пароль —
+  // после key-only hardening (пароль обнулён, ключ есть) сервер ошибочно считался
+  // недоступным, и ломались выпуск/отзыв/sync (creds() при этом ходит ключом). #1/#2.
+  return !!(s && (s.passwordEnc || s.keyEnc));
 }
 
 /** Реальный аудит сервера ДО добавления (креды из формы, сервера в БД ещё нет). */

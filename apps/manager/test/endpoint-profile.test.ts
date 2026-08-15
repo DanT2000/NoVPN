@@ -55,11 +55,14 @@ test('подписка отдаёт ссылку с ТЕКУЩИМ портом 
 test('legacy-порты: добавление/чтение/удаление', () => {
   const host = `d${seq}.example.com`;
   server(host);
-  repo.addLegacyPort(host, 'xray', 443);
-  repo.addLegacyPort(host, 'awg', 51820);
+  repo.addLegacyPort(host, 'xray', 443, 8443);
+  repo.addLegacyPort(host, 'awg', 51820, 39221);
   let ls = repo.getLegacyPorts(host);
   assert.equal(ls.length, 2);
-  assert.ok(ls.find((l) => l.proto === 'xray' && l.port === 443));
+  assert.ok(ls.find((l) => l.proto === 'xray' && l.port === 443 && l.target === 8443));
+  // retarget: все алиасы xray → новый порт
+  repo.retargetLegacyPorts(host, 'xray', 9443);
+  assert.equal(repo.getLegacyPorts(host).find((l) => l.proto === 'xray')!.target, 9443);
   const removed = repo.removeLegacyPort(host, 'xray', 443);
   assert.ok(removed && removed.port === 443);
   ls = repo.getLegacyPorts(host);

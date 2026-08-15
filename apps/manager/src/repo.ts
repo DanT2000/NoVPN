@@ -631,10 +631,10 @@ export function getLegacyPorts(host: string): LegacyPort[] {
     return [];
   }
 }
-export function addLegacyPort(host: string, proto: LegacyPort['proto'], port: number): void {
+export function addLegacyPort(host: string, proto: LegacyPort['proto'], port: number, target: number): void {
   db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
   const list = getLegacyPorts(host).filter((l) => !(l.proto === proto && l.port === port));
-  list.push({ proto, port, since: nowIso() });
+  list.push({ proto, port, target, since: nowIso() });
   db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list), host);
 }
 export function removeLegacyPort(host: string, proto: LegacyPort['proto'], port: number): LegacyPort | null {
@@ -642,6 +642,11 @@ export function removeLegacyPort(host: string, proto: LegacyPort['proto'], port:
   const found = list.find((l) => l.proto === proto && l.port === port) ?? null;
   db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list.filter((l) => l !== found)), host);
   return found;
+}
+/** Пере-указать цель всех legacy-алиасов данного протокола на новый порт (в БД). */
+export function retargetLegacyPorts(host: string, proto: LegacyPort['proto'], newTarget: number): void {
+  const list = getLegacyPorts(host).map((l) => (l.proto === proto ? { ...l, target: newTarget } : l));
+  db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list), host);
 }
 /** Профиль endpoint'а для мастера: есть ли сохранённые ключи/порты по этому домену. */
 export function getEndpointProfile(host: string): { exists: boolean; ports: ServerPorts; legacyPorts: LegacyPort[]; hasXrayKeys: boolean; hasAwgKeys: boolean; updatedAt: string | null } {
@@ -683,7 +688,8 @@ export function getEndpointConfig(host: string): EndpointConfig {
   };
   return {
     xrayWhitelist: r?.xray_whitelist == null ? g.xrayWhitelist !== false : r.xray_whitelist === 1,
-    whitelistDomains: r?.whitelist_domains != null ? jsonArr(r.whitelist_domains) : g.whitelistDomains,
+    // Битый JSON → наследуем ГЛОБАЛЬНЫЙ список (а не молча RU-дефолт билдера). #14
+    whitelistDomains: r?.whitelist_domains != null ? (jsonArr(r.whitelist_domains) ?? g.whitelistDomains) : g.whitelistDomains,
     lanAccess: r?.lan_access == null ? g.lanAccess === true : r.lan_access === 1,
     fallbackTypes: (jsonArr(r?.fallback_types) as FallbackType[] | undefined) ?? null,
   };
@@ -1146,7 +1152,14 @@ function earliestDataIso(): string | null {
 export function listDevicesOfUser(userId: string): Device[] {
   return (db.prepare('SELECT * FROM devices WHERE user_id = ? ORDER BY created_at DESC').all(userId) as any[])
     .map(rowToDevice)
-    .map((d) => (d.protocol === 'amneziawg' && d.conf ? { ...d, vpnKey: vpnLinkFromConf(d.conf, d.name) } : d));
+    .map((d) => {
+      if (d.protocol !== 'amneziawg' || !d.conf) return d;
+      // Endpoint (host:port) в AWG .conf подменяем на ТЕКУЩИЙ порт сервера — смена
+      // порта доезжает до клиента без перевыпуска (симметрично Xray-ссылке). #6/#8.
+      const srv = getServer(d.serverId);
+      const conf = srv && !srv.detached ? patchAwgConfEndpoint(d.conf, srv.host, srv.ports?.awg ?? DEFAULT_PORTS.awg) : d.conf;
+      return { ...d, conf, vpnKey: vpnLinkFromConf(conf, d.name) };
+    });
 }
 
 /** Ссылки для Xray-подписки: ОДИН активный конфиг на каждый сервер. У части

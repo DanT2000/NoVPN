@@ -473,7 +473,7 @@ export const mockApi: ApiClient = {
     if (s) {
       s.ports = s.ports ?? { xray: 443, awg: 51820, http: 8080, socks: 1080, https: 8443 };
       const old = component === 'xray' ? s.ports.xray : s.ports.awg;
-      if (keepLegacy && old !== port) { s.legacyPorts = [...(s.legacyPorts ?? []), { proto: component, port: old, since: new Date().toISOString() }]; }
+      if (keepLegacy && old !== port) { s.legacyPorts = [...(s.legacyPorts ?? []), { proto: component, port: old, target: port, since: new Date().toISOString() }]; }
       if (component === 'xray') s.ports.xray = port; else s.ports.awg = port;
       return { ok: true, oldPort: old, newPort: port, legacyKept: keepLegacy };
     }

@@ -29,6 +29,9 @@ export interface ServerPorts {
 export interface LegacyPort {
   proto: keyof ServerPorts;
   port: number;
+  /** На какой актуальный порт редиректит iptables-алиас (для корректного снятия и
+   *  пере-указания при повторной смене порта — REDIRECT не цепочечный). */
+  target: number;
   since: string;
 }
 
