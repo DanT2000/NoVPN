@@ -135,13 +135,17 @@ function buildUserXrayFull(
   const cfg = srv
     ? repo.getEndpointConfig(srv.host)
     : { xrayWhitelist: repo.getSettings().xrayWhitelist !== false, whitelistDomains: repo.getSettings().whitelistDomains, lanAccess: repo.getSettings().lanAccess === true, fallbackTypes: null as null };
-  // Аварийный фоллбэк: прокси В ПОРЯДКЕ HTTPS→HTTP→SOCKS, отфильтрованные по разрешённым
-  // для этого сервера типам (fallbackTypes). Если Xray заблокируют — конфиг переключится.
+  // Аварийный фоллбэк — ПЕР-СЕРВЕР: берём ТОЛЬКО прокси ЭТОГО сервера (srv.id), а не все
+  // прокси пользователя. Иначе на конфиг одного сервера (напр. домашний полный туннель,
+  // где своих прокси нет) навешивались бы прокси ДРУГОГО сервера + observatory/балансиры,
+  // и на холодном старте/сбое пробы весь трафик уходил в block («сайты не грузятся»).
+  // Нет своих прокси → простой xray-конфиг без «умных» надстроек — ровно как просил владелец.
   const typeOrder: Record<string, number> = { https: 0, http: 1, socks5: 2 };
   const allowFb = (t: 'https' | 'http' | 'socks5') => !cfg.fallbackTypes || cfg.fallbackTypes.includes(t === 'socks5' ? 'socks' : t);
   const proxies: ProxyFallback[] = [];
   if (!overQuota) {
     for (const row of repo.listProxyAccountRowsOfUser(u.id)) {
+      if (srv && row.server_id !== srv.id) continue; // аварийка только со СВОЕГО сервера
       const view = repo.buildProxyAccountView(row);
       if (!view) continue;
       for (const e of [...view.endpoints].sort((a, b) => (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9))) {
