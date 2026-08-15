@@ -14,7 +14,7 @@ import { buildWhitelistXrayConfig } from '@novpn/shared';
 import type { ProxyFallback } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshHardenToKey, REALITY_SNI } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -126,7 +126,8 @@ router.get('/sub/:token/full', (req, res) => {
   // напр. «🇫🇮 Finland | Обход белых списков». country хранится как «🇫🇮 Финляндия».
   const primaryDev = repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link);
   const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
-  const flag = (primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '';
+  // Свой значок сервера (эмодзи) приоритетнее флага страны; иначе флаг из country.
+  const flag = (primarySrv?.flagEmoji || '').trim() || ((primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '');
   const title = primarySrv ? [flag, primarySrv.name].filter(Boolean).join(' ') : '';
   // Настройки генерации — ПЕР-СЕРВЕР (по основному серверу), с фолбэком на глобальные:
   // обход-домены, LAN-доступ и набор запасных прокси у каждого сервера могут быть свои.
@@ -787,6 +788,7 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
     sshPassEnc: b.secret ? encryptSecret(String(b.secret)) : null,
     enrollSecretEnc: encryptSecret(enrollToken),
   });
+  if (b.flagEmoji) repo.updateServerFields(s.id, { flag_emoji: String(b.flagEmoji).slice(0, 16) });
   if (hasKeys) {
     // Принимаем и ПРИВАТНЫЕ ключи + параметры обфускации — это регистрация уже
     // установленного сервера (или восстановление панели): с ними ранее выданные
@@ -812,6 +814,7 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   const fields: Record<string, unknown> = {};
   if (b.name !== undefined) fields.name = String(b.name);
   if (b.country !== undefined) fields.country = b.country || null;
+  if (b.flagEmoji !== undefined) fields.flag_emoji = b.flagEmoji ? String(b.flagEmoji).slice(0, 16) : null;
   const vpnHost = b.vpnHost ?? b.host;
   if (vpnHost !== undefined && String(vpnHost).trim()) fields.host = String(vpnHost).trim();
   if (b.sshHost !== undefined) fields.ssh_host = b.sshHost;
@@ -886,6 +889,15 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     else if (!restoring && want.xray) portXray = await sshPickPort(s, 'tcp', 443).catch(() => 443);
     if (Number.isInteger(reqPortAwg) && reqPortAwg >= 1 && reqPortAwg <= 65535) portAwg = reqPortAwg;
     else if (!restoring && want.awg) portAwg = await sshPickPort(s, 'udp', undefined, [portXray]).catch(() => 51820);
+    // Подсказка «порт занят»: если админ задал порт ВРУЧНУЮ и он отличается от нашего
+    // текущего — проверяем, что он свободен на сервере, иначе понятная ошибка (не молча
+    // валимся при install). Свой текущий порт при переустановке «занят» нами — не проверяем.
+    if (Number.isInteger(reqPortXray) && want.xray && !(restoring && portXray === savedPorts.xray) && !(await sshIsPortFree(s, 'tcp', portXray))) {
+      throw new Error(`Порт Xray ${portXray} уже занят на сервере — выберите другой.`);
+    }
+    if (Number.isInteger(reqPortAwg) && want.awg && !(restoring && portAwg === savedPorts.awg) && !(await sshIsPortFree(s, 'udp', portAwg))) {
+      throw new Error(`Порт AmneziaWG ${portAwg} уже занят на сервере — выберите другой.`);
+    }
 
     const installed = want.xray || want.awg
       ? await sshInstallServer(s, {

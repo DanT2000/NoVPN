@@ -48,6 +48,9 @@ export interface Server {
   detached?: boolean;
   /** SSH-вход по ключу настроен (пароль отключён после hardening). */
   sshKeyAuth?: boolean;
+  /** Свой значок сервера (эмодзи, напр. 🏠). Если задан — показывается в подписке
+   *  вместо флага страны. Пусто = флаг из country. */
+  flagEmoji?: string | null;
   /** Агент подключён к панели. */
   agent: AgentConnectivity;
   /** Публичный VPN-endpoint доступен снаружи. */

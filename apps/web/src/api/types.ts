@@ -69,6 +69,7 @@ export interface AddServerInput {
   vpnHost?: string;
   components: Array<'xray' | 'amneziawg' | 'http' | 'https' | 'socks5'>;
   country?: string | null;
+  flagEmoji?: string | null;
 }
 
 export interface ServerProxyConfig {
@@ -83,6 +84,7 @@ export interface ServerProxyConfig {
 export interface EditServerInput {
   name?: string;
   country?: string | null;
+  flagEmoji?: string | null;
   vpnHost?: string;
   sshHost?: string;
   sshPort?: number;

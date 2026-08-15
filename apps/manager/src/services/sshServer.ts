@@ -339,6 +339,14 @@ export async function sshPickPort(server: Server, proto: 'tcp' | 'udp', prefer?:
   return prefer && !bad.has(prefer) ? prefer : cand[cand.length - 1]!;
 }
 
+/** Свободен ли порт на сервере (через ss по SSH). Для подсказки «порт занят». */
+export async function sshIsPortFree(server: Server, proto: 'tcp' | 'udp', port: number): Promise<boolean> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
+  const flag = proto === 'udp' ? '-uln' : '-tln';
+  const out = await runScript(creds(server.id), `ss ${flag} 2>/dev/null | grep -qE "[:.]${port} " && echo BUSY || echo FREE`, 15000).catch(() => 'FREE');
+  return /FREE/.test(out) && !/BUSY/.test(out);
+}
+
 /** Настроить/снять алиас старого публичного порта на новый (для совместимости со
  *  старыми конфигами при смене порта). Redirect на входе: OLD → NEW. proto tcp|udp. */
 export async function sshSetPortAlias(server: Server, proto: 'tcp' | 'udp', oldPort: number, newPort: number, enable: boolean): Promise<void> {

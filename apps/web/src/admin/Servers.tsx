@@ -315,6 +315,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
   }
   const [name, setName] = useState(server.name);
   const [country, setCountry] = useState(server.country ?? '');
+  const [flagEmoji, setFlagEmoji] = useState(server.flagEmoji ?? '');
   const [vpnHost, setVpnHost] = useState(server.host);
   const [sshPort, setSshPort] = useState('22');
   const [sshUser, setSshUser] = useState('root');
@@ -339,6 +340,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
       await editServer(server.id, {
         name: name.trim() || server.name,
         country: country.trim() || null,
+        flagEmoji: flagEmoji || null,
         vpnHost: vpnHost.trim() || server.host,
         sshPort: parseInt(sshPort, 10) || 22,
         sshUser: sshUser.trim() || 'root',
@@ -372,6 +374,13 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
               <option value={country}>{country}</option>
             ) : null}
           </select>
+        </Field>
+        <Field label="Значок в подписке" hint="Свой значок вместо флага страны (напр. 🏠). Пусто = флаг.">
+          <div className="chip-row">
+            {['', '🏠', '⭐', '🚀', '🔒', '🌐', '⚡', '🛡️'].map((e) => (
+              <Chip key={e || 'none'} label={e || 'флаг'} size="sm" active={flagEmoji === e} onClick={() => setFlagEmoji(e)} />
+            ))}
+          </div>
         </Field>
         <Field label="Домен или IP (VPN-endpoint)"><input className="input mono" value={vpnHost} onChange={(e) => setVpnHost(e.target.value)} /></Field>
         <Field label="SSH-порт"><input className="input" inputMode="numeric" value={sshPort} onChange={(e) => setSshPort(e.target.value.replace(/\D/g, ''))} /></Field>
@@ -582,7 +591,7 @@ export function Servers() {
                 <div className="row-between" style={{ gap: 12, alignItems: 'center' }}>
                   <div className="row" style={{ gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
                     <Dot color={dotColor} />
-                    <span style={{ fontWeight: 700, fontSize: 15 }}>{title}</span>
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>{s.flagEmoji ? `${s.flagEmoji} ` : ''}{title}</span>
                     {s.isDefault ? <span className="badge">по умолчанию</span> : null}
                     {s.detached ? <span className="badge" style={{ background: 'var(--surface-btn-2, #333)', color: 'var(--text-muted-2)' }} title="Физический сервер отвязан. Endpoint (домен/порты/ключи/конфиги) сохранён — подключите новый сервер на тот же домен.">endpoint сохранён</span> : null}
                   </div>

@@ -80,6 +80,7 @@ export function rowToServer(r: any): Server {
     agentVersion: r.agent_version ?? null,
     detached: b(r.detached),
     sshKeyAuth: !!r.ssh_key_enc,
+    flagEmoji: r.flag_emoji ?? null,
   };
 }
 

@@ -359,7 +359,7 @@ export const mockApi: ApiClient = {
   async addServer(input: AddServerInput): Promise<Server> {
     await wait(400);
     const s: Server = {
-      id: nextId('s'), name: input.name, country: input.country ?? null, host: input.vpnHost || input.host,
+      id: nextId('s'), name: input.name, country: input.country ?? null, flagEmoji: input.flagEmoji ?? null, host: input.vpnHost || input.host,
       agent: 'online', endpointOk: true,
       protocols: input.components.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
       trafficGb: 0, users: 0, isDefault: false, autoIssue: true, lastSyncAt: nowIso(), recommended: false,
@@ -375,6 +375,7 @@ export const mockApi: ApiClient = {
     const s = state.servers.find((x) => x.id === id)!;
     if (input.name !== undefined) s.name = input.name;
     if (input.country !== undefined) s.country = input.country ?? null;
+    if (input.flagEmoji !== undefined) s.flagEmoji = input.flagEmoji ?? null;
     if (input.vpnHost) s.host = input.vpnHost;
     if (input.components)
       s.protocols = input.components.filter(

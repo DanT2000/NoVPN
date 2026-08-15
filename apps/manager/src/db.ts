@@ -323,6 +323,10 @@ for (const stmt of [
   'ALTER TABLE server_keys ADD COLUMN whitelist_domains TEXT',       // свой список обхода (JSON), NULL=глоб/дефолт
   'ALTER TABLE server_keys ADD COLUMN lan_access INTEGER',           // доступ в локалку для этого сервера
   "ALTER TABLE server_keys ADD COLUMN fallback_types TEXT",         // какие прокси-фоллбэки использовать (JSON ['https','http','socks'])
+  // Свой значок сервера (эмодзи): если задан — показывается в подписке вместо флага
+  // страны. Общая настройка (не исключение): для self-host можно поставить 🏠, для
+  // любого сервера — любой эмодзи. Пусто = флаг страны.
+  'ALTER TABLE servers ADD COLUMN flag_emoji TEXT',
 ]) {
   try {
     db.exec(stmt);

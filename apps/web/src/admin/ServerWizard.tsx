@@ -67,6 +67,7 @@ export function ServerWizard() {
   // Шаг 1 — данные
   const [name, setName] = useState('');
   const [country, setCountry] = useState('');
+  const [flagEmoji, setFlagEmoji] = useState('');
   const [host, setHost] = useState('');
   const [sshPort, setSshPort] = useState('22');
   const [sshUser, setSshUser] = useState('root');
@@ -116,6 +117,7 @@ export function ServerWizard() {
     vpnHost: host.trim(), // домен/IP один раз — он же и публичный VPN-endpoint
     components: components(),
     country: country || null,
+    flagEmoji: flagEmoji || null,
   });
 
   // При переходе к выбору компонентов — ищем сохранённый endpoint по домену:
@@ -239,6 +241,13 @@ export function ServerWizard() {
                 </option>
               ))}
             </select>
+          </Field>
+          <Field label="Значок в подписке" hint="Свой значок вместо флага страны (напр. 🏠 для домашнего сервера). Пусто = флаг страны.">
+            <div className="chip-row">
+              {['', '🏠', '⭐', '🚀', '🔒', '🌐', '⚡', '🛡️'].map((e) => (
+                <Chip key={e || 'none'} label={e || 'флаг'} size="sm" active={flagEmoji === e} onClick={() => setFlagEmoji(e)} />
+              ))}
+            </div>
           </Field>
           <Field label="Домен или IP">
             <input
