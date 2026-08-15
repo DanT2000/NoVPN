@@ -96,11 +96,11 @@ export function importLegacy(oldDbPath: string): ImportResult {
         db.prepare(
           `UPDATE users SET name=@name, comment=@comment, code=@code, device_limit=@dl, expires_at=@exp,
              is_active=@active, deleted_at=@deleted, legacy_id=@legacy, allowed_servers=@servers,
-             default_server_id=@defsrv, allowed_protocols=@protos, updated_at=@now WHERE id=@id`,
+             allowed_protocols=@protos, updated_at=@now WHERE id=@id`,
         ).run({
           id: existing.id, name: u.name, comment: u.comment ?? '', code: u.code, dl: u.device_limit ?? null,
           exp: u.expires_at ?? null, active: u.is_active ?? 1, deleted: u.deleted_at ?? null, legacy: u.id,
-          servers: JSON.stringify([serverId]), defsrv: serverId, protos: JSON.stringify(allowedProtocols), now: nowIso(),
+          servers: JSON.stringify([serverId]), protos: JSON.stringify(allowedProtocols), now: nowIso(),
         });
         legacyToNewUser.set(u.id, existing.id);
         result.usersUpdated++;
@@ -108,13 +108,13 @@ export function importLegacy(oldDbPath: string): ImportResult {
         const id = newId('u');
         db.prepare(
           `INSERT INTO users(id,name,comment,category,tags,code,device_limit,expires_at,traffic_limit_gb,traffic_used_gb,
-             reset_policy,allowed_servers,default_server_id,allowed_protocols,is_active,telegram,created_at,updated_at,
+             reset_policy,allowed_servers,allowed_protocols,is_active,telegram,created_at,updated_at,
              last_activity_at,deleted_at,legacy_id)
-           VALUES(@id,@name,@comment,'Импорт','[]',@code,@dl,@exp,NULL,0,'never',@servers,@defsrv,@protos,@active,NULL,
+           VALUES(@id,@name,@comment,'Импорт','[]',@code,@dl,@exp,NULL,0,'never',@servers,@protos,@active,NULL,
              @created,@now,NULL,@deleted,@legacy)`,
         ).run({
           id, name: u.name, comment: u.comment ?? '', code: u.code, dl: u.device_limit ?? null, exp: u.expires_at ?? null,
-          servers: JSON.stringify([serverId]), defsrv: serverId, protos: JSON.stringify(allowedProtocols),
+          servers: JSON.stringify([serverId]), protos: JSON.stringify(allowedProtocols),
           active: u.is_active ?? 1, created: u.created_at ?? nowIso(), now: nowIso(), deleted: u.deleted_at ?? null, legacy: u.id,
         });
         legacyToNewUser.set(u.id, id);

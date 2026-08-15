@@ -65,9 +65,16 @@ function runScript(
       clearTimeout(timer);
       reject(e);
     });
-    conn.connect({ host: c.host, port: c.port, username: c.username, password: c.password, privateKey: c.privateKey, readyTimeout: 15000 });
+    conn.connect({
+      host: c.host, port: c.port, username: c.username, password: c.password, privateKey: c.privateKey,
+      // Медленный сервер за NAT + Nginx Proxy Manager (напр. домашний, SSH через доп. TCP-хоп)
+      // не успевал KEX+auth за 15с → «Timed out while waiting for handshake». Даём 30с и
+      // keepalive: держит exec-стрим живым и быстро детектит мёртвый TCP через прокси.
+      readyTimeout: 30000, keepaliveInterval: 10000, keepaliveCountMax: 3,
+    });
   });
 }
+
 
 const san = (n: string) => (n.replace(/[^\w .-]/g, '').trim().slice(0, 40) || 'device');
 const grab = (out: string, k: string) => out.match(new RegExp('^' + k + '=(.+)$', 'm'))?.[1]?.trim();
@@ -795,7 +802,7 @@ echo "HTTPS_PORT=${wantHttps ? '$HTTPS_PORT' : ''}"`;
 export async function sshSyncAwg(
   serverId: string,
 ): Promise<Array<{ publicKey: string; handshake: number; rx: number; tx: number }>> {
-  const out = await runScript(creds(serverId), `awg show awg0 dump | awk 'NR>1{print $1" "$5" "$6" "$7}'`);
+  const out = await runScript(creds(serverId), `awg show awg0 dump | awk 'NR>1{print $1" "$5" "$6" "$7}'`, 45000);
   const peers: Array<{ publicKey: string; handshake: number; rx: number; tx: number }> = [];
   for (const line of out.split('\n')) {
     const p = line.trim().split(/\s+/);
@@ -824,7 +831,9 @@ python3 -c "import json,sys;c=json.load(open('/opt/amnezia/xray/server.json'));j
 echo
 echo '---STATS---'
 docker exec amnezia-xray xray api statsquery --server=127.0.0.1:10085 --reset 2>/dev/null || true`;
-  const out = await runScript(creds(serverId), script, 30000);
+  // ВАЖНО: statsquery --reset ДЕСТРУКТИВНО (обнуляет серверные счётчики) — НЕ ретраим,
+  // иначе транзиентный обрыв после reset потерял бы дельту трафика (недоучёт квоты).
+  const out = await runScript(creds(serverId), script, 45000);
   const mapPart = out.split('---MAP---')[1]?.split('---STATS---')[0] ?? '';
   const statPart = out.split('---STATS---')[1] ?? '';
   const emailToUuid = new Map<string, string>();
@@ -864,7 +873,7 @@ export async function sshReadProxyTraffic(serverId: string): Promise<Array<{ log
   // Чистим логи старше 14 дней (3proxy с суточной ротацией без счётчика копит
   // файлы), затем берём самый свежий файл (= сегодняшний) и суммируем %I+%O.
   const cmd = `find /var/log/3proxy -name '3p.log.*' -mtime +14 -delete 2>/dev/null; f=$(ls -t /var/log/3proxy/3p.log.* 2>/dev/null | head -1); [ -n "$f" ] && awk '$2!="-"{t[$2]+=$3+$4} END{for(u in t)print u" "t[u]}' "$f" || true`;
-  const out = await runScript(creds(serverId), cmd, 30000);
+  const out = await runScript(creds(serverId), cmd, 45000);
   const res: Array<{ login: string; bytes: number }> = [];
   for (const line of out.split('\n')) {
     const p = line.trim().split(/\s+/);
@@ -876,7 +885,7 @@ export async function sshReadProxyTraffic(serverId: string): Promise<Array<{ log
 /** Лёгкая проверка живости сервера по SSH (для серверов без AWG-статистики).
  *  Бросает, если сервер не ответил. */
 export async function sshPing(serverId: string): Promise<void> {
-  await runScript(creds(serverId), 'echo ok', 15000);
+  await runScript(creds(serverId), 'echo ok', 40000);
 }
 
 export async function sshRevokeXray(server: Server, uuid: string): Promise<void> {

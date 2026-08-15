@@ -594,7 +594,7 @@ async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> 
   // ложно блокировала выдачу «своего же» конфига пользователю на лимите. Единый
   // источник правды — issueForUser; для AWG он корректно откажет с понятным текстом.
   // Сервер, на котором реально выпустим (тот же, что и в issueAndSend).
-  const serverId = user.defaultServerId || user.allowedServers[0];
+  const serverId = user.allowedServers[0];
   const server = serverId ? repo.getServer(serverId) : null;
   if (!server) return void send(chatId, 'Для вашего доступа не назначен сервер. Обратитесь к администратору.');
   // Предлагаем ТОЛЬКО протоколы, установленные на этом сервере (как в веб-визарде) —
@@ -633,7 +633,7 @@ async function sendRaw(chatId: number | string, text: string): Promise<boolean> 
 
 async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & object, protocol: 'xray' | 'amneziawg'): Promise<void> {
   if (!user.allowedProtocols.includes(protocol)) return void send(chatId, 'Этот протокол вам недоступен.');
-  const serverId = user.defaultServerId || user.allowedServers[0];
+  const serverId = user.allowedServers[0];
   if (!serverId) return void send(chatId, 'Для вашего доступа не назначен сервер. Обратитесь к администратору.');
   await send(chatId, `Выпускаю конфиг (${PROTO_LABEL[protocol]})…`);
   try {

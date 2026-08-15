@@ -122,11 +122,15 @@ function EndpointConfigPanel({ server }: { server: Server }) {
         })}
       </div>
 
-      <Field label="Домены обхода этого сервера (по одному в строке)" hint="Идут напрямую, мимо VPN. Пусто → берётся глобальный список. Меняется без переустановки.">
+      <Field
+        label="Домены обхода этого сервера (по одному в строке)"
+        hint="По одному домену в строке, без префикса domain: — просто «ya.ru» (охватит и поддомены www.ya.ru). Точное совпадение — «full:go.yandex». Эти домены идут напрямую, мимо VPN. Пусто → берётся глобальный список. Меняется без переустановки."
+      >
         <textarea
           className="textarea mono"
           style={{ minHeight: 120, fontSize: 12 }}
           spellCheck={false}
+          placeholder={'ya.ru\nmail.ru\nvk.com\nozon.ru\ngosuslugi.ru'}
           value={wl}
           onChange={(e) => setWl(e.target.value)}
           onBlur={() => {

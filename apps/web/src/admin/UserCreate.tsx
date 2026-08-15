@@ -51,7 +51,6 @@ export function UserCreate() {
 
   // Доступ
   const [allowedServers, setAllowedServers] = useState<string[]>(() => (firstServerId ? [firstServerId] : []));
-  const [defaultServerId, setDefaultServerId] = useState<string | null>(() => firstServerId ?? null);
   const [protocols, setProtocols] = useState<Protocol[]>(defaultProtos.length ? defaultProtos : ['xray', 'amneziawg']);
   // Прокси — отдельное разрешение (не VPN-протокол). Пользователь сможет выдать
   // их себе в кабинете, если они установлены на сервере.
@@ -69,14 +68,8 @@ export function UserCreate() {
 
   if (!data) return null;
 
-  const isAdmin = category === 'Админ';
-  const selectedServers = servers.filter((s) => allowedServers.includes(s.id));
-
   function toggleServer(id: string) {
-    const next = allowedServers.includes(id) ? allowedServers.filter((x) => x !== id) : [...allowedServers, id];
-    setAllowedServers(next);
-    if (next.length === 0) setDefaultServerId(null);
-    else if (!defaultServerId || !next.includes(defaultServerId)) setDefaultServerId(next[0] ?? null);
+    setAllowedServers((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   function changeCategory(v: string) {
@@ -140,7 +133,6 @@ export function UserCreate() {
       trafficLimitGb,
       resetPolicy,
       allowedServers,
-      defaultServerId,
       allowedProtocols: effProtocols,
       allowedProxies: proxies,
       // Пусто → код генерирует сервер. Иначе — свой 6-значный (уникальность на сервере).
@@ -279,19 +271,6 @@ export function UserCreate() {
                   </button>
                 );
               })}
-            </div>
-          )}
-        </div>
-
-        <div className="field">
-          <span className="field-label">Сервер по умолчанию</span>
-          {selectedServers.length === 0 ? (
-            <span className="small muted">Сначала выберите серверы.</span>
-          ) : (
-            <div className="chip-row">
-              {selectedServers.map((s) => (
-                <Chip key={s.id} label={s.name} active={defaultServerId === s.id} onClick={() => setDefaultServerId(s.id)} />
-              ))}
             </div>
           )}
         </div>

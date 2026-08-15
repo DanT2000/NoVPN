@@ -67,7 +67,6 @@ function toPublic(u: User): PublicUserView {
   return {
     id: u.id, name: u.name, code: u.code, deviceLimit: u.deviceLimit, expiresAt: u.expiresAt,
     trafficLimitGb: u.trafficLimitGb, trafficUsedGb: u.trafficUsedGb, allowedServers: u.allowedServers,
-    defaultServerId: u.defaultServerId,
     allowedProtocols: u.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
     isActive: u.isActive, telegramLinked: !!u.telegram, codeLoginUntil: u.codeLoginUntil,
   };
@@ -116,8 +115,12 @@ export const mockApi: ApiClient = {
       user: u && u.isActive ? toPublic(u) : null,
       devices: u ? clone(state.devices.filter((d) => d.userId === u.id)) : [],
       servers: clone(state.servers).map((s) => ({
-        id: s.id, name: s.name, country: s.country, host: s.host, protocols: s.protocols,
+        id: s.id, name: s.name, country: s.country, flagEmoji: s.flagEmoji ?? null, host: s.host, protocols: s.protocols,
         isDefault: s.isDefault, recommended: s.recommended, online: s.agent === 'online' && s.endpointOk,
+        subLink:
+          u && s.protocols.includes('xray') && u.allowedServers.includes(s.id) && !s.detached
+            ? `https://vpn.example.ru/sub/sub-${u.id}/server/${s.id}/full`
+            : null,
       })),
       apps: clone(state.apps),
       telegram: { enabled: state.telegram.enabled, botUsername: state.telegram.botUsername ?? null },
@@ -261,7 +264,7 @@ export const mockApi: ApiClient = {
       id: nextId('u'), name: input.name, comment: input.comment ?? '', category: input.category ?? 'Общие',
       tags: input.tags ?? [], code: input.code, deviceLimit: input.deviceLimit, expiresAt: input.expiresAt,
       trafficLimitGb: input.trafficLimitGb, trafficUsedGb: 0, resetPolicy: input.resetPolicy,
-      allowedServers: input.allowedServers, defaultServerId: input.defaultServerId,
+      allowedServers: input.allowedServers,
       allowedProtocols: input.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
       allowedProxies: input.allowedProxies ?? [],
       isActive: true, telegram: null, createdAt: nowIso(), lastActivityAt: null,

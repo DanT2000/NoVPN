@@ -41,7 +41,7 @@ test('подписка отдаёт ссылку с ТЕКУЩИМ портом 
   const user = repo.insertUser({
     name: 'U', comment: '', category: null, tags: [], code: `c${seq}`,
     deviceLimit: null, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
-    allowedServers: [s.id], defaultServerId: s.id, allowedProtocols: ['xray'],
+    allowedServers: [s.id], allowedProtocols: ['xray'],
   });
   repo.insertDevice({ userId: user.id, name: 'Phone', serverId: s.id, protocol: 'xray', uuid: 'uuid-x', publicKey: 'pbk', link: `vless://uuid-x@${host}:443?type=tcp#NoVPN-x` });
   // сменили публичный порт Xray

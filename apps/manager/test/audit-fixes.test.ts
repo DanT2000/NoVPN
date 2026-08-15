@@ -22,7 +22,7 @@ function mkUser(extra: Record<string, unknown> = {}) {
   const u = repo.insertUser({
     name: `U${seq}`, comment: '', category: null, tags: [], code: `c${seq}`,
     deviceLimit: null, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
-    allowedServers: [], defaultServerId: null, allowedProtocols: ['xray'],
+    allowedServers: [], allowedProtocols: ['xray'],
   });
   if (Object.keys(extra).length) repo.updateUserFields(u.id, extra);
   return repo.getUser(u.id)!;

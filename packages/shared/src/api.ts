@@ -34,7 +34,6 @@ export interface PublicUserView {
   trafficLimitGb: number | null;
   trafficUsedGb: number;
   allowedServers: string[];
-  defaultServerId: string | null;
   allowedProtocols: Array<'xray' | 'amneziawg'>;
   isActive: boolean;
   telegramLinked: boolean;

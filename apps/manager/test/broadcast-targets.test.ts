@@ -19,7 +19,7 @@ function mkUser() {
   return repo.insertUser({
     name: `U${seq}`, comment: '', category: null, tags: [], code: `c${seq}`,
     deviceLimit: null, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
-    allowedServers: [], defaultServerId: null, allowedProtocols: ['xray'],
+    allowedServers: [], allowedProtocols: ['xray'],
   });
 }
 

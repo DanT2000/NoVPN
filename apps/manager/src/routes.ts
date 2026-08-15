@@ -115,34 +115,27 @@ router.get('/sub/:token', (req, res) => {
 // Полный Xray-конфиг с обходом «белых списков»: RU-домены напрямую, остальное —
 // через reality-прокси. Для V2RayNG/Xray-core (импорт как «свой конфиг»). Тот же
 // токен подписки. Отдаём JSON-файлом.
-router.get('/sub/:token/full', (req, res) => {
-  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
-  if (!u || !u.isActive) return res.status(404).send('');
-  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
-  const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
-  const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
-  if (links.length === 0) return res.status(404).send('');
-  // Название профиля — по основному (первому) Xray-серверу пользователя: флаг + имя,
-  // напр. «🇫🇮 Finland | Обход белых списков». country хранится как «🇫🇮 Финляндия».
-  // ВАЖНО: основной сервер выбираем из ТОГО ЖЕ отфильтрованного набора, что и links
-  // (subscriptionXrayLinks фильтрует по allowedProtocols/allowedServers и detached).
-  // Иначе имя/флаг И пер-серверные настройки (whitelist/lan/fallback/полный туннель)
-  // могли бы прийти с сервера, которого НЕТ в выданных ссылках, и тихо сломать маршрутизацию.
-  const xrayAllowed = u.allowedProtocols.includes('xray');
-  const allowedSet = new Set(u.allowedServers);
-  const primaryDev = xrayAllowed
-    ? repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link && allowedSet.has(d.serverId) && !repo.getServer(d.serverId)?.detached)
-    : null;
-  const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
+// Сборка полного Xray-конфига для набора ссылок + политики КОНКРЕТНОГО сервера
+// (srv=null → глобальная политика для агрегированной подписки). Возвращает JSON или
+// null (пусто/все ссылки битые → НЕ отдаём all-direct утечку). Один источник правды
+// для агрегированной /full и пер-серверной /server/:id/full.
+function buildUserXrayFull(
+  u: NonNullable<ReturnType<typeof repo.getUser>>,
+  links: string[],
+  srv: ReturnType<typeof repo.getServer>,
+  overQuota: boolean,
+): string | null {
+  if (links.length === 0) return null;
   // Свой значок сервера (эмодзи) приоритетнее флага страны; иначе флаг из country.
-  const flag = (primarySrv?.flagEmoji || '').trim() || ((primarySrv?.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '');
-  const title = primarySrv ? [flag, primarySrv.name].filter(Boolean).join(' ') : '';
-  // Настройки генерации — ПЕР-СЕРВЕР (по основному серверу), с фолбэком на глобальные:
-  // обход-домены, LAN-доступ и набор запасных прокси у каждого сервера могут быть свои.
-  const cfg = primarySrv ? repo.getEndpointConfig(primarySrv.host) : { xrayWhitelist: repo.getSettings().xrayWhitelist !== false, whitelistDomains: repo.getSettings().whitelistDomains, lanAccess: repo.getSettings().lanAccess === true, fallbackTypes: null as null };
-  // Аварийный фоллбэк: прокси-каналы В ПОРЯДКЕ ПРИОРИТЕТА HTTPS→HTTP→SOCKS, отфильтрованные
-  // по разрешённым для этого сервера типам (fallbackTypes). Если Xray заблокируют —
-  // конфиг сам переключится на них (observatory+balancer).
+  const flag = srv ? (srv.flagEmoji || '').trim() || ((srv.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '') : '';
+  const title = srv ? [flag, srv.name].filter(Boolean).join(' ') : '';
+  // Настройки генерации ПЕР-СЕРВЕР (обход-домены, LAN, набор фоллбэк-прокси, полный
+  // туннель), с фолбэком на глобальные, если сервер не задан (агрегированная подписка).
+  const cfg = srv
+    ? repo.getEndpointConfig(srv.host)
+    : { xrayWhitelist: repo.getSettings().xrayWhitelist !== false, whitelistDomains: repo.getSettings().whitelistDomains, lanAccess: repo.getSettings().lanAccess === true, fallbackTypes: null as null };
+  // Аварийный фоллбэк: прокси В ПОРЯДКЕ HTTPS→HTTP→SOCKS, отфильтрованные по разрешённым
+  // для этого сервера типам (fallbackTypes). Если Xray заблокируют — конфиг переключится.
   const typeOrder: Record<string, number> = { https: 0, http: 1, socks5: 2 };
   const allowFb = (t: 'https' | 'http' | 'socks5') => !cfg.fallbackTypes || cfg.fallbackTypes.includes(t === 'socks5' ? 'socks' : t);
   const proxies: ProxyFallback[] = [];
@@ -156,18 +149,17 @@ router.get('/sub/:token/full', (req, res) => {
       }
     }
   }
-  // Пер-серверный «продвинутый режим» выкл → полный туннель: никаких исключений
-  // (РФ-зона, торренты — всё через VPN). Для домашнего сервера, где нужен весь трафик.
+  // Пер-серверный «продвинутый режим» выкл → полный туннель (всё через VPN, без исключений).
   const disableWhitelist = cfg.xrayWhitelist === false;
-  const json = buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, cfg.whitelistDomains, cfg.lanAccess, disableWhitelist);
-  if (!json) return res.status(404).send(''); // все ссылки битые → не отдаём all-direct утечку
-  // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
-  // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.
+  return buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, cfg.whitelistDomains, cfg.lanAccess, disableWhitelist) || null;
+}
+
+// Заголовки+тело полного конфига (одинаковы для агрегированной и пер-серверной подписки).
+function sendUserXrayFull(res: import('express').Response, u: NonNullable<ReturnType<typeof repo.getUser>>, json: string): void {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store, private'); // полный конфиг с ключами, не кэшировать
   res.setHeader('Profile-Title', `base64:${Buffer.from(repo.brandName(), 'utf8').toString('base64')}`);
   res.setHeader('Profile-Update-Interval', '12');
-  // Счётчик трафика/срока в приложении — как у обычной подписки (раньше /full его не слал).
   if (u.trafficLimitGb != null) {
     const total = Math.round(u.trafficLimitGb * 1e9);
     const used = Math.round((u.trafficUsedGb ?? 0) * 1e9);
@@ -175,6 +167,43 @@ router.get('/sub/:token/full', (req, res) => {
     res.setHeader('Subscription-Userinfo', `upload=0; download=${used}; total=${total}; expire=${expire}`);
   }
   res.send(json);
+}
+
+// Агрегированная подписка: ВСЕ серверы пользователя в одном конфиге с балансировщиком
+// и ОДНОЙ политикой (основного сервера). Историческая ссылка — не ломаем.
+router.get('/sub/:token/full', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).send('');
+  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
+  const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
+  const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
+  // Основной сервер (имя/политика) — первый из ТОГО ЖЕ отфильтрованного набора, что и links.
+  const allowedSet = new Set(u.allowedServers);
+  const primaryDev = u.allowedProtocols.includes('xray')
+    ? repo.listDevicesOfUser(u.id).find((d) => d.isActive && d.protocol === 'xray' && d.link && allowedSet.has(d.serverId) && !repo.getServer(d.serverId)?.detached)
+    : null;
+  const primarySrv = primaryDev ? repo.getServer(primaryDev.serverId) : null;
+  const json = buildUserXrayFull(u, links, primarySrv, overQuota);
+  if (!json) return res.status(404).send('');
+  sendUserXrayFull(res, u, json);
+});
+
+// Пер-серверная подписка: ОДИН сервер со СВОИМ обходом/политикой (не общий балансир).
+// В приложении = отдельный профиль на сервер. Ссылки формируются в bootstrap.servers[].subLink.
+router.get('/sub/:token/server/:id/full', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).send('');
+  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
+  const serverId = String(req.params.id ?? '');
+  // Доступ строго как у subscriptionXrayLinks: сервер разрешён, xray-протокол, не отвязан.
+  if (!u.allowedProtocols.includes('xray') || !u.allowedServers.includes(serverId)) return res.status(404).send('');
+  const srv = repo.getServer(serverId);
+  if (!srv || srv.detached || !srv.protocols.includes('xray')) return res.status(404).send('');
+  const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
+  const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id, serverId);
+  const json = buildUserXrayFull(u, links, srv, overQuota);
+  if (!json) return res.status(404).send('');
+  sendUserXrayFull(res, u, json);
 });
 
 // ── bootstrap ──
@@ -560,7 +589,7 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
     name, comment: String(b.comment ?? ''), category: b.category ?? 'Общие', tags: Array.isArray(b.tags) ? b.tags : [],
     code, deviceLimit: b.deviceLimit ?? null, expiresAt: b.expiresAt ?? null, trafficLimitGb: b.trafficLimitGb ?? null,
     resetPolicy: b.resetPolicy === 'monthly' ? 'monthly' : 'never', allowedServers,
-    defaultServerId: b.defaultServerId ?? null, allowedProtocols, allowedProxies,
+    allowedProtocols, allowedProxies,
     codeLoginEnabled: b.codeLoginEnabled === true,
   });
   repo.addLog(`Создан пользователь «${u.name}»`);
@@ -592,7 +621,6 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.expiresAt !== undefined) fields.expires_at = b.expiresAt; // null = снять срок
   if (b.resetPolicy !== undefined) fields.reset_policy = b.resetPolicy === 'monthly' ? 'monthly' : 'never';
   if (b.allowedServers !== undefined) fields.allowed_servers = JSON.stringify(b.allowedServers);
-  if (b.defaultServerId !== undefined) fields.default_server_id = b.defaultServerId;
   if (b.allowedProtocols !== undefined)
     fields.allowed_protocols = JSON.stringify(
       (Array.isArray(b.allowedProtocols) ? (b.allowedProtocols as string[]) : []).filter((p) => p === 'xray' || p === 'amneziawg'),
@@ -799,7 +827,7 @@ router.post('/api/admin/servers', requireAdmin, (req, res) => {
     sshPassEnc: b.secret ? encryptSecret(String(b.secret)) : null,
     enrollSecretEnc: encryptSecret(enrollToken),
   });
-  if (b.flagEmoji) repo.updateServerFields(s.id, { flag_emoji: [...String(b.flagEmoji)].slice(0, 8).join('') });
+  if (b.flagEmoji) repo.updateServerFields(s.id, { flag_emoji: [...String(b.flagEmoji).replace(/\?/g, '')].slice(0, 8).join('') });
   if (hasKeys) {
     // Принимаем и ПРИВАТНЫЕ ключи + параметры обфускации — это регистрация уже
     // установленного сервера (или восстановление панели): с ними ранее выданные
@@ -825,7 +853,7 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   const fields: Record<string, unknown> = {};
   if (b.name !== undefined) fields.name = String(b.name);
   if (b.country !== undefined) fields.country = b.country || null;
-  if (b.flagEmoji !== undefined) fields.flag_emoji = b.flagEmoji ? [...String(b.flagEmoji)].slice(0, 8).join('') : null;
+  if (b.flagEmoji !== undefined) fields.flag_emoji = b.flagEmoji ? [...String(b.flagEmoji).replace(/\?/g, '')].slice(0, 8).join('') : null;
   const vpnHost = b.vpnHost ?? b.host;
   if (vpnHost !== undefined && String(vpnHost).trim()) fields.host = String(vpnHost).trim();
   if (b.sshHost !== undefined) fields.ssh_host = b.sshHost;

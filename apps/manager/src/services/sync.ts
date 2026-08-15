@@ -15,6 +15,22 @@ let running = false;
 // не дёргать SSH каждый цикл. sshSetXraySni идемпотентна (без рестарта, если совпало).
 const sniReconciled = new Set<string>();
 
+// Дебаунс sync-ошибок: сервер за NAT, транзиентно таймаутящий, заваливал бы журнал
+// (кап 100 строк) и вытеснял полезное у других серверов. Пишем ОДНУ ошибку на
+// (сервер+операция) не чаще раза в 30 мин; успешный проход этой операции сбрасывает
+// счётчик — так новый сбой после восстановления снова залогируется сразу.
+const lastSyncErrAt = new Map<string, number>();
+function logSyncError(serverName: string, serverId: string, op: string, e: unknown): void {
+  const key = `${serverId}|${op}`;
+  const now = Date.now();
+  if (now - (lastSyncErrAt.get(key) ?? 0) < 30 * 60 * 1000) return;
+  lastSyncErrAt.set(key, now);
+  repo.addJobError(serverName, `${op}: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
+}
+function clearSyncErr(serverId: string, op: string): void {
+  lastSyncErrAt.delete(`${serverId}|${op}`);
+}
+
 export async function syncAllServers(): Promise<void> {
   if (running) return;
   running = true;
@@ -91,7 +107,7 @@ export async function syncAllServers(): Promise<void> {
           }
           sniReconciled.add(s.id);
         } catch (e) {
-          repo.addJobError(s.name, `Сверка reality-SNI: ${e instanceof Error ? e.message : 'ошибка'}`);
+          logSyncError(s.name, s.id, 'Сверка reality-SNI', e);
         }
       }
       const devices = repo.listServerDeviceKeys(s.id);
@@ -104,6 +120,7 @@ export async function syncAllServers(): Promise<void> {
         try {
           const peers = await sshSyncAwg(s.id);
           reachable = true;
+          clearSyncErr(s.id, 'Синхронизация AWG');
           const byKey = new Map(peers.map((p) => [p.publicKey, p]));
           for (const d of devices) {
             if (d.protocol !== 'amneziawg' || !d.publicKey) continue;
@@ -134,7 +151,7 @@ export async function syncAllServers(): Promise<void> {
             if (d.userId) affected.add(d.userId);
           }
         } catch (e) {
-          repo.addJobError(s.name, `Синхронизация AWG: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
+          logSyncError(s.name, s.id, 'Синхронизация AWG', e);
         }
       }
 
@@ -143,6 +160,7 @@ export async function syncAllServers(): Promise<void> {
         try {
           const stats = await sshSyncXray(s.id);
           reachable = true;
+          clearSyncErr(s.id, 'Синхронизация Xray');
           const byUuid = new Map(stats.map((x) => [x.uuid, x]));
           const now = repo.nowIso();
           for (const d of devices) {
@@ -166,7 +184,7 @@ export async function syncAllServers(): Promise<void> {
             if (d.userId) affected.add(d.userId);
           }
         } catch (e) {
-          repo.addJobError(s.name, `Синхронизация Xray: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
+          logSyncError(s.name, s.id, 'Синхронизация Xray', e);
         }
       }
 
@@ -175,6 +193,7 @@ export async function syncAllServers(): Promise<void> {
         try {
           const traffic = await sshReadProxyTraffic(s.id);
           reachable = true;
+          clearSyncErr(s.id, 'Синхронизация прокси');
           const byLogin = new Map(traffic.map((t) => [t.login, t.bytes]));
           const now = repo.nowIso();
           for (const acc of repo.listServerProxyAccounts(s.id)) {
@@ -197,7 +216,7 @@ export async function syncAllServers(): Promise<void> {
             if (acc.user_id) affected.add(acc.user_id);
           }
         } catch (e) {
-          repo.addJobError(s.name, `Синхронизация прокси: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
+          logSyncError(s.name, s.id, 'Синхронизация прокси', e);
         }
       }
 

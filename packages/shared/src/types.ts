@@ -90,7 +90,6 @@ export interface User {
   trafficUsedGb: number;
   resetPolicy: ResetPolicy;
   allowedServers: string[];
-  defaultServerId: string | null;
   allowedProtocols: UserProtocol[];
   /** Типы прокси, которые пользователь может себе выдать в кабинете (если они
    *  установлены на сервере). Пусто — прокси недоступны. */
@@ -320,11 +319,17 @@ export interface PublicServerView {
   id: string;
   name: string;
   country: string | null;
+  /** Свой значок сервера (эмодзи), приоритетнее флага страны. null → берётся флаг из country. */
+  flagEmoji: string | null;
   host: string;
   protocols: Protocol[];
   isDefault: boolean;
   recommended: boolean;
   /** Сервер доступен для выпуска конфига. */
   online: boolean;
+  /** Пер-серверная ссылка-подписка Xray (/sub/<t>/server/<id>/full) со СВОИМ обходом
+   *  и политикой этого сервера. null, если сервер не разрешён пользователю / не xray /
+   *  отвязан / нет входа. Общий subLink (все серверы, один обход) — в PublicBootstrapData. */
+  subLink: string | null;
 }
 

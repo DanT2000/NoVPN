@@ -133,10 +133,9 @@ export function Wizard() {
   const cfgConf = result?.conf ?? viewDevice?.conf ?? null;
   const vpnKey = result?.vpnKey ?? viewDevice?.vpnKey ?? null;
   const cfgName = dev?.name ?? name;
-  // Как в кабинете/Connect: продвинутый режим (по умолчанию) → /full (обход белых
-  // списков + фоллбэк). Иначе плоская подписка. Раньше здесь всегда была плоская —
-  // из-за этого QR при выпуске нового устройства шёл без обхода.
-  const subUrl = data.subLink ? (data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink) : '';
+  // Пер-серверная подписка выбранного сервера (свой обход/полный туннель этого сервера).
+  // Фоллбэк на агрегированную ссылку, если у сервера нет пер-серверной (напр. не xray).
+  const subUrl = chosenServer?.subLink ?? (data.subLink ? (data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink) : '');
 
   const apps = data.apps.filter(
     (a) =>

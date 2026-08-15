@@ -98,7 +98,6 @@ export interface NewUserRow {
   trafficLimitGb: number | null;
   resetPolicy: 'never' | 'monthly';
   allowedServers: string[];
-  defaultServerId: string | null;
   allowedProtocols: Array<'xray' | 'amneziawg'>;
   allowedProxies?: Array<'http' | 'https' | 'socks5'>;
   /** Разрешить вход по коду. По умолчанию нет — основной способ это личная ссылка. */
@@ -119,16 +118,16 @@ export function insertUser(u: NewUserRow): User {
   const now = nowIso();
   db.prepare(
     `INSERT INTO users(id,name,comment,category,tags,code,device_limit,expires_at,traffic_limit_gb,traffic_used_gb,
-      reset_policy,allowed_servers,default_server_id,allowed_protocols,allowed_proxies,is_active,telegram,created_at,updated_at,
+      reset_policy,allowed_servers,allowed_protocols,allowed_proxies,is_active,telegram,created_at,updated_at,
       access_token,code_login_until,sub_token)
      VALUES(@id,@name,@comment,@category,@tags,@code,@device_limit,@expires_at,@traffic_limit_gb,0,
-      @reset_policy,@allowed_servers,@default_server_id,@allowed_protocols,@allowed_proxies,1,NULL,@now,@now,
+      @reset_policy,@allowed_servers,@allowed_protocols,@allowed_proxies,1,NULL,@now,@now,
       @access_token,@code_login_until,@sub_token)`,
   ).run({
     id, name: u.name, comment: u.comment, category: u.category, tags: JSON.stringify(u.tags), code: u.code,
     device_limit: u.deviceLimit, expires_at: u.expiresAt, traffic_limit_gb: u.trafficLimitGb,
     reset_policy: u.resetPolicy, allowed_servers: JSON.stringify(u.allowedServers),
-    default_server_id: u.defaultServerId, allowed_protocols: JSON.stringify(u.allowedProtocols),
+    allowed_protocols: JSON.stringify(u.allowedProtocols),
     allowed_proxies: JSON.stringify(u.allowedProxies ?? []), now,
     // Личная ссылка выдаётся сразу. Вход по коду — только если админ включил.
     access_token: crypto.randomBytes(18).toString('base64url'),
@@ -1115,7 +1114,7 @@ export function toPublicUserView(u: User): PublicUserView {
   return {
     id: u.id, name: u.name, code: u.code, deviceLimit: u.deviceLimit, expiresAt: u.expiresAt,
     trafficLimitGb: u.trafficLimitGb, trafficUsedGb: u.trafficUsedGb, allowedServers: u.allowedServers,
-    defaultServerId: u.defaultServerId, allowedProtocols: u.allowedProtocols, isActive: u.isActive,
+    allowedProtocols: u.allowedProtocols, isActive: u.isActive,
     telegramLinked: !!u.telegram, codeLoginUntil: u.codeLoginUntil,
   };
 }
@@ -1167,7 +1166,7 @@ export function listDevicesOfUser(userId: string): Device[] {
  *  устройство одного сервера) — подписка отдавала их все, приложение показывало
  *  «кучу разных девайсов» и могло цепляться за устаревший. Оставляем по одному
  *  самому свежему на сервер (список отсортирован created_at DESC). */
-export function subscriptionXrayLinks(userId: string): string[] {
+export function subscriptionXrayLinks(userId: string, onlyServerId?: string): string[] {
   const seen = new Set<string>();
   const links: string[] = [];
   // Защита на чтении: подписка отдаёт конфиги ТОЛЬКО с серверов/протоколов, которые
@@ -1180,6 +1179,8 @@ export function subscriptionXrayLinks(userId: string): string[] {
   for (const d of listDevicesOfUser(userId)) {
     if (!d.isActive || d.protocol !== 'xray' || !d.link) continue;
     if (!xrayAllowed) continue;
+    // Пер-серверная подписка: только один заданный сервер (для /sub/:t/server/:id/full).
+    if (onlyServerId && d.serverId !== onlyServerId) continue;
     if (allowedServers && allowedServers.size > 0 && !allowedServers.has(d.serverId)) continue;
     if (seen.has(d.serverId)) continue;
     seen.add(d.serverId);
@@ -1223,6 +1224,11 @@ export function buildPublicBootstrap(userId?: string, fallbackOrigin?: string): 
   const token = user ? getAccessToken(user.id) : null;
   const botLink =
     tg.enabled && tg.botUsername && token ? `https://t.me/${tg.botUsername}?start=${token}` : null;
+  // База и sub-токен для ПЕР-СЕРВЕРНЫХ ссылок подписки: у каждого разрешённого сервера
+  // своя подписка /sub/<t>/server/<id>/full со СВОИМ обходом/политикой (не общий балансир).
+  const subT = user ? getSubToken(user.id) : null;
+  const subBase = publicBaseUrl(fallbackOrigin);
+  const allowedSet = user ? new Set(user.allowedServers) : null;
   return {
     user: user && user.isActive ? toPublicUserView(user) : null,
     devices: user ? listDevicesOfUser(user.id) : [],
@@ -1230,11 +1236,18 @@ export function buildPublicBootstrap(userId?: string, fallbackOrigin?: string): 
       id: s.id,
       name: s.name,
       country: s.country,
+      flagEmoji: s.flagEmoji ?? null,
       host: s.host,
       protocols: s.protocols,
       isDefault: s.isDefault,
       recommended: s.recommended,
       online: s.agent === 'online' && s.endpointOk,
+      // Пер-серверная подписка доступна, только если сервер разрешён пользователю,
+      // поддерживает xray и не отвязан; иначе null (общий subLink остаётся всегда).
+      subLink:
+        subT && subBase && allowedSet?.has(s.id) && s.protocols.includes('xray') && !s.detached
+          ? `${subBase}/sub/${subT}/server/${s.id}/full`
+          : null,
     })),
     apps: listApps(),
     telegram: { enabled: tg.enabled, botUsername: tg.botUsername ?? null },

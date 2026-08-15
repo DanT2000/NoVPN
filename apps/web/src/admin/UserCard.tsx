@@ -111,7 +111,6 @@ function UserCardInner({ user }: { user: User }) {
   const resetPolicy = user.resetPolicy; // сброс трафика по расписанию убран из UI
 
   const [allowedServers, setAllowedServers] = useState<string[]>([...user.allowedServers]);
-  const [defaultServerId, setDefaultServerId] = useState<string | null>(user.defaultServerId ?? user.allowedServers[0] ?? null);
   const [protocols, setProtocols] = useState<Protocol[]>([...user.allowedProtocols]);
   const [proxies, setProxies] = useState<ProxyType[]>([...(user.allowedProxies ?? [])]);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -162,14 +161,12 @@ function UserCardInner({ user }: { user: User }) {
 
   if (!data) return null;
 
-  const isAdmin = category === 'Админ';
   // Лимит устройств считается только по AmneziaWG (Xray — общая подписка вне лимита).
   const awgDevices = countActiveDevices(user.id, data.devices, 'amneziawg');
   const userDevices = data.devices.filter((d) => d.userId === user.id);
   const inactiveDevices = userDevices.filter((d) => isInactive(d));
   const history = data.history[user.id] ?? [];
   const usagePct = user.trafficLimitGb ? Math.min(100, (user.trafficUsedGb / user.trafficLimitGb) * 100) : 0;
-  const selectedServers = servers.filter((s) => allowedServers.includes(s.id));
   const installed = installedOn(servers, allowedServers);
 
   // VPN-протоколы к показу: только установленные на доступных серверах.
@@ -193,12 +190,7 @@ function UserCardInner({ user }: { user: User }) {
   const effIssProto = issuable.includes(issProto) ? issProto : issuable[0];
 
   function toggleServer(id: string) {
-    setAllowedServers((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      if (next.length === 0) setDefaultServerId(null);
-      else if (!defaultServerId || !next.includes(defaultServerId)) setDefaultServerId(next[0] ?? null);
-      return next;
-    });
+    setAllowedServers((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
   function changeCategory(v: string) {
     setCategory(v);
@@ -221,7 +213,6 @@ function UserCardInner({ user }: { user: User }) {
     }
     const deviceLimit = dlMode === '1' ? 1 : dlMode === '10' ? 10 : dlMode === 'unlim' ? null : posInt(dlCustom);
     const trafficLimitGb = trafMode === 'unlim' ? null : posNum(trafCustom);
-    const def = defaultServerId && allowedServers.includes(defaultServerId) ? defaultServerId : allowedServers[0] ?? null;
     setSavingProfile(true);
     try {
       await updateUser(user.id, {
@@ -233,7 +224,6 @@ function UserCardInner({ user }: { user: User }) {
         trafficLimitGb,
         resetPolicy,
         allowedServers,
-        defaultServerId: def,
         allowedProtocols: eff as User['allowedProtocols'],
         allowedProxies: effProxies,
       });
@@ -581,7 +571,6 @@ function UserCardInner({ user }: { user: User }) {
                       <Dot color={serverAgentView(s).dot} />
                       <span style={{ fontWeight: 600 }}>
                         {s.name} ({s.country ?? '—'})
-                        {defaultServerId === s.id ? <span className="small muted"> · по умолчанию</span> : null}
                       </span>
                     </span>
                     <span className="mono small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -593,17 +582,6 @@ function UserCardInner({ user }: { user: User }) {
             </div>
           )}
         </div>
-
-        {selectedServers.length > 1 ? (
-          <div className="field">
-            <span className="field-label">Сервер по умолчанию</span>
-            <div className="chip-row">
-              {selectedServers.map((s) => (
-                <Chip key={s.id} label={s.name} active={defaultServerId === s.id} onClick={() => setDefaultServerId(s.id)} />
-              ))}
-            </div>
-          </div>
-        ) : null}
 
         <div className="field">
           <span className="field-label">Разрешённые VPN-протоколы</span>

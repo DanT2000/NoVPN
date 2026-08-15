@@ -58,9 +58,6 @@ export function Cabinet() {
     ? devices.slice(0, 2).map((d) => d.name).join(', ')
     : 'пока нет';
 
-  // Человек вошёл по старому коду: код скоро отключат, надо взять личную ссылку.
-  const codeSunset = user.codeLoginUntil ? daysLeft(user.codeLoginUntil) : null;
-
   // Прокси: отдельный логин на пользователя. Показываем выданные аккаунты и
   // предлагаем выдать на серверах, где нужный тип установлен и разрешён.
   const allowedProxies = (data.allowedProxies ?? []) as string[];
@@ -104,15 +101,6 @@ export function Cabinet() {
 
   return (
     <div className="stack" style={{ gap: 16, paddingTop: 12 }}>
-      {codeSunset != null && codeSunset >= 0 ? (
-        <div className="notice notice-amber">
-          <b>Вход по коду скоро отключат.</b>{' '}
-          {codeSunset === 0 ? 'Сегодня последний день.' : `Осталось дней: ${codeSunset}.`} Попросите
-          у администратора личную ссылку — по ней вход открывается сразу, вводить код не нужно.
-          {botReady ? ' Ссылку можно получить и в Telegram-боте.' : ''}
-        </div>
-      ) : null}
-
       <div className="row-between">
         <div>
           <div className="eyebrow" style={{ marginBottom: 4 }}>Доступ</div>
@@ -164,41 +152,55 @@ export function Cabinet() {
         </Row>
       </div>
 
-      {/* Подписка Xray: одна ссылка на все устройства. Приложение само тянет
-          конфиги и обновляет их — не нужно выпускать конфиг на каждый телефон. */}
-      {data.subLink && user.allowedProtocols.includes('xray') && hasActiveXray ? (
-        (() => {
-          // Продвинутый режим (по умолчанию) → /full: обход белых списков + фоллбэк.
-          const subUrl = data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink!;
-          return (
-        <div className="card stack" style={{ gap: 10 }}>
-          <div>
-            <div className="eyebrow" style={{ marginBottom: 4 }}>Подписка Xray</div>
-            <div className="body small muted">
-              Добавьте эту ссылку в приложение один раз — оно само подтянет все ваши
-              конфигурации и будет держать их актуальными.
-              {data.xrayWhitelist !== false ? ' Российские сайты идут напрямую, а если X-Ray заблокируют — включится резервный канал.' : ''}
+      {/* Подписки Xray — ПЕР-СЕРВЕР: у каждого сервера своя ссылка со СВОИМИ правилами
+          обхода/полным туннелем. Показываем только те серверы, где у пользователя есть
+          активный Xray-конфиг (иначе ссылка вернула бы 404). Одна ссылка = один профиль
+          в приложении, оно само тянет конфиг и держит актуальным. */}
+      {(() => {
+        if (!user.allowedProtocols.includes('xray') || !hasActiveXray) return null;
+        const xrayServerIds = new Set(devices.filter((d) => d.isActive && d.protocol === 'xray').map((d) => d.serverId));
+        const xrayServers = data.servers.filter((s) => s.subLink && xrayServerIds.has(s.id));
+        if (xrayServers.length === 0) return null;
+        const multi = xrayServers.length > 1;
+        const flagOf = (s: (typeof xrayServers)[number]) =>
+          (s.flagEmoji || '').trim() || ((s.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '');
+        return (
+          <div className="card stack" style={{ gap: 10 }}>
+            <div>
+              <div className="eyebrow" style={{ marginBottom: 4 }}>{multi ? 'Подписки по серверам' : 'Подписка Xray'}</div>
+              <div className="body small muted">
+                {multi
+                  ? 'У каждого сервера своя подписка со своими правилами. Добавьте нужные — каждый появится в приложении отдельным профилем, между ними можно переключаться.'
+                  : 'Добавьте ссылку в приложение один раз — оно само подтянет конфигурацию и будет держать её актуальной. Если X-Ray заблокируют — включится резервный канал.'}
+              </div>
             </div>
+            {xrayServers.map((s) => {
+              const subUrl = s.subLink!;
+              const label = [flagOf(s), s.name].filter(Boolean).join(' ');
+              return (
+                <div key={s.id} className="card stack" style={{ gap: 8, background: 'var(--surface-2)' }}>
+                  <b>{label}</b>
+                  {!multi ? <Qr text={subUrl} caption="Отсканируйте в приложении" /> : null}
+                  <input className="input mono" readOnly value={subUrl} style={{ fontSize: 12 }} />
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={async () => {
+                        showToast((await copyText(subUrl)) ? 'Ссылка подписки скопирована' : 'Не удалось скопировать');
+                      }}
+                    >
+                      Копировать{multi ? ` · ${s.name}` : ' подписку'}
+                    </button>
+                    <button className="btn btn-outline btn-sm" onClick={() => goPublic('apps')}>
+                      Куда вставить?
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <Qr text={subUrl} caption="Отсканируйте в приложении" />
-          <input className="input mono" readOnly value={subUrl} style={{ fontSize: 12 }} />
-          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={async () => {
-                showToast((await copyText(subUrl)) ? 'Ссылка подписки скопирована' : 'Не удалось скопировать');
-              }}
-            >
-              Копировать подписку
-            </button>
-            <button className="btn btn-outline btn-sm" onClick={() => goPublic('apps')}>
-              Куда вставить?
-            </button>
-          </div>
-        </div>
-          );
-        })()
-      ) : null}
+        );
+      })()}
 
       {showProxy ? (
         <div className="card stack" style={{ gap: 10 }}>

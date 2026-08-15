@@ -28,7 +28,7 @@ function seed(allowedProxies: Array<'http' | 'https' | 'socks5'>) {
   const user = repo.insertUser({
     name: `U${seq}`, comment: '', category: null, tags: [], code: `c${seq}`,
     deviceLimit: null, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
-    allowedServers: [server.id], defaultServerId: server.id, allowedProtocols: ['xray'], allowedProxies,
+    allowedServers: [server.id], allowedProtocols: ['xray'], allowedProxies,
   });
   return { server, user };
 }

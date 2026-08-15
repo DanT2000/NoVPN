@@ -22,7 +22,6 @@ export function Settings() {
   const s = data?.settings;
 
   const [domain, setDomain] = useState(s?.domain ?? '');
-  const [defaultServerId, setDefaultServerId] = useState<string | null>(s?.defaultServerId ?? null);
   const [defaultProtocols, setDefaultProtocols] = useState<UserProtocol[]>(s?.defaultProtocols ?? []);
   const [messageTemplate, setMessageTemplate] = useState(s?.messageTemplate ?? '');
   const [codeAttempts, setCodeAttempts] = useState(s?.codeAttempts ?? 5);
@@ -181,7 +180,6 @@ export function Settings() {
   // Настройки изменены? Тогда показываем липкую панель сохранения.
   const dirty =
     domain !== (s.domain ?? '') ||
-    defaultServerId !== (s.defaultServerId ?? null) ||
     JSON.stringify(defaultProtocols) !== JSON.stringify(s.defaultProtocols ?? []) ||
     messageTemplate !== (s.messageTemplate ?? '') ||
     codeAttempts !== (s.codeAttempts ?? 5) ||
@@ -203,7 +201,6 @@ export function Settings() {
       const input: AppSettings = {
         ...s,
         domain,
-        defaultServerId,
         defaultProtocols,
         messageTemplate,
         codeAttempts,
@@ -290,23 +287,6 @@ export function Settings() {
 
         {/* Значения по умолчанию */}
         <Panel title="Значения по умолчанию">
-          <Field label="Сервер по умолчанию">
-            {data.servers.length === 0 ? (
-              <span className="small muted">Серверы ещё не добавлены.</span>
-            ) : (
-              <div className="chip-row">
-                {data.servers.map((srv) => (
-                  <Chip
-                    key={srv.id}
-                    label={srv.name}
-                    size="sm"
-                    active={defaultServerId === srv.id}
-                    onClick={() => setDefaultServerId(srv.id)}
-                  />
-                ))}
-              </div>
-            )}
-          </Field>
           <Field label="Протоколы по умолчанию">
             <div className="chip-row">
               {PROTO_OPTIONS.map((opt) => (

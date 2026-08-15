@@ -29,7 +29,6 @@ export function rowToUser(r: any): User {
     trafficUsedGb: r.traffic_used_gb ?? 0,
     resetPolicy: r.reset_policy === 'monthly' ? 'monthly' : 'never',
     allowedServers: j<string[]>(r.allowed_servers, []),
-    defaultServerId: r.default_server_id ?? null,
     allowedProtocols: j<Array<'xray' | 'amneziawg'>>(r.allowed_protocols, ['xray']),
     allowedProxies: j<Array<'http' | 'https' | 'socks5'>>(r.allowed_proxies, []),
     isActive: b(r.is_active),

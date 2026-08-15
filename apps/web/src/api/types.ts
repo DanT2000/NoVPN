@@ -29,7 +29,6 @@ export interface CreateUserInput {
   trafficLimitGb: number | null;
   resetPolicy: 'never' | 'monthly';
   allowedServers: string[];
-  defaultServerId: string | null;
   allowedProtocols: Array<'xray' | 'amneziawg'>;
   /** Типы прокси, которые пользователь может себе выдать (если установлены на сервере). */
   allowedProxies?: ProxyType[];
@@ -51,7 +50,6 @@ export type UpdateUserPatch = Partial<
     | 'trafficLimitGb'
     | 'resetPolicy'
     | 'allowedServers'
-    | 'defaultServerId'
     | 'allowedProtocols'
     | 'allowedProxies'
     | 'expiresAt'

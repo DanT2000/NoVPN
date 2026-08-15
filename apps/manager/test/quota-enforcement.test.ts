@@ -23,7 +23,7 @@ function seed(opts: { limit: number | null; used: number }) {
   const user = repo.insertUser({
     name: `U${seq}`, comment: '', category: null, tags: [], code: `q${seq}`,
     deviceLimit: null, expiresAt: null, trafficLimitGb: opts.limit, resetPolicy: 'never',
-    allowedServers: [server.id], defaultServerId: server.id, allowedProtocols: ['xray', 'amneziawg'],
+    allowedServers: [server.id], allowedProtocols: ['xray', 'amneziawg'],
   });
   repo.updateUserFields(user.id, { traffic_used_gb: opts.used });
   return { server, user };
