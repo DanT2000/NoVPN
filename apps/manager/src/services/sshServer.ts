@@ -249,11 +249,41 @@ if [ "$WANT_AWG" = "1" ]; then
   echo "== awg =="
   if ! command -v awg >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
-    add-apt-repository -y ppa:amnezia/ppa >/tmp/ppa.log 2>&1 || true
-    apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq amneziawg amneziawg-tools >/tmp/awg.log 2>&1 || apt-get install -y -qq amneziawg-tools amneziawg-dkms >>/tmp/awg.log 2>&1 || { echo "AWG_FAIL"; exit 1; }
+    . /etc/os-release 2>/dev/null || true
+    # amneziawg-tools из репозитория amnezia. Ubuntu — PPA; если для текущего релиза
+    # пакетов нет (свежий релиз типа resolute/26.04) ИЛИ это Debian — подключаем набор
+    # noble (LTS) напрямую по ключу. noble-пакеты ставятся и на Ubuntu 26.04, и на Debian.
+    if [ "$ID" = "ubuntu" ]; then
+      add-apt-repository -y ppa:amnezia/ppa >/tmp/ppa.log 2>&1 || true
+      apt-get update -qq >/dev/null 2>&1 || true
+    fi
+    if ! apt-cache policy amneziawg-tools 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
+      rm -f /etc/apt/sources.list.d/amnezia-ubuntu-ppa-*.sources /etc/apt/sources.list.d/amnezia-ubuntu-ppa-*.list 2>/dev/null || true
+      curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x75c9dd72c799870e310542e24166f2c257290828" 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/amnezia.gpg 2>/dev/null || true
+      echo "deb [signed-by=/usr/share/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu noble main" > /etc/apt/sources.list.d/amnezia.list
+      apt-get update -qq >/dev/null 2>&1 || true
+    fi
+    apt-get install -y -qq amneziawg-tools >/tmp/awgtools.log 2>&1 || true
+    command -v awg >/dev/null 2>&1 || { echo "AWG_FAIL: не установились amneziawg-tools"; tail -12 /tmp/awgtools.log 2>/dev/null; exit 1; }
+    # Быстрый путь — модуль ядра под ТЕКУЩЕЕ ядро через dkms (Ubuntu). Best-effort.
+    apt-get install -y -qq dkms "linux-headers-$(uname -r)" amneziawg-dkms >/tmp/awgdkms.log 2>&1 || true
   fi
   modprobe amneziawg 2>/dev/null || true
+  # Если модуль ядра не загрузился (частое на свежих VPS/Debian: работающее ядро старше
+  # доступных заголовков) — userspace amneziawg-go: без модуля ядра, работает на любом
+  # ядре/дистрибутиве. Собираем из исходников (go есть в репах Ubuntu и Debian).
+  AWG_USERSPACE=""
+  if ! lsmod 2>/dev/null | grep -q "^amneziawg"; then
+    if ! command -v amneziawg-go >/dev/null 2>&1; then
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y -qq golang-go git make >/tmp/awggo-dep.log 2>&1 || true
+      rm -rf /tmp/awg-go
+      git clone --depth=1 https://github.com/amnezia-vpn/amneziawg-go /tmp/awg-go >/tmp/awggo.log 2>&1 && \
+        ( cd /tmp/awg-go && make >>/tmp/awggo.log 2>&1 && install -m755 amneziawg-go /usr/bin/amneziawg-go ) || true
+    fi
+    command -v amneziawg-go >/dev/null 2>&1 || { echo "AWG_FAIL: ни модуль ядра, ни userspace"; tail -12 /tmp/awggo.log 2>/dev/null; exit 1; }
+    AWG_USERSPACE=1
+  fi
   [ -z "$AWG_PRIV" ] && AWG_PRIV=$(awg genkey)
   AWG_PUB=$(printf '%s' "$AWG_PRIV" | awg pubkey)
   mkdir -p /etc/amnezia/amneziawg
@@ -277,6 +307,16 @@ CONF
   chmod 600 /etc/amnezia/amneziawg/awg0.conf
   sysctl -qw net.ipv4.ip_forward=1
   grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+  # userspace-режим сохраняем в systemd-сервисе, чтобы awg0 поднимался и после ребута.
+  if [ -n "$AWG_USERSPACE" ]; then
+    mkdir -p /etc/systemd/system/awg-quick@awg0.service.d
+    cat > /etc/systemd/system/awg-quick@awg0.service.d/userspace.conf <<'DROPIN'
+[Service]
+Environment=WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go
+DROPIN
+    systemctl daemon-reload 2>/dev/null || true
+    export WG_QUICK_USERSPACE_IMPLEMENTATION=amneziawg-go
+  fi
   awg-quick down awg0 2>/dev/null || true
   awg-quick up awg0
   systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true
