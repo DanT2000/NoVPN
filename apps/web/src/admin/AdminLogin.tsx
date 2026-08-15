@@ -5,7 +5,7 @@ import { useApp } from '../store/AppStore';
 import { Wordmark, Field } from '../components/ui';
 
 export function AdminLogin() {
-  const { adminLogin, goAdmin, goPublic } = useApp();
+  const { adminLogin, goAdmin, goPublic, nav } = useApp();
     const [password, setPassword] = useState('');
   const [error, setError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -16,7 +16,9 @@ export function AdminLogin() {
     setError(false);
     try {
       const ok = await adminLogin(password);
-      if (ok) goAdmin('dashboard');
+      // Deep-link сохраняем: пришли на /admin/settings → после входа открываются
+      // настройки, а не дашборд. На dashboard уходим только с «голого» /admin (login).
+      if (ok) { if (nav.area !== 'admin' || nav.route === 'login') goAdmin('dashboard'); }
       else setError(true);
     } catch {
       setError(true);

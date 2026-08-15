@@ -759,14 +759,6 @@ export function setServerSshKey(id: string, keyEnc: string | null): void {
 export function disableServerSshPassword(id: string): void {
   db.prepare('UPDATE servers SET ssh_pass_enc = NULL WHERE id = ?').run(id);
 }
-export function setServerDefault(id: string): Server[] {
-  const tx = db.transaction(() => {
-    db.prepare('UPDATE servers SET is_default = 0').run();
-    db.prepare('UPDATE servers SET is_default = 1 WHERE id = ?').run(id);
-  });
-  tx();
-  return listServers();
-}
 export function deleteServer(id: string): void {
   // Удаление сервера удаляет привязанные к нему устройства (подписки). Трафик удаляемых
   // устройств «списываем» в retired_traffic_gb пользователей — иначе расход (сумма по
@@ -1246,7 +1238,6 @@ export function buildPublicBootstrap(userId?: string, fallbackOrigin?: string): 
       flagEmoji: s.flagEmoji ?? null,
       host: s.host,
       protocols: s.protocols,
-      isDefault: s.isDefault,
       recommended: s.recommended,
       online: s.agent === 'online' && s.endpointOk,
       // Пер-серверная подписка доступна, только если сервер разрешён пользователю,

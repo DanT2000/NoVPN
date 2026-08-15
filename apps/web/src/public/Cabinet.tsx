@@ -162,8 +162,9 @@ export function Cabinet() {
         const xrayServers = data.servers.filter((s) => s.subLink && xrayServerIds.has(s.id));
         if (xrayServers.length === 0) return null;
         const multi = xrayServers.length > 1;
+        // Значок сервера и флаг страны — вместе (🏠🇫🇮), а не либо-либо.
         const flagOf = (s: (typeof xrayServers)[number]) =>
-          (s.flagEmoji || '').trim() || ((s.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '');
+          [(s.flagEmoji || '').trim(), (s.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? ''].filter(Boolean).join('');
         return (
           <div className="card stack" style={{ gap: 10 }}>
             <div>

@@ -116,7 +116,7 @@ export const mockApi: ApiClient = {
       devices: u ? clone(state.devices.filter((d) => d.userId === u.id)) : [],
       servers: clone(state.servers).map((s) => ({
         id: s.id, name: s.name, country: s.country, flagEmoji: s.flagEmoji ?? null, host: s.host, protocols: s.protocols,
-        isDefault: s.isDefault, recommended: s.recommended, online: s.agent === 'online' && s.endpointOk,
+        recommended: s.recommended, online: s.agent === 'online' && s.endpointOk,
         subLink:
           u && s.protocols.includes('xray') && u.allowedServers.includes(s.id) && !s.detached
             ? `https://vpn.example.ru/sub/sub-${u.id}/server/${s.id}/full`
@@ -365,7 +365,7 @@ export const mockApi: ApiClient = {
       id: nextId('s'), name: input.name, country: input.country ?? null, flagEmoji: input.flagEmoji ?? null, host: input.vpnHost || input.host,
       agent: 'online', endpointOk: true,
       protocols: input.components.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
-      trafficGb: 0, users: 0, isDefault: false, autoIssue: true, lastSyncAt: nowIso(), recommended: false,
+      trafficGb: 0, users: 0, autoIssue: true, lastSyncAt: nowIso(), recommended: false,
       agentVersion: '1.0.0',
     };
     state.servers.push(s);
@@ -429,12 +429,6 @@ export const mockApi: ApiClient = {
     s.endpointOk = false;
     s.protocols = [];
     return { ok: true };
-  },
-
-  async setServerDefault(id: string): Promise<Server[]> {
-    await wait(250);
-    state.servers.forEach((s) => (s.isDefault = s.id === id));
-    return clone(state.servers);
   },
 
   async setServerAutoIssue(id: string, on: boolean): Promise<Server> {

@@ -110,7 +110,6 @@ interface AppContextValue {
   // server ops
   addServer(input: AddServerInput): Promise<Server>;
   editServer(id: string, input: EditServerInput): Promise<Server>;
-  setServerDefault(id: string): Promise<void>;
   setServerAutoIssue(id: string, on: boolean): Promise<void>;
   deleteServer(id: string, purgeEndpoint?: boolean): Promise<void>;
 
@@ -128,26 +127,72 @@ export function useApp(): AppContextValue {
   return ctx;
 }
 
-function detectStartArea(): 'public' | 'admin' {
-  if (typeof window === 'undefined') return 'public';
-  // Основной путь — реальный /admin (можно дать ссылку «сайт/admin»). Легаси-якорь
-  // #admin поддерживаем для старых закладок.
-  const p = window.location.pathname;
-  if (p === '/admin' || p.startsWith('/admin/')) return 'admin';
-  return window.location.hash.includes('admin') ? 'admin' : 'public';
+// ── path-роутинг ──
+// Каждый экран — свой URL: /admin/users/<id>, /admin/settings, /cabinet, /connect…
+// Работают F5 (deep-link), кнопка «назад» (popstate) и ссылки на конкретные экраны.
+// Сложные параметры (issued, wizardMode) в URL не сериализуем: после F5 экран
+// откроется в своём начальном состоянии — это осознанно.
+
+/** URL для состояния навигации. login не имеет своего URL (это оверлей поверх /admin/*). */
+function pathForNav(nav: NavState): string {
+  if (nav.area === 'admin') {
+    switch (nav.route) {
+      case 'users': return '/admin/users';
+      case 'user-create': return '/admin/users/new';
+      case 'user-created': return '/admin/users/created';
+      case 'user-card': return nav.params.userId ? `/admin/users/${nav.params.userId}` : '/admin/users';
+      case 'servers': return '/admin/servers';
+      case 'server-wizard': return '/admin/servers/new';
+      case 'telegram': return '/admin/telegram';
+      case 'apps': return '/admin/apps';
+      case 'logs': return '/admin/logs';
+      case 'settings': return '/admin/settings';
+      default: return '/admin'; // dashboard и login
+    }
+  }
+  switch (nav.route) {
+    case 'cabinet': return '/cabinet';
+    case 'wizard': return '/connect';
+    case 'devices': return '/devices';
+    case 'apps': return '/apps';
+    default: return '/';
+  }
 }
 
-/** Держим адресную строку в согласии с областью: админка → /admin, público → корень
- *  (кроме персональной ссылки /k/…, её не трогаем). Через replaceState — без перезагрузки;
- *  при F5 сервер отдаёт SPA (index.html) и detectStartArea вернёт ту же область. */
-function syncUrl(area: 'public' | 'admin'): void {
-  if (typeof window === 'undefined') return;
-  const p = window.location.pathname;
-  if (area === 'admin') {
-    if (p !== '/admin') window.history.replaceState(null, '', '/admin');
-  } else if (p === '/admin' || p.startsWith('/admin/')) {
-    window.history.replaceState(null, '', '/');
+/** Обратное преобразование: URL → состояние навигации (для старта и кнопки «назад»). */
+function navForPath(p: string): NavState {
+  if (p === '/admin' || p.startsWith('/admin/')) {
+    const seg = p.slice('/admin'.length).split('/').filter(Boolean);
+    if (seg[0] === 'users') {
+      if (!seg[1]) return { area: 'admin', route: 'users', params: {} };
+      if (seg[1] === 'new') return { area: 'admin', route: 'user-create', params: {} };
+      if (seg[1] === 'created') return { area: 'admin', route: 'user-created', params: {} };
+      return { area: 'admin', route: 'user-card', params: { userId: seg[1] } };
+    }
+    if (seg[0] === 'servers') {
+      return seg[1] === 'new'
+        ? { area: 'admin', route: 'server-wizard', params: {} }
+        : { area: 'admin', route: 'servers', params: {} };
+    }
+    if (seg[0] === 'telegram' || seg[0] === 'apps' || seg[0] === 'logs' || seg[0] === 'settings') {
+      return { area: 'admin', route: seg[0], params: {} };
+    }
+    return { area: 'admin', route: 'dashboard', params: {} };
   }
+  if (p === '/cabinet') return { area: 'public', route: 'cabinet', params: {} };
+  if (p === '/connect') return { area: 'public', route: 'wizard', params: {} };
+  if (p === '/devices') return { area: 'public', route: 'devices', params: {} };
+  if (p === '/apps') return { area: 'public', route: 'apps', params: {} };
+  return { area: 'public', route: 'home', params: {} };
+}
+
+function initialNav(): NavState {
+  if (typeof window === 'undefined') return { area: 'public', route: 'home', params: {} };
+  // Легаси-якорь #admin поддерживаем для старых закладок.
+  if (window.location.hash.includes('admin') && !window.location.pathname.startsWith('/admin')) {
+    return { area: 'admin', route: 'dashboard', params: {} };
+  }
+  return navForPath(window.location.pathname);
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -164,12 +209,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isMobile, setIsMobile] = useState(
     typeof window !== 'undefined' ? window.matchMedia('(max-width: 860px)').matches : false,
   );
-  const startArea = detectStartArea();
-  const [nav, setNav] = useState<NavState>({
-    area: startArea,
-    route: startArea === 'admin' ? 'login' : 'home',
-    params: {},
-  });
+  // Стартовое состояние — из URL (deep-link): /admin/settings откроет настройки
+  // (после входа, если сессии нет — AdminShell покажет экран входа, маршрут сохранится).
+  const [nav, setNav] = useState<NavState>(initialNav);
 
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -226,7 +268,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (!alive) return;
         setPublicData(pd);
         setPublicUser(pd.user);
-        if (m && pd.user) setNav({ area: 'public', route: 'cabinet', params: {} });
+        if (m && pd.user) {
+          setNav({ area: 'public', route: 'cabinet', params: {} });
+          window.history.replaceState(null, '', '/cabinet'); // URL экрана, токена в истории нет
+        }
         if (linkError) setLinkNotice(linkError);
         try {
           const full = await api.getInitialData();
@@ -257,9 +302,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  // Один раз на маунт приводим адрес в согласие с областью (легаси #admin → /admin).
+  // Один раз на маунт нормализуем адрес: легаси-якорь #admin и /k/<токен> уже
+  // разобраны в initialNav/tokenLogin — приводим строку к каноническому пути экрана.
   useEffect(() => {
-    syncUrl(startArea);
+    const path = pathForNav(nav);
+    if (window.location.pathname !== path || window.location.hash) window.history.replaceState(null, '', path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -271,15 +318,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const showConfirm = useCallback((opts: ConfirmOptions) => setConfirm(opts), []);
 
-  const goPublic = useCallback((route: PublicRoute, params: NavParams = {}) => {
-    setNav({ area: 'public', route, params });
-    syncUrl('public');
+  // Навигация двигает и URL (pushState) — работают «назад», F5 и ссылки на экраны.
+  const pushNav = useCallback((next: NavState) => {
+    setNav(next);
+    const path = pathForNav(next);
+    if (window.location.pathname !== path) window.history.pushState(null, '', path);
     window.scrollTo(0, 0);
   }, []);
+  const goPublic = useCallback((route: PublicRoute, params: NavParams = {}) => {
+    pushNav({ area: 'public', route, params });
+  }, [pushNav]);
   const goAdmin = useCallback((route: AdminRoute, params: NavParams = {}) => {
-    setNav({ area: 'admin', route, params });
-    syncUrl('admin');
-    window.scrollTo(0, 0);
+    pushNav({ area: 'admin', route, params });
+  }, [pushNav]);
+
+  // Кнопка «назад/вперёд» браузера: восстанавливаем экран из URL без нового push.
+  useEffect(() => {
+    const onPop = () => setNav(navForPath(window.location.pathname));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
   }, []);
 
   // ── helpers to patch cached collections ──
@@ -399,6 +456,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setData(null);
     void api.adminLogout().catch(() => {});
     setNav({ area: 'admin', route: 'login', params: {} });
+    if (window.location.pathname !== '/admin') window.history.pushState(null, '', '/admin');
   }, []);
 
   // ── user ops ──
@@ -492,13 +550,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [patchData],
   );
-  const setServerDefault = useCallback(
-    async (id: string) => {
-      const servers = await api.setServerDefault(id);
-      patchData((d) => ({ ...d, servers }));
-    },
-    [patchData],
-  );
   const setServerAutoIssue = useCallback(
     async (id: string, on: boolean) => {
       const s = await api.setServerAutoIssue(id, on);
@@ -553,7 +604,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices,
       adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
-      addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer,
+      addServer, editServer, setServerAutoIssue, deleteServer,
       saveTelegram, saveApps, saveSettings,
     }),
     [
@@ -561,7 +612,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices, adminLogin, adminLogout,
       createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
-      addServer, editServer, setServerDefault, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
+      addServer, editServer, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],
   );
 

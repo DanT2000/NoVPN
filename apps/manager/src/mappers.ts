@@ -72,7 +72,6 @@ export function rowToServer(r: any): Server {
     protocols: j<Server['protocols']>(r.protocols, []),
     trafficGb: r.traffic_gb ?? 0,
     users: r.users ?? 0,
-    isDefault: b(r.is_default),
     autoIssue: b(r.auto_issue),
     lastSyncAt: r.last_sync_at ?? null,
     recommended: b(r.recommended),

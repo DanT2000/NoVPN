@@ -17,9 +17,9 @@ const D = 86400000;
 const iso = (t: number) => new Date(t).toISOString();
 
 export const SERVERS: Server[] = [
-  { id: 's1', name: 'Нидерланды', country: 'NL', host: 'nl1.novpn.example', agent: 'online', endpointOk: true, protocols: ['xray', 'amneziawg'], trafficGb: 412.7, users: 14, isDefault: true, autoIssue: true, lastSyncAt: iso(now - 4 * 60000), recommended: true },
-  { id: 's2', name: 'Германия', country: 'DE', host: 'de1.novpn.example', agent: 'online', endpointOk: true, protocols: ['xray'], trafficGb: 268.1, users: 9, isDefault: false, autoIssue: true, lastSyncAt: iso(now - 11 * 60000), recommended: false },
-  { id: 's3', name: 'США', country: 'US', host: 'us1.novpn.example', agent: 'offline', endpointOk: false, protocols: ['xray', 'amneziawg'], trafficGb: 96.4, users: 3, isDefault: false, autoIssue: false, lastSyncAt: iso(now - 26 * 3600000), recommended: false },
+  { id: 's1', name: 'Нидерланды', country: 'NL', host: 'nl1.novpn.example', agent: 'online', endpointOk: true, protocols: ['xray', 'amneziawg'], trafficGb: 412.7, users: 14, autoIssue: true, lastSyncAt: iso(now - 4 * 60000), recommended: true },
+  { id: 's2', name: 'Германия', country: 'DE', host: 'de1.novpn.example', agent: 'online', endpointOk: true, protocols: ['xray'], trafficGb: 268.1, users: 9, autoIssue: true, lastSyncAt: iso(now - 11 * 60000), recommended: false },
+  { id: 's3', name: 'США', country: 'US', host: 'us1.novpn.example', agent: 'offline', endpointOk: false, protocols: ['xray', 'amneziawg'], trafficGb: 96.4, users: 3, autoIssue: false, lastSyncAt: iso(now - 26 * 3600000), recommended: false },
 ];
 
 export const USERS: User[] = [

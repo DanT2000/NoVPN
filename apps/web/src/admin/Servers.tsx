@@ -548,7 +548,7 @@ function Metric({ label, value, color }: { label: string; value: React.ReactNode
 }
 
 export function Servers() {
-  const { data, isMobile, goAdmin, setServerAutoIssue, setServerDefault, deleteServer, showToast, showConfirm } = useApp();
+  const { data, isMobile, goAdmin, setServerAutoIssue, deleteServer, showToast, showConfirm } = useApp();
   const [editing, setEditing] = useState<string | null>(null);
   if (!data) return null;
 
@@ -596,7 +596,6 @@ export function Servers() {
                   <div className="row" style={{ gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
                     <Dot color={dotColor} />
                     <span style={{ fontWeight: 700, fontSize: 15 }}>{s.flagEmoji ? `${s.flagEmoji} ` : ''}{title}</span>
-                    {s.isDefault ? <span className="badge">по умолчанию</span> : null}
                     {s.detached ? <span className="badge" style={{ background: 'var(--surface-btn-2, #333)', color: 'var(--text-muted-2)' }} title="Физический сервер отвязан. Endpoint (домен/порты/ключи/конфиги) сохранён — подключите новый сервер на тот же домен.">endpoint сохранён</span> : null}
                   </div>
                   <span
@@ -637,17 +636,6 @@ export function Servers() {
                     >
                       {editing === s.id ? 'Скрыть' : 'Изменить'}
                     </button>
-                    {!s.isDefault ? (
-                      <button
-                        className="btn btn-outline btn-sm"
-                        onClick={async () => {
-                          await setServerDefault(s.id);
-                          showToast(`«${s.name}» — сервер по умолчанию`);
-                        }}
-                      >
-                        Сделать по умолчанию
-                      </button>
-                    ) : null}
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() =>

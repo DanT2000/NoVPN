@@ -126,9 +126,10 @@ function buildUserXrayFull(
   overQuota: boolean,
 ): string | null {
   if (links.length === 0) return null;
-  // Свой значок сервера (эмодзи) приоритетнее флага страны; иначе флаг из country.
-  const flag = srv ? (srv.flagEmoji || '').trim() || ((srv.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '') : '';
-  const title = srv ? [flag, srv.name].filter(Boolean).join(' ') : '';
+  // Свой значок сервера И флаг страны показываем ВМЕСТЕ (🏠🇫🇮), а не либо-либо.
+  const emoji = srv ? (srv.flagEmoji || '').trim() : '';
+  const cflag = srv ? ((srv.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '') : '';
+  const title = srv ? [[emoji, cflag].filter(Boolean).join(''), srv.name].filter(Boolean).join(' ') : '';
   // Настройки генерации ПЕР-СЕРВЕР (обход-домены, LAN, набор фоллбэк-прокси, полный
   // туннель), с фолбэком на глобальные, если сервер не задан (агрегированная подписка).
   const cfg = srv
@@ -1074,9 +1075,6 @@ router.get('/api/admin/servers/:id/proxy', requireAdmin, (req, res) => {
   res.json({ proxy: getServerProxy(s.host), host: s.host });
 });
 
-router.post('/api/admin/servers/:id/default', requireAdmin, (req, res) => {
-  res.json(repo.setServerDefault(req.params.id!));
-});
 router.post('/api/admin/servers/:id/auto-issue', requireAdmin, (req, res) => {
   const on = !!req.body?.on;
   res.json(repo.updateServerFields(req.params.id!, { auto_issue: on ? 1 : 0 }));

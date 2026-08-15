@@ -109,7 +109,6 @@ export const httpApi: ApiClient = {
   provisionStatus: (id: string) =>
     req<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>('GET', `/api/admin/servers/${id}/provision-status`),
   uninstallServer: (id: string, purgeKeys?: boolean) => req<Ok>('POST', `/api/admin/servers/${id}/uninstall`, { purgeKeys: !!purgeKeys }),
-  setServerDefault: (id) => req<Server[]>('POST', `/api/admin/servers/${id}/default`),
   setServerAutoIssue: (id, on) => req<Server>('POST', `/api/admin/servers/${id}/auto-issue`, { on }),
   deleteServer: (id, purgeEndpoint?: boolean) => req<Ok>('DELETE', `/api/admin/servers/${id}`, { purgeEndpoint: !!purgeEndpoint }),
   getEndpointProfile: (host: string) => req<{ profile: import('../types').EndpointProfileView; config: import('../types').EndpointConfigView }>('GET', `/api/admin/endpoint-profile?host=${encodeURIComponent(host)}`),

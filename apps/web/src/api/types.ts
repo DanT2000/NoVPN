@@ -179,7 +179,6 @@ export interface ApiClient {
   provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }): Promise<{ ok: boolean; running: boolean }>;
   provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;
   uninstallServer(id: string, purgeKeys?: boolean): Promise<Ok>;
-  setServerDefault(id: string): Promise<Server[]>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
   deleteServer(id: string, purgeEndpoint?: boolean): Promise<Ok>;
 

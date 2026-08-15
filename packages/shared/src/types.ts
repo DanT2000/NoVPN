@@ -61,7 +61,6 @@ export interface Server {
   protocols: Protocol[];
   trafficGb: number;
   users: number;
-  isDefault: boolean;
   autoIssue: boolean;
   lastSyncAt: string | null;
   recommended: boolean;
@@ -319,11 +318,10 @@ export interface PublicServerView {
   id: string;
   name: string;
   country: string | null;
-  /** Свой значок сервера (эмодзи), приоритетнее флага страны. null → берётся флаг из country. */
+  /** Свой значок сервера (эмодзи). Показывается ВМЕСТЕ с флагом страны (🏠🇫🇮). */
   flagEmoji: string | null;
   host: string;
   protocols: Protocol[];
-  isDefault: boolean;
   recommended: boolean;
   /** Сервер доступен для выпуска конфига. */
   online: boolean;
