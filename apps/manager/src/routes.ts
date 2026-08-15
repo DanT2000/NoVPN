@@ -148,7 +148,10 @@ router.get('/sub/:token/full', (req, res) => {
       }
     }
   }
-  const json = buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, cfg.whitelistDomains, cfg.lanAccess);
+  // Пер-серверный «продвинутый режим» выкл → полный туннель: никаких исключений
+  // (РФ-зона, торренты — всё через VPN). Для домашнего сервера, где нужен весь трафик.
+  const disableWhitelist = cfg.xrayWhitelist === false;
+  const json = buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, cfg.whitelistDomains, cfg.lanAccess, disableWhitelist);
   if (!json) return res.status(404).send(''); // все ссылки битые → не отдаём all-direct утечку
   // Без attachment — этот адрес используется КАК ПОДПИСКА (V2RayNG/Xray сами
   // забирают полный конфиг и обновляют маршрутизацию). Браузер просто покажет JSON.

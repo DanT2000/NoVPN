@@ -96,10 +96,12 @@ export function buildWhitelistXrayConfig(
   title = '',
   whitelistRoutes: string[] = RU_WHITELIST_ROUTES,
   lanAccess = false,
+  disableWhitelist = false,
 ): string {
-  // Название профиля (remarks): по серверу — «🇫🇮 Finland | Обход белых списков».
-  // Если сервер не передан — общий заголовок с названием панели.
-  const remarks = title ? `${title} | Обход белых списков` : `${appName} — обход белых списков`;
+  // Название профиля (remarks). disableWhitelist=true → «весь трафик через VPN» (никаких
+  // исключений: ни RU-доменов, ни торрентов напрямую) — режим для домашнего/полного туннеля.
+  const mode = disableWhitelist ? 'Весь трафик через VPN' : 'Обход белых списков';
+  const remarks = title ? `${title} | ${mode}` : `${appName} — ${disableWhitelist ? 'весь трафик через VPN' : 'обход белых списков'}`;
   // Список доменов может приходить из редактируемой настройки админки; нормализуем и,
   // если он пуст, откатываемся к встроенному дефолту (иначе обход бы не работал).
   const routes = normalizeWhitelistRoutes(whitelistRoutes);
@@ -134,20 +136,26 @@ export function buildWhitelistXrayConfig(
   ];
   const whitelistRules = [
     // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
-    { type: 'field', outboundTag: 'direct', domain: wlRoutes },
+    // disableWhitelist=true → правило УБИРАЕМ: РФ-зона тоже идёт через VPN (полный туннель).
+    ...(disableWhitelist ? [] : [{ type: 'field', outboundTag: 'direct', domain: wlRoutes }]),
     // Приватные/локальные адреса. По умолчанию (lanAccess=false) — напрямую (клиент
     // держит свою локалку сам, приватные адреса не уходят в туннель). При lanAccess=true
     // это правило УБИРАЕМ: приватные адреса пойдут через прокси/туннель к серверу — так
     // самохостер добирается до локальной сети СВОЕГО сервера (дома) через VPN.
     ...(lanAccess ? [] : [{ type: 'field', outboundTag: 'direct', ip: PRIVATE_IPS }]),
-    // Торренты — мимо VPN.
-    { type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] },
+    // Торренты — мимо VPN (при disableWhitelist тоже убираем: никаких исключений).
+    ...(disableWhitelist ? [] : [{ type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] }]),
   ];
+  // QUIC (UDP/443) через прокси-цепочку нестабилен: YouTube/Google-сервисы «зависают»,
+  // т.к. браузер открыл QUIC, а UDP по VLESS/прокси теряется, и отката на TCP не происходит.
+  // Блокируем UDP/443 → браузер сразу падает на надёжный HTTP/2 (TCP). RU-домены уже ушли
+  // direct правилами выше, их QUIC этот блок не затрагивает (порядок правил: whitelist → quic).
+  const quicBlock = { type: 'field', outboundTag: 'block', network: 'udp', port: 443 };
 
   // Один тир (только Xray или только прокси) — без аварийного переключения между тирами.
   if (tiers.length <= 1) {
     const tier0 = tiers[0] ?? [];
-    const rules: Array<Record<string, unknown>> = [...whitelistRules];
+    const rules: Array<Record<string, unknown>> = [...whitelistRules, quicBlock];
     const cfg: Record<string, unknown> = {
       remarks,
       meta: { serverDescription: remarks },
@@ -173,7 +181,7 @@ export function buildWhitelistXrayConfig(
   // следующий тир (loopback возвращает трафик через dokodemo-инбаунд), и так до SOCKS,
   // а если все мертвы — напрямую. observatory следит за живостью тиров.
   const n = tiers.length;
-  const rules: Array<Record<string, unknown>> = [...whitelistRules];
+  const rules: Array<Record<string, unknown>> = [...whitelistRules, quicBlock];
   const balancers: Array<Record<string, unknown>> = [];
   for (let i = 1; i < n; i++) {
     inbounds.push({

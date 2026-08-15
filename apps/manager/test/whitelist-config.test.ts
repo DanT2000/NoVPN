@@ -70,6 +70,34 @@ test('lanAccess=true: правило direct для приватных адрес
   assert.equal(privRule, undefined, 'приватные адреса не должны форситься в direct при lanAccess');
 });
 
+test('disableWhitelist=true + lanAccess=true: полный туннель — НИКАКИХ direct-исключений', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '', undefined, true, true));
+  const directDomain = cfg.routing.rules.find((r: any) => r.outboundTag === 'direct' && r.domain);
+  const privIp = cfg.routing.rules.find((r: any) => r.outboundTag === 'direct' && Array.isArray(r.ip));
+  const torrent = cfg.routing.rules.find((r: any) => Array.isArray(r.protocol) && r.protocol.includes('bittorrent'));
+  assert.equal(directDomain, undefined, 'РФ-домены идут через VPN, не direct');
+  assert.equal(privIp, undefined, 'приватные/локалка через VPN (lanAccess)');
+  assert.equal(torrent, undefined, 'торренты через VPN');
+  assert.match(cfg.remarks, /через VPN/);
+});
+
+test('QUIC-блок: UDP/443 в blackhole, ПОСЛЕ whitelist-direct (RU QUIC остаётся direct)', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN'));
+  const rules = cfg.routing.rules;
+  const quic = rules.find((r: any) => r.outboundTag === 'block' && r.network === 'udp' && r.port === 443);
+  assert.ok(quic, 'должно быть правило блокировки QUIC (udp/443 → block)');
+  const directIdx = rules.findIndex((r: any) => r.outboundTag === 'direct' && r.domain);
+  const quicIdx = rules.findIndex((r: any) => r.outboundTag === 'block' && r.network === 'udp');
+  assert.ok(directIdx >= 0 && quicIdx > directIdx, 'QUIC-блок должен идти ПОСЛЕ whitelist-direct, чтобы RU QUIC уходил direct');
+});
+
+test('QUIC-блок присутствует и в конфиге с прокси-фоллбэком (многотировом)', () => {
+  const proxies: ProxyFallback[] = [{ kind: 'socks', host: '1.vpn.example.com', port: 1080, user: 'u', pass: 'p' }];
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', proxies));
+  const quic = cfg.routing.rules.find((r: any) => r.outboundTag === 'block' && r.network === 'udp' && r.port === 443);
+  assert.ok(quic, 'QUIC-блок должен быть и в многотировом конфиге с балансировщиками');
+});
+
 test('бренд в remarks: без имени сервера используется appName (кастомный бренд)', () => {
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'МойСервис'));
   assert.match(cfg.remarks, /^МойСервис — обход/);
