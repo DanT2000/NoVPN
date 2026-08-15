@@ -795,17 +795,20 @@ ${wantHttps ? 'openp $HTTPS_PORT' : 'true'}
 ${
   wantHttps
     ? `
-# --- HTTPS через certbot + stunnel ---
-apt-get install -y -qq certbot stunnel4 >/tmp/apt.log 2>&1
+# --- HTTPS через certbot + stunnel. НЕ фатально: если сертификат не выпустился (DNS ещё
+# не пропагировался / порт 80 недоступен) — ставим только HTTP/SOCKS, сервер поднимается,
+# HTTPS добавится позже переустановкой. Одна проблема с cert не рушит всю установку. ---
+apt-get install -y -qq certbot stunnel4 >/tmp/apt.log 2>&1 || true
 # certbot --standalone слушает ВХОДЯЩИЙ :80 для ACME HTTP-01 — открываем порт 80 в
 # файрволе, иначе на ufw-серверах challenge не доходит и сертификат не выпускается (#13).
 openp 80
 if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-  certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$DOMAIN" >/tmp/cb.log 2>&1
+  certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$DOMAIN" >/tmp/cb.log 2>&1 || true
 fi
-mkdir -p /etc/stunnel
-printf 'pid = /run/stunnel-novpn.pid\\n[https-proxy]\\naccept = 0.0.0.0:%s\\nconnect = 127.0.0.1:%s\\ncert = /etc/letsencrypt/live/%s/fullchain.pem\\nkey = /etc/letsencrypt/live/%s/privkey.pem\\n' "$HTTPS_PORT" "$HTTP_PORT" "$DOMAIN" "$DOMAIN" > /etc/stunnel/novpn.conf
-cat > /etc/systemd/system/novpn-stunnel.service <<'SVC2'
+if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+  mkdir -p /etc/stunnel
+  printf 'pid = /run/stunnel-novpn.pid\\n[https-proxy]\\naccept = 0.0.0.0:%s\\nconnect = 127.0.0.1:%s\\ncert = /etc/letsencrypt/live/%s/fullchain.pem\\nkey = /etc/letsencrypt/live/%s/privkey.pem\\n' "$HTTPS_PORT" "$HTTP_PORT" "$DOMAIN" "$DOMAIN" > /etc/stunnel/novpn.conf
+  cat > /etc/systemd/system/novpn-stunnel.service <<'SVC2'
 [Unit]
 Description=NoVPN stunnel (HTTPS proxy)
 After=network.target 3proxy.service
@@ -818,14 +821,18 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 SVC2
-systemctl daemon-reload; systemctl enable novpn-stunnel >/dev/null 2>&1 || true; systemctl restart novpn-stunnel
+  systemctl daemon-reload; systemctl enable novpn-stunnel >/dev/null 2>&1 || true; systemctl restart novpn-stunnel || true
+  HTTPS_PUB="$HTTPS_PORT"
+else
+  echo "HTTPS_SKIP: сертификат для $DOMAIN не выпущен (домен должен указывать на этот сервер и порт 80 открыт) — HTTPS-прокси пропущен, HTTP/SOCKS работают"
+fi
 `
     : 'true'
 }
 echo "PUSER=$PUSER"; echo "PPASS=$PPASS"
 echo "HTTP_PORT=${wantHttp ? '$HTTP_PORT' : ''}"
 echo "SOCKS_PORT=${wantSocks ? '$SOCKS_PORT' : ''}"
-echo "HTTPS_PORT=${wantHttps ? '$HTTPS_PORT' : ''}"`;
+echo "HTTPS_PORT=${wantHttps ? '$HTTPS_PUB' : ''}"`;
   // Сборка 3proxy + apt/certbot могут занять несколько минут.
   const out = await runScript(creds(server.id), script, 420000);
   const user = grab(out, 'PUSER');
