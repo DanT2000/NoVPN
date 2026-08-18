@@ -937,6 +937,18 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     else if (!restoring && want.xray) portXray = await sshPickPort(s, 'tcp', 443).catch(() => 443);
     if (Number.isInteger(reqPortAwg) && reqPortAwg >= 1 && reqPortAwg <= 65535) portAwg = reqPortAwg;
     else if (!restoring && want.awg) portAwg = await sshPickPort(s, 'udp', undefined, [portXray]).catch(() => 51820);
+    // Прокси-порты тоже авто-подбираем: раньше были жёстко 8080/1080/8443 без проверки
+    // занятости → «наслаивались» на уже занятые на сервере порты. Теперь берём свободные,
+    // исключая xray и друг друга (все TCP). При восстановлении — сохранённые.
+    let portHttp = restoring ? savedPorts.http : 8080;
+    let portSocks = restoring ? savedPorts.socks : 1080;
+    let portHttps = restoring ? savedPorts.https : 8443;
+    if (!restoring) {
+      const usedTcp = [portXray];
+      if (want.http || want.https) { portHttp = await sshPickPort(s, 'tcp', 8080, usedTcp).catch(() => 8080); usedTcp.push(portHttp); }
+      if (want.socks) { portSocks = await sshPickPort(s, 'tcp', 1080, usedTcp).catch(() => 1080); usedTcp.push(portSocks); }
+      if (want.https) { portHttps = await sshPickPort(s, 'tcp', 8443, usedTcp).catch(() => 8443); usedTcp.push(portHttps); }
+    }
     // Подсказка «порт занят»: если админ задал порт ВРУЧНУЮ и он отличается от нашего
     // текущего — проверяем, что он свободен на сервере, иначе понятная ошибка (не молча
     // валимся при install). Свой текущий порт при переустановке «занят» нами — не проверяем.
@@ -958,7 +970,7 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
           xrayPort: portXray, awgPort: portAwg,
         })
       : {};
-    repo.saveEndpointPorts(s.host, { xray: portXray, awg: portAwg });
+    repo.saveEndpointPorts(s.host, { xray: portXray, awg: portAwg, http: portHttp, socks: portSocks, https: portHttps });
     saveServerKeys(s.host, {
       xrayRealityPrivKey: installed.realityPriv, xrayRealityPubKey: installed.realityPub,
       xrayShortId: installed.shortId, xraySni: installed.sni,
@@ -967,7 +979,7 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     });
     if (want.http || want.https || want.socks) {
       provisionStatus.set(serverId, { state: 'running', message: 'Устанавливаем прокси…', at: Date.now() });
-      const proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks });
+      const proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks, httpPort: portHttp, socksPort: portSocks, httpsPort: portHttps });
       saveServerProxy(s.host, proxy);
     }
     if (restoring) {

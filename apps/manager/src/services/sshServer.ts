@@ -723,7 +723,7 @@ PersistentKeepalive = 25`;
 // certbot+stunnel поверх HTTP-прокси). Идемпотентно, переиспользует логин/пароль.
 export async function sshInstallProxies(
   server: Server,
-  opts: { http?: boolean; https?: boolean; socks?: boolean },
+  opts: { http?: boolean; https?: boolean; socks?: boolean; httpPort?: number; socksPort?: number; httpsPort?: number },
 ): Promise<{ user: string; pass: string; httpPort: number | null; httpsPort: number | null; socksPort: number | null; httpsHost: string | null }> {
   const domain = server.host;
   // host задаёт админ — прежде чем подставлять в install-скрипт (DOMAIN=…, certbot -d),
@@ -740,7 +740,7 @@ export async function sshInstallProxies(
   const wantSocks = !!opts.socks;
   const script = `set -e
 export DEBIAN_FRONTEND=noninteractive
-HTTP_PORT=8080; SOCKS_PORT=1080; HTTPS_PORT=8443; DOMAIN=${domain}
+HTTP_PORT=${opts.httpPort || 8080}; SOCKS_PORT=${opts.socksPort || 1080}; HTTPS_PORT=${opts.httpsPort || 8443}; DOMAIN=${domain}
 # Сохраняем ВСЕ существующие логины (novpn + выданные пользователям), иначе
 # переустановка прокси сотрёт per-user учётки из конфига.
 USERSLINE=$(grep -h '^users ' /etc/3proxy/3proxy.cfg 2>/dev/null | sed 's/^users //' | tr '\\n' ' ')
@@ -996,9 +996,11 @@ out+=services
 open(p,'w').write('\\n'.join(out)+'\\n')
 print('OK users=%d'%len(users))`;
 
-// Добавить/удалить пользователя 3proxy, НЕ затирая остальных.
-function buildProxyUserScript(mode: 'add' | 'remove', login: string, pass: string): string {
+// Добавить/удалить пользователя 3proxy, НЕ затирая остальных. Порты открываем
+// РЕАЛЬНЫЕ (сервер мог поставить прокси на авто-подобранные порты, не дефолтные).
+function buildProxyUserScript(mode: 'add' | 'remove', login: string, pass: string, ports: number[] = [8080, 1080, 8443]): string {
   const py = PROXY_REBUILD_PY;
+  const opens = ports.filter((p) => Number.isInteger(p) && p >= 1 && p <= 65535).map((p) => `openp ${p}`).join('; ');
   return `set -e
 mkdir -p /var/log/3proxy
 python3 - '${mode}' '${login}' '${pass}' <<'PY'
@@ -1008,12 +1010,13 @@ chmod 600 /etc/3proxy/3proxy.cfg
 systemctl restart 3proxy
 # Открыть порты прокси в файрволе (иначе снаружи недоступны, хотя локально работают).
 openp(){ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiw active; then ufw allow "$1"/tcp >/dev/null 2>&1 || true; fi; iptables -C INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$1" -j ACCEPT 2>/dev/null || true; }
-openp 8080; openp 1080; openp 8443
+${opens}
 echo PROXY_USER_OK`;
 }
 
 export async function sshAddProxyUser(server: Server, login: string, pass: string): Promise<void> {
-  const out = await withServerLock(server.id, () => runScript(creds(server.id), buildProxyUserScript('add', login, pass), 60000));
+  const ports = [server.ports?.http, server.ports?.socks, server.ports?.https].filter((p): p is number => !!p);
+  const out = await withServerLock(server.id, () => runScript(creds(server.id), buildProxyUserScript('add', login, pass, ports.length ? ports : undefined), 60000));
   if (/NOCFG/.test(out)) throw new Error('На сервере не установлены прокси — сначала установите их в настройках сервера.');
   if (!/PROXY_USER_OK/.test(out)) throw new Error('Не удалось добавить прокси-логин на сервере.');
 }
