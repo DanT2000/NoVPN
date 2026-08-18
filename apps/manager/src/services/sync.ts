@@ -15,20 +15,25 @@ let running = false;
 // не дёргать SSH каждый цикл. sshSetXraySni идемпотентна (без рестарта, если совпало).
 const sniReconciled = new Set<string>();
 
-// Дебаунс sync-ошибок: сервер за NAT, транзиентно таймаутящий, заваливал бы журнал
-// (кап 100 строк) и вытеснял полезное у других серверов. Пишем ОДНУ ошибку на
-// (сервер+операция) не чаще раза в 30 мин; успешный проход этой операции сбрасывает
-// счётчик — так новый сбой после восстановления снова залогируется сразу.
+// Дебаунс sync-ошибок: сервер за NAT / упавший заваливал бы журнал (кап 100 строк) и
+// вытеснял полезное у других серверов. Пишем не чаще раза в 30 мин; успешный проход
+// сбрасывает счётчик. ВАЖНО: таймаут рукопожатия/коннекта = сервер НЕДОСТУПЕН ЦЕЛИКОМ,
+// дедупим по СЕРВЕРУ (одна ошибка «сервер недоступен», а не 4 — по каждой операции).
+// Прикладную ошибку конкретной операции дедупим по (сервер+операция), как раньше.
 const lastSyncErrAt = new Map<string, number>();
+const UNREACHABLE_RE = /timed out|handshake|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|таймаут/i;
 function logSyncError(serverName: string, serverId: string, op: string, e: unknown): void {
-  const key = `${serverId}|${op}`;
+  const msg = e instanceof Error ? e.message : 'сервер недоступен';
+  const unreachable = UNREACHABLE_RE.test(msg);
+  const key = unreachable ? `${serverId}|__unreachable__` : `${serverId}|${op}`;
   const now = Date.now();
   if (now - (lastSyncErrAt.get(key) ?? 0) < 30 * 60 * 1000) return;
   lastSyncErrAt.set(key, now);
-  repo.addJobError(serverName, `${op}: ${e instanceof Error ? e.message : 'сервер недоступен'}`);
+  repo.addJobError(serverName, unreachable ? `Сервер недоступен: ${msg}` : `${op}: ${msg}`);
 }
 function clearSyncErr(serverId: string, op: string): void {
   lastSyncErrAt.delete(`${serverId}|${op}`);
+  lastSyncErrAt.delete(`${serverId}|__unreachable__`); // сервер ответил — снимаем и «недоступен»
 }
 
 export async function syncAllServers(): Promise<void> {
