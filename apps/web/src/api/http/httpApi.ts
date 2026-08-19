@@ -11,6 +11,9 @@ import type {
   IssueDeviceResult,
   ProxyAccount,
   PublicBootstrapData,
+  RoutingCheckResult,
+  RoutingFileFull,
+  RoutingFileMeta,
   Server,
   TelegramSettings,
   TestServerConnectionResult,
@@ -138,4 +141,11 @@ export const httpApi: ApiClient = {
   saveSettings: (input: AppSettings) => req<AppSettings>('PUT', '/api/admin/settings', input),
   getStats: (days: number) => req<{ days: number; series: StatsPoint[] }>('GET', `/api/admin/stats?days=${days}`),
   getHealth: () => req<{ servers: ServerHealth[] }>('GET', '/api/admin/health'),
+
+  getRoutingFiles: () => req<{ files: RoutingFileMeta[] }>('GET', '/api/admin/routing'),
+  getRoutingFile: (name) => req<RoutingFileFull>('GET', `/api/admin/routing/${name}`),
+  saveRoutingFile: (name, content) =>
+    req<{ meta: RoutingFileMeta; changed: boolean }>('PUT', `/api/admin/routing/${name}`, { content }),
+  saveRoutingSource: (name, patch) => req<{ meta: RoutingFileMeta }>('PUT', `/api/admin/routing/${name}/source`, patch),
+  checkRoutingSource: (name) => req<RoutingCheckResult>('POST', `/api/admin/routing/${name}/check`),
 };

@@ -152,6 +152,29 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value TEXT
 );
 
+-- Умная маршрутизация: три управляемых JSON-файла (upstream/sites/apps) для NoVPN
+-- Desktop. content — ровно то, что отдаётся по /routing/<name>.json (версия НЕ вшита
+-- внутрь). Каждый файл независимо: локальный или зеркало внешнего URL.
+CREATE TABLE IF NOT EXISTS routing_files (
+  name TEXT PRIMARY KEY,
+  content TEXT NOT NULL DEFAULT '{}',
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL,
+  root_type TEXT,
+  entry_count INTEGER,
+  mode TEXT NOT NULL DEFAULT 'local',
+  source_url TEXT NOT NULL DEFAULT '',
+  auto_sync INTEGER NOT NULL DEFAULT 0,
+  etag TEXT,
+  last_modified TEXT,
+  last_check_at TEXT,
+  last_ok_at TEXT,
+  status TEXT NOT NULL DEFAULT 'idle',
+  status_reason TEXT NOT NULL DEFAULT '',
+  last_added INTEGER,
+  last_removed INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS admin_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at TEXT NOT NULL,

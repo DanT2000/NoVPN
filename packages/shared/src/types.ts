@@ -226,6 +226,59 @@ export interface AppSettings {
   dailyDigest?: boolean;
 }
 
+// ── Умная маршрутизация (Smart Routing) — управляемые JSON-файлы для NoVPN Desktop ──
+// Три независимых файла. Каждый может управляться локально ИЛИ зеркалить внешний URL.
+// Публичные URL панели неизменны: /routing/<name>.json.
+export type RoutingFileName = 'upstream' | 'sites' | 'apps';
+export type RoutingMode = 'local' | 'mirror';
+/** Состояние последней проверки внешнего источника. */
+export type RoutingSyncStatus = 'idle' | 'ok' | 'nochange' | 'error' | 'rejected';
+
+export interface RoutingFileMeta {
+  name: RoutingFileName;
+  version: number;
+  updatedAt: string; // ISO
+  size: number; // байт (UTF-8) текущего сохранённого содержимого
+  valid: boolean; // сохранённое всегда валидно (на всякий случай флаг)
+  rootType: 'array' | 'object' | 'other' | null;
+  /** Число элементов, если структуру можно нормально определить, иначе null (§11). */
+  entryCount: number | null;
+  // источник (режим зеркала)
+  mode: RoutingMode;
+  sourceUrl: string;
+  autoSync: boolean;
+  intervalHours: number; // фиксировано 1
+  lastCheckAt: string | null;
+  lastOkAt: string | null;
+  status: RoutingSyncStatus;
+  statusReason: string; // человекочитаемая причина (ошибка/отклонение/итог)
+  lastAdded: number | null;
+  lastRemoved: number | null;
+}
+
+export interface RoutingFileFull extends RoutingFileMeta {
+  content: string; // ровно сохранённый JSON-текст (то, что отдаёт публичный URL)
+}
+
+export interface RoutingSourcePatch {
+  mode?: RoutingMode;
+  sourceUrl?: string;
+  autoSync?: boolean;
+}
+
+/** Результат ручной проверки «Проверить сейчас» (ничего не публикует). */
+export interface RoutingCheckResult {
+  ok: boolean; // запрос+валидация прошли
+  changed: boolean; // содержимое отличается от сохранённого
+  status: RoutingSyncStatus;
+  reason: string;
+  count: number | null;
+  added: number | null;
+  removed: number | null;
+  /** Новое содержимое для «Открыть в редакторе» (только если ok && changed). */
+  content?: string;
+}
+
 export interface LogEntry {
   at: string;
   text: string;

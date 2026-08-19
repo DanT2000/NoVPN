@@ -12,6 +12,11 @@ import type {
   ProxyAccount,
   ProxyType,
   PublicBootstrapData,
+  RoutingCheckResult,
+  RoutingFileFull,
+  RoutingFileMeta,
+  RoutingFileName,
+  RoutingSourcePatch,
   Server,
   TelegramSettings,
   TestServerConnectionResult,
@@ -202,6 +207,13 @@ export interface ApiClient {
 
   // ── admin: settings ──
   saveSettings(input: AppSettings): Promise<AppSettings>;
+
+  // ── admin: умная маршрутизация (файлы для NoVPN Desktop) ──
+  getRoutingFiles(): Promise<{ files: RoutingFileMeta[] }>;
+  getRoutingFile(name: RoutingFileName): Promise<RoutingFileFull>;
+  saveRoutingFile(name: RoutingFileName, content: string): Promise<{ meta: RoutingFileMeta; changed: boolean }>;
+  saveRoutingSource(name: RoutingFileName, patch: RoutingSourcePatch): Promise<{ meta: RoutingFileMeta }>;
+  checkRoutingSource(name: RoutingFileName): Promise<RoutingCheckResult>;
 
   // ── admin: графики истории + здоровье серверов ──
   getStats(days: number): Promise<{ days: number; series: StatsPoint[] }>;

@@ -26,7 +26,8 @@ import type {
 export type PublicRoute = 'home' | 'cabinet' | 'wizard' | 'devices' | 'apps';
 export type AdminRoute =
   | 'login' | 'dashboard' | 'users' | 'user-create' | 'user-created'
-  | 'user-card' | 'servers' | 'server-wizard' | 'telegram' | 'apps' | 'logs' | 'settings';
+  | 'user-card' | 'servers' | 'server-wizard' | 'telegram' | 'apps' | 'logs' | 'settings'
+  | 'smart-routing';
 
 export interface NavParams {
   userId?: string;
@@ -147,6 +148,7 @@ function pathForNav(nav: NavState): string {
       case 'apps': return '/admin/apps';
       case 'logs': return '/admin/logs';
       case 'settings': return '/admin/settings';
+      case 'smart-routing': return '/admin/smart-routing';
       default: return '/admin'; // dashboard и login
     }
   }
@@ -174,7 +176,7 @@ function navForPath(p: string): NavState {
         ? { area: 'admin', route: 'server-wizard', params: {} }
         : { area: 'admin', route: 'servers', params: {} };
     }
-    if (seg[0] === 'telegram' || seg[0] === 'apps' || seg[0] === 'logs' || seg[0] === 'settings') {
+    if (seg[0] === 'telegram' || seg[0] === 'apps' || seg[0] === 'logs' || seg[0] === 'settings' || seg[0] === 'smart-routing') {
       return { area: 'admin', route: seg[0], params: {} };
     }
     return { area: 'admin', route: 'dashboard', params: {} };

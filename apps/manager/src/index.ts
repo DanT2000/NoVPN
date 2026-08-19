@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { seedIfEmpty } from './seed.js';
 import { createApp } from './app.js';
 import { startSyncLoop } from './services/sync.js';
+import { startRoutingSyncLoop } from './services/routingSync.js';
 import { startBot, notifyAdmin } from './services/telegram.js';
 import * as repo from './repo.js';
 
@@ -66,6 +67,7 @@ const app = createApp();
 app.listen(config.port, () => {
   console.log(`[NoVPN] панель слушает :${config.port}`);
   startSyncLoop();
+  startRoutingSyncLoop();
   // Бот запускается best-effort: его сбой не должен помешать старту панели.
   setTimeout(() => {
     startBot().catch((e) => console.error('[NoVPN] startBot:', e instanceof Error ? e.message : e));

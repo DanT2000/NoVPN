@@ -14,6 +14,8 @@ import type {
   LegacyPort,
   PublicBootstrapData,
   PublicUserView,
+  RoutingFileMeta,
+  RoutingFileFull,
   Server,
   ServerPorts,
   TelegramSettings,
@@ -21,6 +23,7 @@ import type {
 } from '@novpn/shared';
 import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
+import { analyzeShape } from './lib/routingJson.js';
 import { decryptSecret, encConf } from './lib/crypto.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
@@ -864,6 +867,127 @@ export function allDownloadRefs(): Array<{ appId: string; platform: string; name
   for (const a of listApps())
     for (const p of a.platforms) if (p.downloadName) out.push({ appId: a.id, platform: p.platform, name: p.downloadName });
   return out;
+}
+
+// ── умная маршрутизация (routing files) ──
+const ROUTING_ORDER: RoutingFileMeta['name'][] = ['upstream', 'sites', 'apps'];
+
+function rowToRoutingMeta(r: any): RoutingFileMeta {
+  return {
+    name: r.name,
+    version: r.version ?? 1,
+    updatedAt: r.updated_at,
+    size: Buffer.byteLength(String(r.content ?? ''), 'utf8'),
+    valid: true,
+    rootType: r.root_type ?? null,
+    entryCount: r.entry_count ?? null,
+    mode: r.mode === 'mirror' ? 'mirror' : 'local',
+    sourceUrl: r.source_url ?? '',
+    autoSync: r.auto_sync === 1,
+    intervalHours: 1,
+    lastCheckAt: r.last_check_at ?? null,
+    lastOkAt: r.last_ok_at ?? null,
+    status: r.status ?? 'idle',
+    statusReason: r.status_reason ?? '',
+    lastAdded: r.last_added ?? null,
+    lastRemoved: r.last_removed ?? null,
+  };
+}
+
+export function listRoutingFiles(): RoutingFileMeta[] {
+  return (db.prepare('SELECT * FROM routing_files').all() as any[])
+    .map(rowToRoutingMeta)
+    .sort((a, b) => ROUTING_ORDER.indexOf(a.name) - ROUTING_ORDER.indexOf(b.name));
+}
+/** Сырая строка (со служебными полями etag/last_modified) — для сервиса зеркала. */
+export function getRoutingRow(name: string): any | null {
+  return db.prepare('SELECT * FROM routing_files WHERE name = ?').get(name) ?? null;
+}
+export function getRoutingFull(name: string): RoutingFileFull | null {
+  const r = getRoutingRow(name);
+  if (!r) return null;
+  return { ...rowToRoutingMeta(r), content: String(r.content ?? '') };
+}
+/** Только содержимое (для публичной отдачи /routing/<name>.json). null → нет файла. */
+export function getRoutingContent(name: string): string | null {
+  const r = db.prepare('SELECT content FROM routing_files WHERE name = ?').get(name) as { content: string } | undefined;
+  return r ? String(r.content ?? '') : null;
+}
+
+/** Ручное сохранение из редактора. Версия растёт только при реальном изменении
+ *  СТРОКИ (уважаем форматирование администратора). Возвращает {meta, changed}. */
+export function saveRoutingContent(name: string, content: string): { meta: RoutingFileMeta; changed: boolean } {
+  const cur = getRoutingRow(name);
+  if (!cur) throw new Error('Неизвестный файл маршрутизации.');
+  if (String(cur.content ?? '') === content) return { meta: rowToRoutingMeta(cur), changed: false };
+  const shape = analyzeShape(content);
+  db.prepare(
+    'UPDATE routing_files SET content = ?, version = version + 1, updated_at = ?, root_type = ?, entry_count = ? WHERE name = ?',
+  ).run(content, nowIso(), shape.rootType, shape.count, name);
+  return { meta: getRoutingFull(name)!, changed: true };
+}
+
+/** Применить обновление из внешнего источника (авто-режим). Всегда пишет новую
+ *  версию + отмечает успешную синхронизацию. Вызывается, когда сервис уже решил,
+ *  что версию МОЖНО принять (валидна, структура совпала, не подозрительна). */
+export function applyRoutingMirror(
+  name: string,
+  content: string,
+  opts: { etag: string | null; lastModified: string | null; added: number | null; removed: number | null; rootType: string; count: number | null },
+): RoutingFileMeta {
+  const now = nowIso();
+  db.prepare(
+    `UPDATE routing_files SET content = ?, version = version + 1, updated_at = ?, root_type = ?, entry_count = ?,
+       etag = ?, last_modified = ?, last_check_at = ?, last_ok_at = ?, status = 'ok', status_reason = ?,
+       last_added = ?, last_removed = ? WHERE name = ?`,
+  ).run(
+    content, now, opts.rootType, opts.count, opts.etag, opts.lastModified, now, now,
+    'Обновлено из источника.', opts.added, opts.removed, name,
+  );
+  return getRoutingFull(name)!;
+}
+
+/** Обновить только состояние проверки (без изменения content/version): 304,
+ *  «без изменений», ошибка, отклонение. etag/lastModified пишем лишь когда передали. */
+export function updateRoutingSyncState(
+  name: string,
+  s: { lastCheckAt: string; status: RoutingFileMeta['status']; statusReason: string; etag?: string | null; lastModified?: string | null },
+): RoutingFileMeta {
+  const cur = getRoutingRow(name);
+  if (!cur) throw new Error('Неизвестный файл маршрутизации.');
+  const etag = s.etag !== undefined ? s.etag : cur.etag;
+  const lastModified = s.lastModified !== undefined ? s.lastModified : cur.last_modified;
+  const lastOk = s.status === 'nochange' ? s.lastCheckAt : cur.last_ok_at;
+  db.prepare(
+    'UPDATE routing_files SET last_check_at = ?, status = ?, status_reason = ?, etag = ?, last_modified = ?, last_ok_at = ? WHERE name = ?',
+  ).run(s.lastCheckAt, s.status, s.statusReason, etag, lastModified, lastOk, name);
+  return getRoutingFull(name)!;
+}
+
+/** Сохранить настройки источника (режим/URL/автосинк). */
+export function saveRoutingSource(
+  name: string,
+  patch: { mode?: 'local' | 'mirror'; sourceUrl?: string; autoSync?: boolean },
+): RoutingFileMeta {
+  const cur = getRoutingRow(name);
+  if (!cur) throw new Error('Неизвестный файл маршрутизации.');
+  const mode = patch.mode ?? cur.mode;
+  const sourceUrl = patch.sourceUrl ?? cur.source_url;
+  const autoSync = patch.autoSync ?? cur.auto_sync === 1;
+  db.prepare('UPDATE routing_files SET mode = ?, source_url = ?, auto_sync = ? WHERE name = ?').run(
+    mode === 'mirror' ? 'mirror' : 'local',
+    sourceUrl,
+    autoSync ? 1 : 0,
+    name,
+  );
+  return getRoutingFull(name)!;
+}
+
+/** Файлы, которые надо авто-проверять по расписанию (зеркало + автосинк + URL). */
+export function listRoutingSyncTargets(): Array<{ name: RoutingFileMeta['name'] }> {
+  return db
+    .prepare("SELECT name FROM routing_files WHERE mode = 'mirror' AND auto_sync = 1 AND source_url != ''")
+    .all() as Array<{ name: RoutingFileMeta['name'] }>;
 }
 
 /** Запомнить числовой chat_id привязанного пользователя (для бот-рассылки).

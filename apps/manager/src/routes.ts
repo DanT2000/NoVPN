@@ -27,6 +27,7 @@ import { resolveTgProxyUrl, restartBot, tgApi, broadcastToLinked } from './servi
 import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
 import * as repo from './repo.js';
+import { checkMirror } from './services/routingSync.js';
 
 export const router = Router();
 
@@ -58,6 +59,22 @@ function reqOrigin(req: { headers: Record<string, unknown>; protocol?: string })
 
 // ── health ──
 router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
+
+// ── публично: файлы умной маршрутизации (для NoVPN Desktop) ──
+// Клиентам всегда даётся стабильный URL этой панели, даже когда содержимое —
+// зеркало внешнего источника. Секретов нет, отдаём без авторизации.
+const ROUTING_NAMES = new Set(['upstream', 'sites', 'apps']);
+router.get('/routing/:file', (req, res) => {
+  const name = String(req.params.file ?? '').replace(/\.json$/i, '');
+  if (!ROUTING_NAMES.has(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
+  const content = repo.getRoutingContent(name);
+  if (content == null) return res.status(404).json(err('not_found', 'Файл не найден.'));
+  const row = repo.getRoutingRow(name);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  if (row) res.setHeader('ETag', `W/"v${row.version}"`);
+  res.setHeader('Cache-Control', 'public, max-age=60');
+  return res.send(content);
+});
 
 // ── подписка Xray ──
 // Клиенты (Happ, v2rayTun, Streisand, NekoBox) умеют «подписку»: раз добавил
@@ -1344,6 +1361,57 @@ router.get('/apps/file/:appId/:platform', (req, res) => {
   const full = appFiles.filePath(app.id, entry.platform, entry.downloadName);
   if (!full) return res.status(404).send('');
   appFiles.streamDownload(res, full, entry.downloadName);
+});
+
+// ── admin: умная маршрутизация ──
+const ROUTING_MAX_BYTES = 8 * 1024 * 1024;
+router.get('/api/admin/routing', requireAdmin, (_req, res) => {
+  res.json({ files: repo.listRoutingFiles() });
+});
+router.get('/api/admin/routing/:name', requireAdmin, (req, res) => {
+  const f = repo.getRoutingFull(String(req.params.name));
+  if (!f) return res.status(404).json(err('not_found', 'Файл не найден.'));
+  res.json(f);
+});
+router.put('/api/admin/routing/:name', requireAdmin, (req, res) => {
+  const name = String(req.params.name);
+  if (!repo.getRoutingRow(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
+  const content = typeof req.body?.content === 'string' ? req.body.content : '';
+  try {
+    JSON.parse(content);
+  } catch {
+    return res.status(400).json(err('validation', 'Содержимое не является валидным JSON.'));
+  }
+  if (Buffer.byteLength(content, 'utf8') > ROUTING_MAX_BYTES)
+    return res.status(413).json(err('too_large', 'Файл больше 8 МБ.'));
+  const { meta, changed } = repo.saveRoutingContent(name, content);
+  if (changed) repo.addLog(`Умная маршрутизация: сохранён ${name}.json (v${meta.version})`);
+  res.json({ meta, changed });
+});
+router.put('/api/admin/routing/:name/source', requireAdmin, (req, res) => {
+  const name = String(req.params.name);
+  if (!repo.getRoutingRow(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
+  const b = req.body ?? {};
+  const patch: { mode?: 'local' | 'mirror'; sourceUrl?: string; autoSync?: boolean } = {};
+  if (b.mode !== undefined) patch.mode = b.mode === 'mirror' ? 'mirror' : 'local';
+  if (b.sourceUrl !== undefined) {
+    const u = String(b.sourceUrl).trim().slice(0, 2048);
+    if (u && !/^https?:\/\//i.test(u))
+      return res.status(400).json(err('validation', 'URL должен начинаться с http:// или https://.'));
+    patch.sourceUrl = u;
+  }
+  if (b.autoSync !== undefined) patch.autoSync = !!b.autoSync;
+  res.json({ meta: repo.saveRoutingSource(name, patch) });
+});
+router.post('/api/admin/routing/:name/check', requireAdmin, async (req, res) => {
+  const name = String(req.params.name);
+  if (!repo.getRoutingRow(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
+  try {
+    const result = await checkMirror(name as 'upstream' | 'sites' | 'apps', { apply: false });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка проверки.'));
+  }
 });
 
 // ── admin: settings ──

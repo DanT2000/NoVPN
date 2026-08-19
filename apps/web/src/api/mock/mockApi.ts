@@ -584,4 +584,59 @@ export const mockApi: ApiClient = {
     });
     return { servers };
   },
+
+  // ── умная маршрутизация (in-memory) ──
+  async getRoutingFiles() {
+    await wait(120);
+    return { files: (['upstream', 'sites', 'apps'] as const).map((n) => routingMeta(n)) };
+  },
+  async getRoutingFile(name) {
+    await wait(120);
+    return { ...routingMeta(name), content: ROUTING[name].content };
+  },
+  async saveRoutingFile(name, content) {
+    await wait(150);
+    const f = ROUTING[name];
+    if (f.content === content) return { meta: routingMeta(name), changed: false };
+    f.content = content;
+    f.version += 1;
+    f.updatedAt = new Date().toISOString();
+    return { meta: routingMeta(name), changed: true };
+  },
+  async saveRoutingSource(name, patch) {
+    await wait(120);
+    const f = ROUTING[name];
+    if (patch.mode !== undefined) f.mode = patch.mode;
+    if (patch.sourceUrl !== undefined) f.sourceUrl = patch.sourceUrl;
+    if (patch.autoSync !== undefined) f.autoSync = patch.autoSync;
+    return { meta: routingMeta(name) };
+  },
+  async checkRoutingSource(name) {
+    await wait(250);
+    const f = ROUTING[name];
+    f.lastCheckAt = new Date().toISOString();
+    if (!f.sourceUrl) return { ok: false, changed: false, status: 'error' as const, reason: 'Не задан URL источника.', count: null, added: null, removed: null };
+    return { ok: true, changed: false, status: 'nochange' as const, reason: 'Обновлений нет.', count: f.entryCount, added: 0, removed: 0 };
+  },
 };
+
+// Демо-состояние трёх файлов для mock-режима.
+const ROUTING: Record<'upstream' | 'sites' | 'apps', {
+  content: string; version: number; updatedAt: string; mode: 'local' | 'mirror'; sourceUrl: string;
+  autoSync: boolean; lastCheckAt: string | null; lastOkAt: string | null; entryCount: number | null;
+}> = {
+  upstream: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
+  sites: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
+  apps: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
+};
+function routingMeta(name: 'upstream' | 'sites' | 'apps') {
+  const f = ROUTING[name];
+  return {
+    name, version: f.version, updatedAt: f.updatedAt,
+    size: new TextEncoder().encode(f.content).length, valid: true,
+    rootType: 'object' as const, entryCount: f.entryCount,
+    mode: f.mode, sourceUrl: f.sourceUrl, autoSync: f.autoSync, intervalHours: 1,
+    lastCheckAt: f.lastCheckAt, lastOkAt: f.lastOkAt, status: 'idle' as const, statusReason: '',
+    lastAdded: null, lastRemoved: null,
+  };
+}

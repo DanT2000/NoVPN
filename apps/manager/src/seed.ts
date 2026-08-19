@@ -37,9 +37,22 @@ const DEFAULT_TELEGRAM: TelegramSettings = {
   linkedUserIds: [],
 };
 
+// Три файла умной маршрутизации создаём пустыми валидными контейнерами.
+// INSERT OR IGNORE идемпотентен: существующие строки не трогаем.
+function seedRoutingFiles(): void {
+  const now = new Date().toISOString();
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO routing_files
+       (name, content, version, updated_at, root_type, entry_count, mode, source_url, auto_sync, status, status_reason)
+     VALUES (?, ?, 1, ?, 'object', 0, 'local', '', 0, 'idle', '')`,
+  );
+  for (const name of ['upstream', 'sites', 'apps']) stmt.run(name, '{\n  "items": []\n}', now);
+}
+
 export function seedIfEmpty(): void {
   if (getSetting<AppSettings | null>('settings', null) == null) setSetting('settings', DEFAULT_SETTINGS);
   if (getSetting<TelegramSettings | null>('telegram', null) == null) setSetting('telegram', DEFAULT_TELEGRAM);
+  seedRoutingFiles();
 
   const appCount = (db.prepare('SELECT COUNT(*) AS n FROM app_clients').get() as { n: number }).n;
   if (appCount === 0) {

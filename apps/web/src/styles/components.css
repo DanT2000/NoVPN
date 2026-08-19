@@ -335,6 +335,100 @@
   text-align: center;
 }
 
+/* ─── JSON-редактор (умная маршрутизация) ─────────────────── */
+.jed-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.jed {
+  display: flex;
+  border: 1px solid var(--border-input);
+  border-radius: var(--r-ctrl);
+  background: var(--bg-app);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+.jed-gutter {
+  flex: none;
+  margin: 0;
+  padding: 12px 10px;
+  text-align: right;
+  color: var(--text-faint);
+  background: var(--surface);
+  border-right: 1px solid var(--border-inner);
+  overflow: hidden;
+  white-space: pre;
+  user-select: none;
+  box-sizing: content-box;
+}
+.jed-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.jed-highlight,
+.jed-input {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  border: 0;
+}
+.jed-highlight {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text-secondary);
+}
+.jed-highlight code {
+  font: inherit;
+}
+.jed-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text-primary);
+  overflow: auto;
+  outline: none;
+}
+.jed-input::selection {
+  background: var(--blue-sel);
+}
+.jed-status {
+  font-size: 13px;
+  min-height: 20px;
+}
+/* Токены JSON */
+.jed .j-key {
+  color: var(--blue-fg);
+}
+.jed .j-str {
+  color: var(--green-fg);
+}
+.jed .j-num {
+  color: var(--amber-fg);
+}
+.jed .j-bool {
+  color: var(--link);
+}
+.jed .j-null {
+  color: var(--text-muted);
+}
+
 /* ─── Empty / loading states ──────────────────────────────── */
 .empty-state {
   text-align: center;
