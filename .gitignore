@@ -82,3 +82,11 @@ v2rayTUN.webp
 *.tar
 *.tar.gz
 *.7z
+
+# Канал раздачи десктопа — эти бинарники ДОЛЖНЫ версионироваться (см. desktop/README.md)
+!desktop/*.exe
+!desktop/*.msi
+!desktop/*.zip
+!desktop/*.dmg
+!desktop/*.AppImage
+!desktop/*.deb
