@@ -1,13 +1,17 @@
 // Умная маршрутизация: зеркалирование внешних JSON-источников.
-// Раз в час проверяем файлы в режиме mirror+autoSync. Перед публикацией — полная
-// защита (last-known-good): HTTP ok, непустой ответ, валидный JSON, корневой тип
-// совпадает с рабочим, нет подозрительного сжатия. Условный GET (ETag/Last-Modified)
-// экономит трафик. Та же логика обслуживает ручную кнопку «Проверить сейчас»
-// (apply=false → ничего не публикует, только возвращает превью).
+// Раз в час проверяем файлы в режиме mirror+autoSync. Источник может быть в форматах
+// .json (как есть), .lst/.txt (построчный список → JSON {items}) или .srs (бинарный
+// sing-box rule-set → decompile → source JSON). Формат определяется по расширению URL;
+// после конвертации в канонический JSON работает ЕДИНЫЙ конвейер защиты:
+// непустой → валидный JSON → корневой тип совпадает → нет резкого сжатия → last-known-good.
+// Условный GET (ETag/Last-Modified) экономит трафик. Та же логика обслуживает ручную
+// кнопку «Проверить сейчас» (apply=false → ничего не публикует, только превью).
 
 import * as repo from '../repo.js';
-import type { RoutingCheckResult, RoutingFileName } from '@novpn/shared';
+import type { RoutingCheckResult, RoutingFileName, RoutingSourceStats } from '@novpn/shared';
 import { analyzeShape, diffCounts, normalizeJson } from '../lib/routingJson.js';
+import { convertList, detectSourceFormat } from '../lib/routingConvert.js';
+import { decompileSrs, SingboxUnavailableError } from './singbox.js';
 
 // Отклоняем автообновление, если число элементов упало ниже этой доли прежнего
 // (защита от обрезанного/битого источника: 12483 → 317). Работает только когда
@@ -30,26 +34,20 @@ function logErr(name: string, msg: string): void {
 
 interface Fetched {
   status: number;
-  text: string;
+  body: Buffer;
   etag: string | null;
   lastModified: string | null;
   notModified: boolean;
 }
 
 async function fetchSource(url: string, etag: string | null, lastModified: string | null): Promise<Fetched> {
-  const headers: Record<string, string> = { Accept: 'application/json, text/plain, */*' };
+  const headers: Record<string, string> = { Accept: 'application/json, text/plain, application/octet-stream, */*' };
   if (etag) headers['If-None-Match'] = etag;
   if (lastModified) headers['If-Modified-Since'] = lastModified;
   const res = await fetch(url, { method: 'GET', headers, redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (res.status === 304) return { status: 304, text: '', etag, lastModified, notModified: true };
-  const text = await res.text();
-  return {
-    status: res.status,
-    text,
-    etag: res.headers.get('etag'),
-    lastModified: res.headers.get('last-modified'),
-    notModified: false,
-  };
+  if (res.status === 304) return { status: 304, body: Buffer.alloc(0), etag, lastModified, notModified: true };
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { status: res.status, body: buf, etag: res.headers.get('etag'), lastModified: res.headers.get('last-modified'), notModified: false };
 }
 
 /**
@@ -61,10 +59,12 @@ async function fetchSource(url: string, etag: string | null, lastModified: strin
  */
 export async function checkMirror(name: RoutingFileName, opts: { apply: boolean }): Promise<RoutingCheckResult> {
   const row = repo.getRoutingRow(name);
-  if (!row) return miss('Неизвестный файл.');
+  if (!row) return miss('Неизвестный файл.', { format: 'json' });
   const url = String(row.source_url ?? '').trim();
-  if (!url) return miss('Не задан URL источника.');
+  if (!url) return miss('Не задан URL источника.', { format: 'json' });
 
+  const format = detectSourceFormat(url);
+  const baseStats: RoutingSourceStats = { format };
   const now = repo.nowIso();
   const persist = opts.apply; // только авто-режим ведёт conditional-GET состояние
 
@@ -72,47 +72,78 @@ export async function checkMirror(name: RoutingFileName, opts: { apply: boolean 
   try {
     fetched = await fetchSource(url, row.etag ?? null, row.last_modified ?? null);
   } catch (e) {
-    const reason = e instanceof Error ? e.message : 'ошибка запроса';
-    repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: `Ошибка запроса: ${reason}` });
+    const reason = `Ошибка запроса: ${e instanceof Error ? e.message : 'сбой'}`;
+    repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: reason });
     logErr(name, reason);
-    return { ok: false, changed: false, status: 'error', reason: `Ошибка запроса: ${reason}`, count: row.entry_count ?? null, added: null, removed: null };
+    return { ok: false, changed: false, status: 'error', reason, count: row.entry_count ?? null, added: null, removed: null, stats: baseStats };
   }
 
   // 304 Not Modified — источник подтвердил: без изменений.
   if (fetched.notModified) {
     repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'nochange', statusReason: '' });
-    return { ok: true, changed: false, status: 'nochange', reason: 'Обновлений нет (304).', count: row.entry_count ?? null, added: null, removed: null };
+    return { ok: true, changed: false, status: 'nochange', reason: 'Обновлений нет (304).', count: row.entry_count ?? null, added: null, removed: null, stats: baseStats };
   }
   // HTTP статус
   if (fetched.status < 200 || fetched.status >= 300) {
     const reason = `HTTP ${fetched.status}`;
     repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: reason });
     logErr(name, reason);
-    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null };
+    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null, stats: baseStats };
   }
-  const text = fetched.text ?? '';
   // непустой ответ
-  if (!text.trim()) {
+  if (fetched.body.length === 0) {
     const reason = 'Пустой ответ от источника';
     repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: reason });
     logErr(name, reason);
-    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null };
+    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null, stats: baseStats };
   }
-  // размер
-  if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) {
+  // размер сырого ответа
+  if (fetched.body.length > MAX_BYTES) {
     const reason = 'Ответ больше 8 МБ';
     repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: reason });
     logErr(name, reason);
-    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null };
+    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null, stats: baseStats };
   }
-  // валидный JSON
+
+  // ── конвертация формата → канонический JSON-текст + статистика ──
+  let text: string;
+  let stats: RoutingSourceStats;
+  try {
+    if (format === 'srs') {
+      text = await decompileSrs(fetched.body); // source rule-set JSON (version+rules), без потерь
+      stats = { format };
+    } else if (format === 'lst' || format === 'txt') {
+      const conv = convertList(fetched.body.toString('utf8'));
+      text = JSON.stringify({ items: conv.items }, null, 2);
+      stats = { format, lines: conv.lines, valid: conv.valid, skipped: conv.skipped, dups: conv.dups };
+    } else {
+      text = fetched.body.toString('utf8');
+      stats = { format };
+    }
+  } catch (e) {
+    const reason =
+      e instanceof SingboxUnavailableError
+        ? 'Формат SRS не может быть обработан: sing-box binary не найден'
+        : `Ошибка конвертации источника: ${e instanceof Error ? e.message : 'сбой'}`;
+    repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: reason });
+    logErr(name, reason);
+    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null, stats: baseStats };
+  }
+
+  // валидный JSON (для list/srs гарантировано, для json — проверка)
   try {
     JSON.parse(text);
   } catch {
     const reason = 'Ответ не является валидным JSON';
     repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: reason });
     logErr(name, reason);
-    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null };
+    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null, stats };
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) {
+    const reason = 'Результат больше 8 МБ';
+    repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'error', statusReason: reason });
+    logErr(name, reason);
+    return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null, stats };
   }
 
   const oldShape = analyzeShape(String(row.content ?? ''));
@@ -123,7 +154,7 @@ export async function checkMirror(name: RoutingFileName, opts: { apply: boolean 
     const reason = `Структура изменилась: было «${oldShape.rootType}», стало «${newShape.rootType}»`;
     repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'rejected', statusReason: reason });
     logErr(name, `отклонено — ${reason}`);
-    return { ok: false, changed: false, status: 'rejected', reason, count: newShape.count, added: null, removed: null };
+    return { ok: false, changed: false, status: 'rejected', reason, count: newShape.count, added: null, removed: null, stats };
   }
 
   const changed = normalizeJson(text) !== normalizeJson(String(row.content ?? ''));
@@ -137,7 +168,7 @@ export async function checkMirror(name: RoutingFileName, opts: { apply: boolean 
       statusReason: '',
       ...(persist ? { etag: fetched.etag, lastModified: fetched.lastModified } : {}),
     });
-    return { ok: true, changed: false, status: 'nochange', reason: 'Содержимое не изменилось.', count: newShape.count, added: 0, removed: 0 };
+    return { ok: true, changed: false, status: 'nochange', reason: 'Содержимое не изменилось.', count: newShape.count, added: 0, removed: 0, stats };
   }
 
   // защита от подозрительного сжатия (обрезанный/битый источник)
@@ -150,7 +181,7 @@ export async function checkMirror(name: RoutingFileName, opts: { apply: boolean 
     const reason = `количество элементов уменьшилось с ${oldShape.count} до ${newShape.count}`;
     repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'rejected', statusReason: `Обновление отклонено проверкой: ${reason}` });
     logErr(name, `отклонено — ${reason}`);
-    return { ok: false, changed: false, status: 'rejected', reason, count: newShape.count, added, removed };
+    return { ok: false, changed: false, status: 'rejected', reason, count: newShape.count, added, removed, stats };
   }
 
   // все проверки пройдены
@@ -162,19 +193,20 @@ export async function checkMirror(name: RoutingFileName, opts: { apply: boolean 
       removed,
       rootType: newShape.rootType,
       count: newShape.count,
+      stats,
     });
     lastErrAt.delete(name);
-    repo.addLog(`Умная маршрутизация: ${name}.json обновлён из источника (+${added ?? 0}/−${removed ?? 0})`);
-    return { ok: true, changed: true, status: 'ok', reason: 'Обновлено из источника.', count: newShape.count, added, removed };
+    repo.addLog(`Умная маршрутизация: ${name}.json обновлён из источника (${format.toUpperCase()}, +${added ?? 0}/−${removed ?? 0})`);
+    return { ok: true, changed: true, status: 'ok', reason: 'Обновлено из источника.', count: newShape.count, added, removed, stats };
   }
 
   // ручная проверка: только отмечаем факт проверки, контент отдаём для редактора
   repo.updateRoutingSyncState(name, { lastCheckAt: now, status: 'ok', statusReason: 'Найдены изменения (не применены).' });
-  return { ok: true, changed: true, status: 'ok', reason: 'Найдены изменения.', count: newShape.count, added, removed, content: text };
+  return { ok: true, changed: true, status: 'ok', reason: 'Найдены изменения.', count: newShape.count, added, removed, stats, content: text };
 }
 
-function miss(reason: string): RoutingCheckResult {
-  return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null };
+function miss(reason: string, stats: RoutingSourceStats): RoutingCheckResult {
+  return { ok: false, changed: false, status: 'error', reason, count: null, added: null, removed: null, stats };
 }
 
 async function tick(): Promise<void> {

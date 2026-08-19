@@ -233,6 +233,18 @@ export type RoutingFileName = 'upstream' | 'sites' | 'apps';
 export type RoutingMode = 'local' | 'mirror';
 /** Состояние последней проверки внешнего источника. */
 export type RoutingSyncStatus = 'idle' | 'ok' | 'nochange' | 'error' | 'rejected';
+/** Формат внешнего источника (определяется по расширению URL). LST/TXT → построчный
+ *  список → JSON {items}; SRS → бинарный sing-box rule-set → decompile → source JSON. */
+export type RoutingSourceFormat = 'json' | 'lst' | 'txt' | 'srs';
+
+/** Статистика конвертации источника (для LST/TXT — построчная; json/srs — только формат). */
+export interface RoutingSourceStats {
+  format: RoutingSourceFormat;
+  lines?: number; // строк получено
+  valid?: number; // валидных элементов (прошли проверку, до дедупа)
+  skipped?: number; // пропущено (пустые/комментарии/невалидные)
+  dups?: number; // дубликатов удалено
+}
 
 export interface RoutingFileMeta {
   name: RoutingFileName;
@@ -246,6 +258,7 @@ export interface RoutingFileMeta {
   // источник (режим зеркала)
   mode: RoutingMode;
   sourceUrl: string;
+  sourceFormat: RoutingSourceFormat; // определён по расширению sourceUrl
   autoSync: boolean;
   intervalHours: number; // фиксировано 1
   lastCheckAt: string | null;
@@ -254,6 +267,7 @@ export interface RoutingFileMeta {
   statusReason: string; // человекочитаемая причина (ошибка/отклонение/итог)
   lastAdded: number | null;
   lastRemoved: number | null;
+  sourceStats: RoutingSourceStats | null; // статистика последней применённой конвертации
 }
 
 export interface RoutingFileFull extends RoutingFileMeta {
@@ -275,7 +289,9 @@ export interface RoutingCheckResult {
   count: number | null;
   added: number | null;
   removed: number | null;
-  /** Новое содержимое для «Открыть в редакторе» (только если ok && changed). */
+  /** Формат/статистика конвертации источника этой проверки. */
+  stats?: RoutingSourceStats;
+  /** Новое содержимое (уже канонический JSON) для «Открыть в редакторе» (если ok && changed). */
   content?: string;
 }
 

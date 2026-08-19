@@ -172,7 +172,8 @@ CREATE TABLE IF NOT EXISTS routing_files (
   status TEXT NOT NULL DEFAULT 'idle',
   status_reason TEXT NOT NULL DEFAULT '',
   last_added INTEGER,
-  last_removed INTEGER
+  last_removed INTEGER,
+  source_stats TEXT
 );
 
 CREATE TABLE IF NOT EXISTS admin_log (
@@ -350,6 +351,9 @@ for (const stmt of [
   // страны. Общая настройка (не исключение): для self-host можно поставить 🏠, для
   // любого сервера — любой эмодзи. Пусто = флаг страны.
   'ALTER TABLE servers ADD COLUMN flag_emoji TEXT',
+  // Умная маршрутизация: статистика конвертации внешнего источника (LST/TXT/SRS →
+  // JSON) — {format, lines, valid, skipped, dups}. NULL, пока не синхронизировали.
+  'ALTER TABLE routing_files ADD COLUMN source_stats TEXT',
 ]) {
   try {
     db.exec(stmt);

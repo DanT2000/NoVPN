@@ -629,14 +629,18 @@ const ROUTING: Record<'upstream' | 'sites' | 'apps', {
   sites: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
   apps: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
 };
+function mockFormat(url: string): 'json' | 'lst' | 'txt' | 'srs' {
+  const ext = (url.split(/[?#]/)[0] ?? '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  return ext === 'lst' || ext === 'txt' || ext === 'srs' ? ext : 'json';
+}
 function routingMeta(name: 'upstream' | 'sites' | 'apps') {
   const f = ROUTING[name];
   return {
     name, version: f.version, updatedAt: f.updatedAt,
     size: new TextEncoder().encode(f.content).length, valid: true,
     rootType: 'object' as const, entryCount: f.entryCount,
-    mode: f.mode, sourceUrl: f.sourceUrl, autoSync: f.autoSync, intervalHours: 1,
+    mode: f.mode, sourceUrl: f.sourceUrl, sourceFormat: mockFormat(f.sourceUrl), autoSync: f.autoSync, intervalHours: 1,
     lastCheckAt: f.lastCheckAt, lastOkAt: f.lastOkAt, status: 'idle' as const, statusReason: '',
-    lastAdded: null, lastRemoved: null,
+    lastAdded: null, lastRemoved: null, sourceStats: null,
   };
 }

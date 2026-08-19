@@ -12,8 +12,11 @@ fs.mkdirSync(tmp, { recursive: true });
 process.env.DATABASE_PATH = path.join(tmp, 'database.sqlite');
 process.env.ENCRYPTION_KEY = '0'.repeat(64);
 process.env.SESSION_SECRET = 'test';
+// Заведомо отсутствующий бинарник sing-box → детерминированный «binary не найден».
+process.env.SINGBOX_BIN = path.join(tmp, 'no-such-sing-box');
 
 const { analyzeShape, diffCounts, normalizeJson } = await import('../src/lib/routingJson.js');
+const { detectSourceFormat, convertList } = await import('../src/lib/routingConvert.js');
 const repo = await import('../src/repo.js');
 const { seedIfEmpty } = await import('../src/seed.js');
 const { checkMirror } = await import('../src/services/routingSync.js');
@@ -128,4 +131,69 @@ test('checkMirror: 304 Not Modified — без изменений', async () => 
   assert.equal(r.changed, false);
   assert.equal(r.status, 'nochange');
   assert.equal(repo.getRoutingFull('upstream')!.version, before.version);
+});
+
+// ── форматы источника ──
+
+test('detectSourceFormat: по расширению URL', () => {
+  assert.equal(detectSourceFormat('https://x/a.json'), 'json');
+  assert.equal(detectSourceFormat('https://x/a.lst'), 'lst');
+  assert.equal(detectSourceFormat('https://x/a.txt?v=2'), 'txt');
+  assert.equal(detectSourceFormat('https://x/a.srs#frag'), 'srs');
+  assert.equal(detectSourceFormat('https://x/no-ext'), 'json'); // неизвестное → json
+});
+
+test('convertList: нормализация + статистика (пустые/комменты/схема/путь/дубли/lowercase)', () => {
+  const raw = [
+    '# заголовок-комментарий',
+    '// ещё комментарий',
+    '',
+    '  YouTube.com  ', // trim + lowercase
+    'https://Example.com/path?x=1#h', // схема + путь/квери/хэш
+    'example.com', // дубль (после нормализации https://Example.com → example.com)
+    'discord.com # inline-коммент',
+    'не валид с пробелом',
+    'ok.ru',
+  ].join('\n');
+  const c = convertList(raw);
+  assert.deepEqual(c.items, ['youtube.com', 'example.com', 'discord.com', 'ok.ru']);
+  assert.equal(c.lines, 9);
+  assert.equal(c.dups, 1); // example.com встретился дважды
+  assert.equal(c.skipped, 4); // 2 коммент-строки + пустая + «не валид с пробелом»
+  assert.equal(c.valid, 5); // 4 уникальных + 1 дубль
+});
+
+test('checkMirror auto: .lst источник → JSON {items}, статистика сохранена', async () => {
+  repo.saveRoutingContent('sites', '{\n  "items": []\n}');
+  repo.saveRoutingSource('sites', { mode: 'mirror', sourceUrl: 'https://src/list.lst', autoSync: true });
+  const before = repo.getRoutingFull('sites')!;
+  stubFetch(200, 'youtube.com\n# c\nyoutube.com\ndiscord.com\n');
+  const r = await checkMirror('sites', { apply: true });
+  assert.equal(r.ok, true);
+  assert.equal(r.status, 'ok');
+  assert.equal(r.stats?.format, 'lst');
+  const after = repo.getRoutingFull('sites')!;
+  assert.equal(after.version, before.version + 1);
+  assert.equal(after.entryCount, 2); // youtube.com, discord.com (дубль убран)
+  assert.deepEqual(JSON.parse(after.content), { items: ['youtube.com', 'discord.com'] });
+  assert.equal(after.sourceStats?.format, 'lst');
+  assert.equal(after.sourceStats?.dups, 1);
+});
+
+test('checkMirror auto: .srs без бинарника → ошибка, версия не растёт', async () => {
+  repo.saveRoutingContent('apps', '{\n  "version": 1,\n  "rules": []\n}');
+  repo.saveRoutingSource('apps', { mode: 'mirror', sourceUrl: 'https://src/rules.srs', autoSync: true });
+  const before = repo.getRoutingFull('apps')!;
+  stubFetch(200, 'BINARYSRSBYTES');
+  const r = await checkMirror('apps', { apply: true });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 'error');
+  assert.match(r.reason, /sing-box|SRS/i);
+  assert.equal(repo.getRoutingFull('apps')!.version, before.version); // last-known-good
+});
+
+test('sourceFormat в мете определяется по URL; смена URL сбрасывает stats', () => {
+  repo.saveRoutingSource('sites', { mode: 'mirror', sourceUrl: 'https://src/list.txt', autoSync: false });
+  assert.equal(repo.getRoutingFull('sites')!.sourceFormat, 'txt');
+  assert.equal(repo.getRoutingFull('sites')!.sourceStats, null); // сброшено сменой URL
 });

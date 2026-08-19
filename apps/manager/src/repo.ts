@@ -16,6 +16,7 @@ import type {
   PublicUserView,
   RoutingFileMeta,
   RoutingFileFull,
+  RoutingSourceStats,
   Server,
   ServerPorts,
   TelegramSettings,
@@ -24,6 +25,7 @@ import type {
 import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
 import { analyzeShape } from './lib/routingJson.js';
+import { detectSourceFormat } from './lib/routingConvert.js';
 import { decryptSecret, encConf } from './lib/crypto.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
@@ -872,7 +874,16 @@ export function allDownloadRefs(): Array<{ appId: string; platform: string; name
 // ── умная маршрутизация (routing files) ──
 const ROUTING_ORDER: RoutingFileMeta['name'][] = ['upstream', 'sites', 'apps'];
 
+function parseSourceStats(s: unknown): RoutingSourceStats | null {
+  if (typeof s !== 'string' || !s) return null;
+  try {
+    return JSON.parse(s) as RoutingSourceStats;
+  } catch {
+    return null;
+  }
+}
 function rowToRoutingMeta(r: any): RoutingFileMeta {
+  const sourceUrl = r.source_url ?? '';
   return {
     name: r.name,
     version: r.version ?? 1,
@@ -882,7 +893,8 @@ function rowToRoutingMeta(r: any): RoutingFileMeta {
     rootType: r.root_type ?? null,
     entryCount: r.entry_count ?? null,
     mode: r.mode === 'mirror' ? 'mirror' : 'local',
-    sourceUrl: r.source_url ?? '',
+    sourceUrl,
+    sourceFormat: detectSourceFormat(sourceUrl),
     autoSync: r.auto_sync === 1,
     intervalHours: 1,
     lastCheckAt: r.last_check_at ?? null,
@@ -891,6 +903,7 @@ function rowToRoutingMeta(r: any): RoutingFileMeta {
     statusReason: r.status_reason ?? '',
     lastAdded: r.last_added ?? null,
     lastRemoved: r.last_removed ?? null,
+    sourceStats: parseSourceStats(r.source_stats),
   };
 }
 
@@ -933,16 +946,24 @@ export function saveRoutingContent(name: string, content: string): { meta: Routi
 export function applyRoutingMirror(
   name: string,
   content: string,
-  opts: { etag: string | null; lastModified: string | null; added: number | null; removed: number | null; rootType: string; count: number | null },
+  opts: {
+    etag: string | null;
+    lastModified: string | null;
+    added: number | null;
+    removed: number | null;
+    rootType: string;
+    count: number | null;
+    stats?: RoutingSourceStats | null;
+  },
 ): RoutingFileMeta {
   const now = nowIso();
   db.prepare(
     `UPDATE routing_files SET content = ?, version = version + 1, updated_at = ?, root_type = ?, entry_count = ?,
        etag = ?, last_modified = ?, last_check_at = ?, last_ok_at = ?, status = 'ok', status_reason = ?,
-       last_added = ?, last_removed = ? WHERE name = ?`,
+       last_added = ?, last_removed = ?, source_stats = ? WHERE name = ?`,
   ).run(
     content, now, opts.rootType, opts.count, opts.etag, opts.lastModified, now, now,
-    'Обновлено из источника.', opts.added, opts.removed, name,
+    'Обновлено из источника.', opts.added, opts.removed, opts.stats ? JSON.stringify(opts.stats) : null, name,
   );
   return getRoutingFull(name)!;
 }
@@ -974,12 +995,21 @@ export function saveRoutingSource(
   const mode = patch.mode ?? cur.mode;
   const sourceUrl = patch.sourceUrl ?? cur.source_url;
   const autoSync = patch.autoSync ?? cur.auto_sync === 1;
-  db.prepare('UPDATE routing_files SET mode = ?, source_url = ?, auto_sync = ? WHERE name = ?').run(
-    mode === 'mirror' ? 'mirror' : 'local',
-    sourceUrl,
-    autoSync ? 1 : 0,
-    name,
-  );
+  // Сменился URL → сбрасываем conditional-GET состояние и стат-у: они относились к
+  // прежнему источнику (иначе можно словить ложный 304 или показать чужую статистику).
+  const urlChanged = patch.sourceUrl !== undefined && sourceUrl !== cur.source_url;
+  if (urlChanged) {
+    db.prepare(
+      "UPDATE routing_files SET mode = ?, source_url = ?, auto_sync = ?, etag = NULL, last_modified = NULL, source_stats = NULL, status = 'idle', status_reason = '' WHERE name = ?",
+    ).run(mode === 'mirror' ? 'mirror' : 'local', sourceUrl, autoSync ? 1 : 0, name);
+  } else {
+    db.prepare('UPDATE routing_files SET mode = ?, source_url = ?, auto_sync = ? WHERE name = ?').run(
+      mode === 'mirror' ? 'mirror' : 'local',
+      sourceUrl,
+      autoSync ? 1 : 0,
+      name,
+    );
+  }
   return getRoutingFull(name)!;
 }
 

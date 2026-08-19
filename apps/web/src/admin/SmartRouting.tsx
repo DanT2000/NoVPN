@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { RoutingCheckResult, RoutingFileMeta, RoutingFileName } from '@novpn/shared';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import type { RoutingCheckResult, RoutingFileMeta, RoutingFileName, RoutingSourceStats } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { Chip, Field, Loading, Panel, Toggle } from '../components/ui';
@@ -43,6 +43,32 @@ const STATUS_LABEL: Record<RoutingFileMeta['status'], string> = {
   error: '✕ Ошибка',
   rejected: '⚠ Отклонено проверкой',
 };
+const FORMAT_LABEL: Record<RoutingSourceStats['format'], string> = {
+  json: 'JSON',
+  lst: 'LST',
+  txt: 'TXT',
+  srs: 'SRS (sing-box binary)',
+};
+
+// Строки статистики конвертации источника — раскладываются в родительскую grid `auto 1fr`.
+function StatsRows({ stats }: { stats: RoutingSourceStats | null | undefined }) {
+  if (!stats) return null;
+  const rows: [string, string][] = [['Исходный формат', FORMAT_LABEL[stats.format] ?? stats.format]];
+  if (stats.lines != null) rows.push(['Строк получено', stats.lines.toLocaleString('ru-RU')]);
+  if (stats.valid != null) rows.push(['Валидных элементов', stats.valid.toLocaleString('ru-RU')]);
+  if (stats.skipped != null) rows.push(['Пропущено', stats.skipped.toLocaleString('ru-RU')]);
+  if (stats.dups != null) rows.push(['Дубликатов удалено', stats.dups.toLocaleString('ru-RU')]);
+  return (
+    <>
+      {rows.map(([k, v]) => (
+        <Fragment key={k}>
+          <span className="muted">{k}</span>
+          <span>{v}</span>
+        </Fragment>
+      ))}
+    </>
+  );
+}
 
 export function SmartRouting() {
   const [files, setFiles] = useState<RoutingFileMeta[] | null>(null);
@@ -281,12 +307,12 @@ function RoutingCard({
 
         {mode === 'mirror' ? (
           <>
-            <Field label="Внешний источник (URL)" hint="GitHub Raw или любой прямой HTTPS-адрес с JSON. NoVPN станет локальным зеркалом.">
+            <Field label="Внешний источник (URL)" hint="Прямой HTTPS-адрес. Форматы: .json, .lst, .txt (списки доменов), .srs (sing-box). NoVPN станет локальным зеркалом.">
               <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                 <input
                   className="input mono"
                   style={{ flex: 1, minWidth: 240, fontSize: 12 }}
-                  placeholder="https://raw.githubusercontent.com/…/sites.json"
+                  placeholder="https://raw.githubusercontent.com/…/sites.lst"
                   spellCheck={false}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
@@ -294,6 +320,11 @@ function RoutingCard({
                 <button className="btn btn-secondary btn-sm" disabled={!urlDirty} onClick={saveUrl}>Сохранить URL</button>
               </div>
             </Field>
+            {meta.sourceUrl ? (
+              <div className="small muted" style={{ marginTop: -4 }}>
+                Формат источника: <b style={{ color: 'var(--text-secondary)' }}>{FORMAT_LABEL[meta.sourceFormat]}</b>
+              </div>
+            ) : null}
 
             <div className="row-between" style={{ flexWrap: 'wrap', gap: 10 }}>
               <div className="row" style={{ gap: 10 }}>
@@ -327,6 +358,7 @@ function RoutingCard({
                   </span>
                 </>
               ) : null}
+              <StatsRows stats={meta.sourceStats} />
             </div>
             {meta.statusReason ? (
               <div className={`notice ${meta.status === 'rejected' ? 'notice-amber' : meta.status === 'error' ? 'notice-red' : 'notice-green'}`}>
@@ -343,6 +375,11 @@ function RoutingCard({
                     <b>{checkResult.added ?? '—'}</b>, удалено: <b>{checkResult.removed ?? '—'}</b>.
                     {' '}Автоматически не публикуется — просмотрите и сохраните.
                   </span>
+                  {checkResult.stats && checkResult.stats.lines != null ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 14px', fontSize: 12 }}>
+                      <StatsRows stats={checkResult.stats} />
+                    </div>
+                  ) : null}
                   {checkResult.content ? (
                     <button className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }} onClick={() => openEditorWith(checkResult.content!, 'source')}>
                       Открыть в редакторе
