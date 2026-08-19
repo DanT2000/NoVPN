@@ -62,7 +62,7 @@ export function buildAmneziaVpnLink(i: AwgLinkInput): string {
     // Главное поле: приложение поднимает соединение именно из этого INI.
     config: i.conf,
     hostName: i.host,
-    mtu: String(i.mtu ?? 1376),
+    mtu: String(i.mtu ?? 1280),
     port: i.port,
     psk_key: i.presharedKey,
     server_pub_key: i.serverPubKey,
@@ -124,6 +124,7 @@ export function vpnLinkFromConf(conf: string, description: string): string | nul
     serverPubKey: srvPub,
     presharedKey: g('PresharedKey') ?? '',
     description,
+    mtu: Number(g('MTU')) || undefined, // берём MTU из conf (единый источник), иначе дефолт
   });
 }
 

@@ -292,6 +292,7 @@ if [ "$WANT_AWG" = "1" ]; then
 PrivateKey = $AWG_PRIV
 Address = 10.8.1.1/24
 ListenPort = ${awgPort}
+MTU = 1280
 Jc = $JC
 Jmin = $JMIN
 Jmax = $JMAX
@@ -301,8 +302,8 @@ H1 = $H1
 H2 = $H2
 H3 = $H3
 H4 = $H4
-PostUp = iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE; iptables -A FORWARD -i awg0 -j ACCEPT; iptables -A FORWARD -o awg0 -j ACCEPT
-PostDown = iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE; iptables -D FORWARD -i awg0 -j ACCEPT; iptables -D FORWARD -o awg0 -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE; iptables -A FORWARD -i awg0 -j ACCEPT; iptables -A FORWARD -o awg0 -j ACCEPT; iptables -t mangle -A FORWARD -o awg0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240; iptables -t mangle -A FORWARD -i awg0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240
+PostDown = iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE; iptables -D FORWARD -i awg0 -j ACCEPT; iptables -D FORWARD -o awg0 -j ACCEPT; iptables -t mangle -D FORWARD -o awg0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240; iptables -t mangle -D FORWARD -i awg0 -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1240
 CONF
   chmod 600 /etc/amnezia/amneziawg/awg0.conf
   sysctl -qw net.ipv4.ip_forward=1
@@ -700,6 +701,7 @@ echo "H1=$(p H1)"; echo "H2=$(p H2)"; echo "H3=$(p H3)"; echo "H4=$(p H4)"`;
 PrivateKey = ${cpriv}
 Address = ${cip}/32
 DNS = 1.1.1.1
+MTU = 1280
 Jc = ${obf.Jc}
 Jmin = ${obf.Jmin}
 Jmax = ${obf.Jmax}
