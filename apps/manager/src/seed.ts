@@ -65,6 +65,18 @@ export function seedIfEmpty(): void {
   // иконку и схему импорта. Правки администратора (ссылки, тексты, порядок,
   // включённость) не трогаем.
   const rows = db.prepare('SELECT id, data FROM app_clients').all() as Array<{ id: string; data: string }>;
+
+  // Добить новые дефолтные приложения (например NoVPN Desktop), добавленные в каталог
+  // после первичного сида. Правки администратора по существующим не трогаем.
+  const existingIds = new Set(rows.map((r) => r.id));
+  const missing = DEFAULT_APPS.filter((a) => !existingIds.has(a.id));
+  if (missing.length) {
+    const maxSort = (db.prepare('SELECT COALESCE(MAX(sort), -1) AS m FROM app_clients').get() as { m: number }).m;
+    const ins = db.prepare('INSERT INTO app_clients(id, sort, data) VALUES(?,?,?)');
+    missing.forEach((a, i) => ins.run(a.id, maxSort + 1 + i, JSON.stringify(a)));
+    console.log(`[migrate] добавлены приложения каталога: ${missing.map((a) => a.client).join(', ')}`);
+  }
+
   const upd = db.prepare('UPDATE app_clients SET data = ? WHERE id = ?');
   let changed = 0;
   for (const r of rows) {

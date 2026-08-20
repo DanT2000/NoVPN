@@ -577,7 +577,7 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
     return;
   }
   if (data === 'howto') return sendHowto(chatId, user, msgId);
-  if (data === 'apps') return sendApps(chatId, msgId);
+  if (data === 'apps') return sendApps(chatId, user, msgId);
 }
 
 /** Подтверждение удаления конфига (F). Проверяем владение прежде чем предлагать. */
@@ -785,14 +785,40 @@ async function sendHowto(chatId: number, user: ReturnType<typeof findUser> & obj
   await editOrSend(chatId, msgId, parts.join('\n'), { kb });
 }
 
-async function sendApps(chatId: number, msgId?: number): Promise<void> {
-  const site = siteUrl();
-  const apps = repo.listApps().filter((a) => a.enabled).slice(0, 8);
-  const lines = ['⬇️ Приложения:', ''];
-  for (const a of apps) {
+async function sendApps(chatId: number, user: ReturnType<typeof findUser> & object, msgId?: number): Promise<void> {
+  // Показываем приложения ТОЛЬКО под протокол, который человек себе уже выдал
+  // (Amnezia-конфиг → Amnezia-приложения, Xray → Xray). Если конфига ещё нет —
+  // по разрешённым протоколам (что можно выпустить).
+  const hasXray = repo.countActiveDevices(user.id, 'xray') > 0;
+  const hasAwg = repo.countActiveDevices(user.id, 'amneziawg') > 0;
+  const none = !hasXray && !hasAwg;
+  const showXray = hasXray || (none && user.allowedProtocols.includes('xray'));
+  const showAwg = hasAwg || (none && user.allowedProtocols.includes('amneziawg'));
+  const apps = repo.listApps().filter((a) => a.enabled);
+
+  const nameLink = (a: { client: string; source: string; platforms: Array<{ url?: string | null }> }): string => {
     const link = a.source || a.platforms.find((p) => p.url)?.url || '';
-    lines.push(`• ${a.client}${link ? ` — ${link}` : ''}`);
+    return `• ${a.client}${link ? ` — ${link}` : ''}`;
+  };
+  const desktopUrl = apps.find((a) => a.id === 'novpn-desktop')?.platforms.find((p) => p.platform === 'Windows')?.url || '';
+
+  const parts: string[] = ['⬇️ Приложения', ''];
+  if (showXray) {
+    parts.push('▸ Для Xray-подписки:');
+    if (desktopUrl) parts.push(`🖥 Компьютер (Windows) — NoVPN Desktop, наше приложение: ${desktopUrl}`);
+    parts.push('📱 Телефон и остальное:');
+    parts.push(...apps.filter((a) => a.compat.includes('xray') && a.id !== 'novpn-desktop').map(nameLink));
+    parts.push('');
   }
-  if (site) lines.push('', `Полный список с инструкциями по платформам: ${site}`);
-  await editOrSend(chatId, msgId, lines.join('\n'), { kb: [[{ text: '‹ Меню', callback_data: 'menu' }]] });
+  if (showAwg) {
+    parts.push('▸ Для AmneziaWG:');
+    parts.push(...apps.filter((a) => a.compat.includes('amneziawg') || a.compat.includes('amnezia-app')).map(nameLink));
+    parts.push('');
+  }
+  parts.push('Выбрать приложение под вашу систему (Android / iOS / компьютер) удобнее на сайте.');
+  const kb: Kb = [];
+  const url = siteUrlForUser(user);
+  if (url) kb.push([{ text: '🌐 Открыть на сайте', url }]);
+  kb.push([{ text: '‹ Меню', callback_data: 'menu' }]);
+  await editOrSend(chatId, msgId, parts.join('\n').replace(/\n{3,}/g, '\n\n').trim(), { kb });
 }

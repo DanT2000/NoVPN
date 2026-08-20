@@ -113,4 +113,18 @@ export const DEFAULT_APPS: AppClient[] = [
       { platform: 'Linux', url: 'https://amnezia.org/downloads' },
     ],
   },
+  {
+    // Наше десктоп-приложение (Windows): работает с Xray-подпиской, умная маршрутизация.
+    // Ссылка ведёт на канал раздачи (desktop/vpn.exe в репозитории). Админ может сменить.
+    id: 'novpn-desktop',
+    client: 'NoVPN Desktop',
+    compat: ['xray'],
+    source: 'https://github.com/DanT2000/NoVPN',
+    instruction:
+      'Наше приложение для компьютера (Windows): вставьте ссылку-подписку — умная маршрутизация по сайтам и приложениям, режим адаптера, расширение для браузера.',
+    enabled: true,
+    icon: null,
+    urlScheme: null,
+    platforms: [{ platform: 'Windows', url: 'https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop/vpn.exe' }],
+  },
 ];
