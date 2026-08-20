@@ -54,6 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 ENV NODE_ENV=production \
     PORT=3000 \
     WEB_DIST=/app/apps/web/dist \
+    DESKTOP_DIR=/app/desktop \
     DATABASE_PATH=/data/database.sqlite
 
 COPY --from=build /app/node_modules ./node_modules
@@ -63,6 +64,8 @@ COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/apps/manager/package.json ./apps/manager/package.json
 COPY --from=build /app/apps/manager/dist ./apps/manager/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
+# Канал раздачи NoVPN Desktop (манифест + установщик + гайд) — из контекста сборки.
+COPY desktop ./desktop
 
 # том для БД (Coolify монтирует persistent storage на /data)
 VOLUME ["/data"]

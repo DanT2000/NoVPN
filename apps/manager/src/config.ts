@@ -92,6 +92,9 @@ export const config = {
   appsDir: env('APPS_DIR', path.join(dataDir, 'apps')),
   // Каталог собранного фронтенда (в проде копируется в образ).
   webDist: env('WEB_DIST', path.join(__dirname, '../../web/dist')),
+  // Канал раздачи NoVPN Desktop: манифест latest.json + установщик .exe + ассеты
+  // гайда. Отдаётся статикой по /desktop/*. В проде копируется в образ (/app/desktop).
+  desktopDir: env('DESKTOP_DIR', path.join(__dirname, '../../../desktop')),
 
   sessionTtlHours: int('SESSION_TTL_HOURS', 24),
   // TLS обычно терминируется на edge/прокси, а контейнер видит http →

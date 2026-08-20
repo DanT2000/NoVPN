@@ -61,6 +61,23 @@ export function createApp() {
   app.use(agentRouter);
   app.use(router);
 
+  // Канал раздачи NoVPN Desktop: /desktop/latest.json (манифест), установщик .exe,
+  // ассеты гайда. Статикой из папки desktop/ репозитория. ВАЖНО: до SPA-fallback,
+  // иначе /desktop/latest.json проваливался в index.html (отдавался HTML вместо JSON).
+  // fallthrough:false → отсутствующий файл = 404, а не HTML главной.
+  if (fs.existsSync(config.desktopDir)) {
+    app.use(
+      '/desktop',
+      express.static(config.desktopDir, {
+        setHeaders: (res, p) => {
+          if (p.endsWith('.json')) res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        },
+      }),
+    );
+    // Отсутствующий файл в /desktop → честный 404 (а не HTML главной и не 500).
+    app.use('/desktop', (_req, res) => res.status(404).json({ error: { type: 'not_found', message: 'Файл не найден.' } }));
+  }
+
   // Статика собранного фронтенда (в проде) + SPA-fallback.
   if (fs.existsSync(config.webDist)) {
     app.use(express.static(config.webDist));

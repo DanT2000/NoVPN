@@ -8,9 +8,15 @@ import path from 'node:path';
 import { marked } from 'marked';
 import { config } from '../config.js';
 
-/** Приложения, у которых есть гайд (id = id приложения в каталоге). */
-export const GUIDES: Record<string, { title: string }> = {
-  'novpn-desktop': { title: 'NoVPN для компьютера — инструкция' },
+/** Приложения, у которых есть гайд (id = id приложения в каталоге).
+ *  mdRel — путь к Markdown относительно config.desktopDir; imgBase — публичный
+ *  префикс, на который переписываются относительные пути картинок images/… */
+export const GUIDES: Record<string, { title: string; mdRel: string; imgBase: string }> = {
+  'novpn-desktop': {
+    title: 'NoVPN для компьютера — инструкция',
+    mdRel: 'guide/novpn-desktop-guide.md',
+    imgBase: '/desktop/guide/images/',
+  },
 };
 
 export const hasGuide = (appId: string): boolean => Object.prototype.hasOwnProperty.call(GUIDES, appId);
@@ -32,15 +38,16 @@ function slug(inner: string): string {
 /** Отрендерить страницу инструкции. null → гайда нет или файл не найден. */
 export function renderGuidePage(appId: string): string | null {
   if (!hasGuide(appId)) return null;
-  const mdPath = path.join(config.webDist, 'guides', appId, 'guide.md');
+  const g = GUIDES[appId]!;
+  const mdPath = path.join(config.desktopDir, g.mdRel);
   let md: string;
   try {
     md = fs.readFileSync(mdPath, 'utf8');
   } catch {
     return null;
   }
-  // Относительные пути картинок → статический путь панели.
-  md = md.replace(/src="images\//g, `src="/guides/${appId}/images/`);
+  // Относительные пути картинок images/… → публичный путь статики канала desktop.
+  md = md.replace(/src="images\//g, `src="${g.imgBase}"`);
   let body = marked.parse(md, { async: false, gfm: true }) as string;
   // Проставить id заголовкам (для якорей оглавления).
   body = body.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_m, lvl, inner) => `<h${lvl} id="${esc(slug(inner))}">${inner}</h${lvl}>`);
