@@ -6,8 +6,8 @@
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop/vpn.exe",
-  "sha256": "bf66122f3163a20bf99275ad6f7257c50b1f0768743c86386cb0a8afb7106bef",
-  "signature": "MC6UzJQqWKAjw+w1EYPwwX209CLlfqcsl596ZScn6VX7HNQs/PvbIRWD/tyrn4d1fY5g5u6Dn8mehd1AsQ+jCw==",
-  "sizeBytes": 16098806,
+  "sha256": "ac3f7fa834f440f1fec0d3b991bdd56aa8ffbcb69fa8adb405cd17e2a7c2c17e",
+  "signature": "FMYptZFTveCwjL+YxrPWbQ1vrRg6prjxDTprja3ADcMdw6jpntrvHIFMd1BXEf3/ER/pfl9NIjbLm6PWdsttBw==",
+  "sizeBytes": 16114059,
   "notes": "Светлая тема, расширенные настройки (DNS, свои локальные домены), реальные приложения, авто-переподключение, режим адаптера на главной, подписанные обновления и много исправлений устойчивости."
 }
