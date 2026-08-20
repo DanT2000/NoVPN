@@ -1,13 +1,13 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "channel": "stable",
   "releasedAt": "2026-08-20",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop/vpn.exe",
-  "sha256": "ac3f7fa834f440f1fec0d3b991bdd56aa8ffbcb69fa8adb405cd17e2a7c2c17e",
-  "signature": "FMYptZFTveCwjL+YxrPWbQ1vrRg6prjxDTprja3ADcMdw6jpntrvHIFMd1BXEf3/ER/pfl9NIjbLm6PWdsttBw==",
-  "sizeBytes": 16114059,
-  "notes": "Светлая тема, расширенные настройки (DNS, свои локальные домены), реальные приложения, авто-переподключение, режим адаптера на главной, подписанные обновления и много исправлений устойчивости."
+  "sha256": "948f6690c2cdbbb2ca8975dceef3c3f37f3aff059cbf1b2c1576220ce50f593a",
+  "signature": "v7b6+eFr7D50cLP+smXLCpySt6dS7k7JFjiaa5pVbRlkJlsj1bUhxvwDdqGJW2+JYfjiUd3UZtn0t9+oKcRPAw==",
+  "sizeBytes": 16104779,
+  "notes": "Переключатель режима адаптера Прокси/TUN на главной, тихий автозапуск режима адаптера без повторных запросов прав, бесшумное обновление одним нажатием и мелкие улучшения."
 }
