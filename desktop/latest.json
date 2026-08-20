@@ -1,12 +1,13 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "channel": "stable",
-  "releasedAt": "2026-08-19",
+  "releasedAt": "2026-08-20",
   "mandatory": false,
-  "minSupportedVersion": "0.0.0",
+  "minSupportedVersion": "0.1.0",
   "url": "https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop/vpn.exe",
-  "sha256": "",
-  "sizeBytes": 0,
-  "notes": "Заглушка. Реальная версия ещё не опубликована — замените vpn.exe и обновите поля version/url/sha256/notes."
+  "sha256": "bf66122f3163a20bf99275ad6f7257c50b1f0768743c86386cb0a8afb7106bef",
+  "signature": "MC6UzJQqWKAjw+w1EYPwwX209CLlfqcsl596ZScn6VX7HNQs/PvbIRWD/tyrn4d1fY5g5u6Dn8mehd1AsQ+jCw==",
+  "sizeBytes": 16098806,
+  "notes": "Светлая тема, расширенные настройки (DNS, свои локальные домены), реальные приложения, авто-переподключение, режим адаптера на главной, подписанные обновления и много исправлений устойчивости."
 }
