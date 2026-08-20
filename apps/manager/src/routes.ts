@@ -28,6 +28,7 @@ import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
 import * as repo from './repo.js';
 import { checkMirror } from './services/routingSync.js';
+import { renderGuidePage } from './services/guides.js';
 
 export const router = Router();
 
@@ -74,6 +75,15 @@ router.get('/routing/:file', (req, res) => {
   if (row) res.setHeader('ETag', `W/"v${row.version}"`);
   res.setHeader('Cache-Control', 'public, max-age=60');
   return res.send(content);
+});
+
+// ── публично: инструкция приложения (Markdown-гайд с картинками) ──
+router.get('/guide/:appId', (req, res) => {
+  const html = renderGuidePage(String(req.params.appId ?? ''));
+  if (!html) return res.status(404).send('Инструкция не найдена.');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  return res.send(html);
 });
 
 // ── подписка Xray ──

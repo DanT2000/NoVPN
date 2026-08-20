@@ -9,6 +9,7 @@
 // должна открываться, даже если SPA недоступна.
 
 import type { AppClient, AppPlatform, User } from '@novpn/shared';
+import { hasGuide } from './guides.js';
 
 const esc = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -72,9 +73,12 @@ export function renderSubPage(opts: {
           ? `<a class="btn ${dl ? 'btn-sec' : 'btn-primary'}" href="${esc(normUrl(e!.url))}" target="_blank" rel="noopener">${esc(storeLabel(e!.url))}</a>`
           : '';
         const add = tap ? `<a class="btn btn-sec" href="${esc(tap)}">Добавить подписку</a>` : '';
+        const guide = hasGuide(a.id)
+          ? `<a class="btn btn-sec" href="/guide/${encodeURIComponent(a.id)}" target="_blank" rel="noopener">📖 Инструкция</a>`
+          : '';
         return `<div class="app">${icon}<div class="app-b"><div class="app-n">${esc(a.client)}</div>${
           a.instruction ? `<div class="app-i">${esc(a.instruction)}</div>` : ''
-        }<div class="row">${dl}${install}${add}</div></div></div>`;
+        }<div class="row">${dl}${install}${add}${guide}</div></div></div>`;
       })
       .join('');
     return `<section class="plat" data-plat="${esc(plat)}" hidden>${items}</section>`;
