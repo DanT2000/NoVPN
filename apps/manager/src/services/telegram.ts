@@ -353,7 +353,8 @@ export async function broadcastToLinked(text: string): Promise<{ total: number; 
   return { total: targets.length, sent, failed, aborted };
 }
 
-type Kb = Array<Array<{ text: string; callback_data: string }>>;
+type KbBtn = { text: string; callback_data: string } | { text: string; url: string };
+type Kb = Array<Array<KbBtn>>;
 
 async function send(chatId: number | string, text: string, opts: { markdown?: boolean; kb?: Kb } = {}): Promise<void> {
   try {
@@ -409,6 +410,22 @@ function siteUrl(): string {
   return d ? (/^https?:\/\//i.test(d) ? d : `https://${d}`) : '';
 }
 
+/** Персональная ссылка пользователя на сайт (детальная настройка). Открывается в браузере. */
+function siteUrlForUser(user: { id: string }): string | null {
+  const base = repo.publicBaseUrl();
+  const tok = repo.getAccessToken(user.id);
+  return base && tok ? `${base}/k/${tok}` : null;
+}
+
+/** Клавиатура под сообщением с конфигом: «Открыть на сайте» (URL) + приложения + меню. */
+function siteButtonKb(user: { id: string }): Kb {
+  const kb: Kb = [];
+  const url = siteUrlForUser(user);
+  if (url) kb.push([{ text: '🌐 Открыть на сайте', url }]);
+  kb.push([{ text: '⬇️ Приложения', callback_data: 'apps' }, { text: '‹ Меню', callback_data: 'menu' }]);
+  return kb;
+}
+
 const PROTO_LABEL: Record<string, string> = { xray: 'Xray (VLESS)', amneziawg: 'AmneziaWG' };
 
 // Идентификация по неизменяемому chat_id (безопасно от подмены @username);
@@ -435,6 +452,8 @@ function mainMenu(user: { name: string; deviceLimit: number | null; id: string }
     ],
     [{ text: '⬇️ Приложения', callback_data: 'apps' }],
   ];
+  const siteLink = siteUrlForUser(user);
+  if (siteLink) kb.push([{ text: '🌐 Открыть на сайте', url: siteLink }]);
   return { text, kb };
 }
 
@@ -612,20 +631,47 @@ async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> 
   await editOrSend(chatId, msgId, 'Какой протокол выпустить?', { kb });
 }
 
-/** Отправить блок с содержимым (ссылка/.conf) отдельным сообщением, безопасно.
- *  Раньше parse_mode=Markdown молча ронял сообщение, если в тексте были символы
- *  разметки (_ * ` [), — пользователь видел «Готово», но конфиг не приходил.
- *  Шлём как обычный текст без parse_mode — надёжно копируется целиком. */
-async function sendBlock(chatId: number, caption: string, payload: string): Promise<boolean> {
-  await send(chatId, caption);
-  return sendRaw(chatId, payload);
+const escHtml = (s: string): string => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!));
+const safeFileName = (s: string): string =>
+  ((s || 'config').replace(/[^\p{L}\p{N}._-]+/gu, '_').replace(/^[._-]+|[._-]+$/g, '').slice(0, 40) || 'config');
+
+/** Конфиг моноширинным блоком — в Telegram копируется по тапу (нажал → скопировалось).
+ *  Экранируем HTML (безопасно: ссылки/.conf без спецсимволов, но на всякий случай).
+ *  block=true → <pre> (многострочный, с кнопкой копирования у блока). */
+async function sendCopyable(chatId: number, caption: string, payload: string, opts: { block?: boolean; kb?: Kb } = {}): Promise<boolean> {
+  const body = opts.block ? `<pre>${escHtml(payload)}</pre>` : `<code>${escHtml(payload)}</code>`;
+  const text = caption ? `${escHtml(caption)}\n\n${body}` : body;
+  try {
+    await tgApi('sendMessage', {
+      chat_id: chatId,
+      text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      ...(opts.kb ? { reply_markup: { inline_keyboard: opts.kb } } : {}),
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-/** Прямая отправка текста без parse_mode; возвращает успех (для диагностики). */
-async function sendRaw(chatId: number | string, text: string): Promise<boolean> {
+/** Отправить конфиг ФАЙЛОМ (собирается на лету из текста, на диске не хранится).
+ *  Через прокси-диспетчер бота, как tgApi, но multipart (sendDocument). */
+async function sendDocumentText(chatId: number, filename: string, content: string, caption: string, kb?: Kb): Promise<boolean> {
+  const token = getToken();
+  if (!token) return false;
   try {
-    await tgApi('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true });
-    return true;
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('document', new Blob([content], { type: 'text/plain; charset=utf-8' }), filename);
+    if (caption) form.append('caption', caption);
+    if (kb) form.append('reply_markup', JSON.stringify({ inline_keyboard: kb }));
+    const req: RequestInit & { dispatcher?: ProxyAgent } = { method: 'POST', body: form, signal: AbortSignal.timeout(30000) };
+    const disp = dispatcherFor(resolveTgProxyUrl());
+    if (disp) req.dispatcher = disp;
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, req);
+    const d = (await r.json()) as { ok?: boolean };
+    return !!d?.ok;
   } catch {
     return false;
   }
@@ -636,6 +682,7 @@ async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & 
   const serverId = user.allowedServers[0];
   if (!serverId) return void send(chatId, 'Для вашего доступа не назначен сервер. Обратитесь к администратору.');
   await send(chatId, `Выпускаю конфиг (${PROTO_LABEL[protocol]})…`);
+  const siteKb = siteButtonKb(user);
   try {
     const out = await issueForUser(user, 'Telegram', serverId, protocol);
     if (protocol === 'xray') {
@@ -648,29 +695,45 @@ async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & 
       // /full добавляем ТОЛЬКО к настоящей ссылке-подписке (…/sub/<токен>), а не к
       // запасному vless://-конфигу, иначе получился бы битый vless://…/full.
       const subUrl = advanced && base.includes('/sub/') && !base.endsWith('/full') ? `${base}/full` : base;
-      const ok = await sendBlock(chatId, 'Готово! Ваша ссылка-подписка (одна на все устройства) — скопируйте целиком:', subUrl);
+      // Ссылка моноширинным блоком — нажал по ней в Telegram → скопировалось.
+      const ok = await sendCopyable(chatId, '✅ Готово! Подписка Xray (одна на все устройства). Нажмите на ссылку ниже — она скопируется:', subUrl);
       if (!ok) {
-        await send(chatId, 'Не удалось отправить ссылку. Откройте личный кабинет на сайте и скопируйте её там.');
+        await send(chatId, 'Не удалось отправить ссылку. Откройте личный кабинет на сайте.', { kb: siteKb });
         return;
       }
-      await send(chatId, '📖 Откройте приложение (Happ / V2RayTun) → «+» → «Добавить подписку / Импорт из буфера» → вставьте ссылку → подключитесь.', {
-        kb: [[{ text: '⬇️ Приложения', callback_data: 'apps' }], [{ text: '‹ Меню', callback_data: 'menu' }]],
-      });
+      await send(
+        chatId,
+        '📖 Как подключить (Xray):\n1. Скопируйте ссылку выше (тап по ней).\n2. Откройте приложение Happ или V2RayTun → «+» → «Добавить подписку / Импорт из буфера».\n3. Вставьте ссылку → подключитесь.',
+        { kb: siteKb },
+      );
       return;
     }
-    // AmneziaWG: .conf + ссылка vpn:// (для AmneziaVPN) — как в кабинете.
+    // AmneziaWG: два способа — ссылка vpn:// (копировать) и файл .conf (скачать).
     const conf = out.conf ?? '';
-    const ok = await sendBlock(chatId, 'Готово! Ваш конфиг AmneziaWG — сохраните текст ниже как файл .conf:', conf);
-    if (!ok) {
-      await send(chatId, 'Не удалось отправить конфиг. Откройте личный кабинет на сайте и скачайте его там.');
+    const fname = `NoVPN-${safeFileName(user.name)}.conf`;
+    let anySent = false;
+    // 1) vpn:// — копируемый (для приложения AmneziaVPN, импорт в один тап).
+    if (out.vpnKey) {
+      anySent = (await sendCopyable(chatId, '✅ Готово! Способ 1 — ссылка vpn:// для приложения AmneziaVPN. Нажмите — скопируется:', out.vpnKey)) || anySent;
+    }
+    // 2) .conf ФАЙЛОМ (для приложения AmneziaWG). Собирается на лету, не хранится.
+    if (conf) {
+      const fileOk = await sendDocumentText(chatId, fname, conf, '📎 Способ 2 — файл конфигурации для приложения AmneziaWG (импорт из файла).');
+      if (!fileOk) {
+        // Фолбэк, если файл не ушёл: тем же конфигом текстом (копируется по тапу).
+        await sendCopyable(chatId, 'Файл не отправился — вот конфиг текстом, сохраните как .conf:', conf, { block: true });
+      }
+      anySent = true;
+    }
+    if (!anySent) {
+      await send(chatId, 'Не удалось отправить конфиг. Откройте личный кабинет на сайте.', { kb: siteKb });
       return;
     }
-    if (out.vpnKey) {
-      await sendBlock(chatId, 'Ссылка vpn:// — для приложения AmneziaVPN (импорт в один тап):', out.vpnKey);
-    }
-    await send(chatId, '📖 AmneziaWG: импортируйте файл .conf. AmneziaVPN: откройте ссылку vpn:// выше.', {
-      kb: [[{ text: '⬇️ Приложения', callback_data: 'apps' }], [{ text: '‹ Меню', callback_data: 'menu' }]],
-    });
+    await send(
+      chatId,
+      '📖 Как подключить (AmneziaWG):\n• Приложение AmneziaVPN — откройте ссылку vpn:// (импорт в один тап).\n• Приложение AmneziaWG — импортируйте файл .conf выше.',
+      { kb: siteKb },
+    );
   } catch (e) {
     await send(chatId, 'Не удалось выпустить конфиг: ' + (e instanceof Error ? e.message : 'ошибка') + '\nПопробуйте ещё раз чуть позже.', {
       kb: [[{ text: 'Повторить', callback_data: `proto:${protocol}` }], [{ text: '‹ Меню', callback_data: 'menu' }]],
@@ -695,19 +758,31 @@ async function sendDevices(chatId: number, user: ReturnType<typeof findUser> & o
 }
 
 async function sendHowto(chatId: number, user: ReturnType<typeof findUser> & object, msgId?: number): Promise<void> {
-  const site = siteUrl();
   const protos = user.allowedProtocols;
-  const parts = ['📖 Как подключить:', ''];
-  if (protos.includes('xray')) parts.push('• Xray: приложение Happ или V2RayTun → «+» → «Импорт из буфера» → вставьте выданную ссылку.');
-  if (protos.includes('amneziawg')) parts.push('• AmneziaWG: приложение AmneziaWG/AmneziaVPN → импорт .conf или скан QR.');
-  parts.push('', 'Нажмите «Получить конфиг», затем импортируйте его в приложение.');
-  if (site) parts.push('', `Все приложения и инструкции: ${site}`);
-  await editOrSend(chatId, msgId, parts.join('\n'), {
-    kb: [
-      [{ text: '➕ Получить конфиг', callback_data: 'getcfg' }, { text: '⬇️ Приложения', callback_data: 'apps' }],
-      [{ text: '‹ Меню', callback_data: 'menu' }],
-    ],
-  });
+  const parts: string[] = ['📖 Как подключить', ''];
+  if (protos.includes('xray')) {
+    parts.push(
+      '▸ Xray (Happ / V2RayTun):',
+      '1. «Получить конфиг» → придёт ссылка-подписка.',
+      '2. Скопируйте её (тап по ссылке в сообщении).',
+      '3. В приложении: «+» → «Добавить подписку / Импорт из буфера» → вставьте.',
+      '',
+    );
+  }
+  if (protos.includes('amneziawg')) {
+    parts.push(
+      '▸ AmneziaWG:',
+      '• AmneziaVPN — откройте ссылку vpn:// (импорт в один тап).',
+      '• AmneziaWG — импортируйте файл .conf.',
+      '',
+    );
+  }
+  parts.push('Нажмите «Получить конфиг» и следуйте шагам. Для детальной настройки — «Открыть на сайте».');
+  const kb: Kb = [[{ text: '➕ Получить конфиг', callback_data: 'getcfg' }, { text: '⬇️ Приложения', callback_data: 'apps' }]];
+  const siteLink = siteUrlForUser(user);
+  if (siteLink) kb.push([{ text: '🌐 Открыть на сайте', url: siteLink }]);
+  kb.push([{ text: '‹ Меню', callback_data: 'menu' }]);
+  await editOrSend(chatId, msgId, parts.join('\n'), { kb });
 }
 
 async function sendApps(chatId: number, msgId?: number): Promise<void> {
