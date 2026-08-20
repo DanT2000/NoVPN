@@ -47,7 +47,10 @@ export function renderGuidePage(appId: string): string | null {
     return null;
   }
   // Относительные пути картинок images/… → публичный путь статики канала desktop.
-  md = md.replace(/src="images\//g, `src="${g.imgBase}"`);
+  // imgBase уже заканчивается на «/», а закрывающая кавычка берётся из исходного тега —
+  // добавлять свою НЕЛЬЗЯ (иначе src="…/"01.png" рвётся). Покрываем HTML <img src="…">
+  // и markdown ![](…).
+  md = md.replace(/src="images\//g, `src="${g.imgBase}`).replace(/\]\(images\//g, `](${g.imgBase}`);
   let body = marked.parse(md, { async: false, gfm: true }) as string;
   // Проставить id заголовкам (для якорей оглавления).
   body = body.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_m, lvl, inner) => `<h${lvl} id="${esc(slug(inner))}">${inner}</h${lvl}>`);

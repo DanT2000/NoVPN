@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 // Лёгкий редактор JSON без сторонних библиотек (в проекте нет monaco/codemirror):
 // прозрачный <textarea> поверх подсвеченного <pre> (классика react-simple-code-editor)
@@ -88,14 +88,11 @@ export function JsonEditor({
     onValidityChange?.(validity);
   }, [validity, onValidityChange]);
 
-  // Подсветка — дебаунс (регулярка + большой innerHTML дороги).
-  const [html, setHtml] = useState<string>(() => (value.length <= HIGHLIGHT_MAX_CHARS ? highlightJson(value) : escapeHtml(value)));
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      setHtml(value.length <= HIGHLIGHT_MAX_CHARS ? highlightJson(value) : escapeHtml(value));
-    }, 140);
-    return () => window.clearTimeout(id);
-  }, [value]);
+  // Подсветка — СИНХРОННО (useMemo). Текст в textarea прозрачный, видно только оверлей,
+  // поэтому debounce прятал бы набираемые символы до паузы ≥140мс (набор ощущался бы
+  // сломанным). На больших файлах (> cutoff) отдаём просто экранированный текст без
+  // токенизации. Валидация тоже синхронна на каждый ввод — единообразно.
+  const html = useMemo(() => (value.length <= HIGHLIGHT_MAX_CHARS ? highlightJson(value) : escapeHtml(value)), [value]);
 
   const lineCount = useMemo(() => (value === '' ? 1 : value.split('\n').length), [value]);
   const gutterText = useMemo(() => Array.from({ length: lineCount }, (_, i) => i + 1).join('\n'), [lineCount]);

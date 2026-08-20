@@ -32,7 +32,7 @@ export interface ListConversion {
 export function isValidHost(s: string): boolean {
   if (!s || s.length > 253 || /\s/.test(s)) return false;
   const h = s.startsWith('*.') ? s.slice(2) : s.startsWith('.') ? s.slice(1) : s;
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return true; // IPv4
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return h.split('.').every((o) => Number(o) <= 255); // IPv4 (октеты 0–255)
   return /^([a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)+[a-z]{2,}$/.test(h);
 }
 

@@ -719,11 +719,11 @@ async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & 
     // 2) .conf ФАЙЛОМ (для приложения AmneziaWG). Собирается на лету, не хранится.
     if (conf) {
       const fileOk = await sendDocumentText(chatId, fname, conf, '📎 Способ 2 — файл конфигурации для приложения AmneziaWG (импорт из файла).');
-      if (!fileOk) {
-        // Фолбэк, если файл не ушёл: тем же конфигом текстом (копируется по тапу).
-        await sendCopyable(chatId, 'Файл не отправился — вот конфиг текстом, сохраните как .conf:', conf, { block: true });
-      }
-      anySent = true;
+      // Фолбэк, если файл не ушёл: тем же конфигом текстом (копируется по тапу).
+      // ВАЖНО: считаем доставку успешной ТОЛЬКО если файл ИЛИ фолбэк реально отправились —
+      // иначе ниже уйдёт инструкция «как подключить», а конфига у человека не будет.
+      const textOk = fileOk || (await sendCopyable(chatId, 'Файл не отправился — вот конфиг текстом, сохраните как .conf:', conf, { block: true }));
+      if (fileOk || textOk) anySent = true;
     }
     if (!anySent) {
       await send(chatId, 'Не удалось отправить конфиг. Откройте личный кабинет на сайте.', { kb: siteKb });

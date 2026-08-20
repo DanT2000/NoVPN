@@ -197,3 +197,22 @@ test('sourceFormat в мете определяется по URL; смена URL
   assert.equal(repo.getRoutingFull('sites')!.sourceFormat, 'txt');
   assert.equal(repo.getRoutingFull('sites')!.sourceStats, null); // сброшено сменой URL
 });
+
+test('ПУСТОЙ файл + источник-массив: первый синк УСТАНАВЛИВАЕТ тип (не отклоняется)', async () => {
+  repo.saveRoutingContent('apps', '{\n  "items": []\n}'); // пустой object-контейнер (count 0)
+  repo.saveRoutingSource('apps', { mode: 'mirror', sourceUrl: 'https://src/list.json', autoSync: true });
+  const before = repo.getRoutingFull('apps')!;
+  stubFetch(200, JSON.stringify(['a.com', 'b.com', 'c.com'])); // массив верхнего уровня ≠ object
+  const r = await checkMirror('apps', { apply: true });
+  assert.equal(r.ok, true);
+  assert.equal(r.status, 'ok'); // раньше было бы 'rejected' («object → array»)
+  const after = repo.getRoutingFull('apps')!;
+  assert.equal(after.version, before.version + 1);
+  assert.equal(after.rootType, 'array');
+  assert.equal(after.entryCount, 3);
+});
+
+test('convertList: невалидный IPv4 (октет > 255) отбрасывается', () => {
+  const c = convertList('999.999.999.999\n10.0.0.1\nok.ru');
+  assert.deepEqual(c.items, ['10.0.0.1', 'ok.ru']);
+});
