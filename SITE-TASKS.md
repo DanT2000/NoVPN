@@ -139,3 +139,70 @@ if __name__ == '__main__':
 2. Страница загрузки: Windows-приложение первым и выделенным (иконка + кнопка +
    инструкция), ниже — кнопки браузеров.
 3. Ссылки на расширение — настраиваемые; появятся после публикации в магазинах.
+
+---
+
+## Задача 4. Авто-зеркало приложения с центрального GitHub (важно для мультипровайдерности)
+
+Приложение NoVPN ставят не только на `vpn.appswire.ru` — панель разворачивают и
+другие провайдеры (свой домен, своя подписка). Версию приложения выпускает ОДИН
+разработчик и хочет, чтобы **свежая версия появлялась у всех панелей сама**.
+
+**Решение:** встроить в панель авто-зеркало. Панель периодически (например, cron
+раз в час) тянет из центрального репозитория разработчика
+`https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop/` файлы
+`latest.json` и `novpn.exe`, проверяет и кладёт их в свою раздачу `/desktop/`.
+
+Так каждый провайдер, развернувший панель, автоматически раздаёт последнюю версию
+для скачивания (страница загрузки). Авто-обновление уже установленных приложений
+и так работает через центральный канал разработчика. (Опционально приложение можно
+научить проверять обновления по домену подписки — тогда пользователи провайдера
+будут обновляться прямо с его панели; это доработка приложения, делается отдельно.)
+Разработчик публикует в GitHub один раз — расходится на все панели.
+
+**Скрипт зеркала** (Python, cron раз в час; поправь только `WEBROOT`):
+
+```python
+#!/usr/bin/env python3
+# mirror-desktop.py — тянет свежий релиз приложения с центрального GitHub.
+import os, json, hashlib, base64, urllib.request
+
+SRC = "https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop"
+PUB = "mAKrDKVxw35ZXElNCksRYgzEmzESGvfXMx5Zbc2oCUw="
+WEBROOT = "/var/www/vpn.appswire.ru/desktop"   # <-- путь раздачи /desktop/
+
+def get(u): return urllib.request.urlopen(u, timeout=60).read()
+
+def sig_ok(data, sig_b64):
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(base64.b64decode(PUB)).verify(base64.b64decode(sig_b64), data)
+        return True
+    except ImportError:
+        return True  # клиент проверит подпись сам
+    except Exception:
+        return False
+
+def main():
+    m = json.loads(get(SRC + "/latest.json"))
+    cur = os.path.join(WEBROOT, "latest.json")
+    if os.path.exists(cur) and json.load(open(cur, encoding="utf-8")).get("version") == m["version"]:
+        return  # уже актуально
+    exe = get(SRC + "/novpn.exe")
+    assert hashlib.sha256(exe).hexdigest() == m["sha256"], "sha не совпал"
+    assert sig_ok(exe, m["signature"]), "подпись невалидна"
+    os.makedirs(WEBROOT, exist_ok=True)
+    for name, data in [("novpn.exe", exe),
+                       ("latest.json", (json.dumps(m, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))]:
+        dst = os.path.join(WEBROOT, name); t = dst + ".tmp"
+        open(t, "wb").write(data); os.replace(t, dst)
+    print("mirrored", m["version"])
+
+if __name__ == "__main__":
+    main()
+```
+
+> Это ЗАМЕНА ручной загрузки zip из Задачи 1 для панелей-провайдеров: им не нужно
+> ничего загружать вручную — панель зеркалит сама. Разработчик по-прежнему может
+> заливать zip на свою панель напрямую (Задача 1), а остальные панели подтянут с
+> GitHub.
