@@ -1,8 +1,10 @@
 # Задачи для сайта vpn.appswire.ru
 
-Это задание для Claude Code на сервере сайта. Три вещи: (1) выкладывать релиз
+Это задание для Claude Code на сервере панели. Четыре вещи: (1) выкладывать релиз
 приложения одним архивом с проверкой, (2) сделать страницу загрузки, (3) добавить
-ссылки на расширение для браузеров.
+ссылки на расширение для браузеров, (4) настроить авто-зеркало версии с центрального
+источника и выбор «авто / закрепить версию» (это ключевое для мультипровайдерности —
+разработчик единственный источник версии, но грузит её один раз).
 
 Всё, что нужно, лежит в репозитории `github.com/DanT2000/NoVPN`:
 - `desktop/` — то, что сайт раздаёт по `/desktop/` (манифест, установщик, инструкция, иконка);
@@ -142,67 +144,118 @@ if __name__ == '__main__':
 
 ---
 
-## Задача 4. Авто-зеркало приложения с центрального GitHub (важно для мультипровайдерности)
+## Задача 4. Единый источник версии + локальное зеркало у каждой панели
 
-Приложение NoVPN ставят не только на `vpn.appswire.ru` — панель разворачивают и
-другие провайдеры (свой домен, своя подписка). Версию приложения выпускает ОДИН
-разработчик и хочет, чтобы **свежая версия появлялась у всех панелей сама**.
+Приложение NoVPN разворачивают много провайдеров (свой домен, своя подписка).
+Версию выпускает ОДИН разработчик — он единственный источник. Нужно, чтобы:
 
-**Решение:** встроить в панель авто-зеркало. Панель периодически (например, cron
-раз в час) тянет из центрального репозитория разработчика
-`https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop/` файлы
-`latest.json` и `novpn.exe`, проверяет и кладёт их в свою раздачу `/desktop/`.
+- новая версия **сама появлялась у всех панелей** (разработчик публикует один раз);
+- панель провайдера **скачивала версию один раз** с центрального источника и дальше
+  раздавала её **со своего сайта** — чтобы весь трафик скачиваний не шёл на сервер
+  разработчика;
+- у каждого провайдера был **выбор: авто-обновление (по умолчанию) или закрепить
+  конкретную версию** и дальше не обновляться.
 
-Так каждый провайдер, развернувший панель, автоматически раздаёт последнюю версию
-для скачивания (страница загрузки). Авто-обновление уже установленных приложений
-и так работает через центральный канал разработчика. (Опционально приложение можно
-научить проверять обновления по домену подписки — тогда пользователи провайдера
-будут обновляться прямо с его панели; это доработка приложения, делается отдельно.)
-Разработчик публикует в GitHub один раз — расходится на все панели.
+### Как работает
 
-**Скрипт зеркала** (Python, cron раз в час; поправь только `WEBROOT`):
+Панель периодически (cron ~раз в час) обращается к центральному источнику,
+скачивает свежий `latest.json` + `novpn.exe` **только если версия сменилась**,
+проверяет их и кладёт к себе в раздачу `/desktop/`. Скачанные версии складываются в
+локальный архив `/desktop/releases/`, чтобы можно было закрепиться на любой из них.
+
+**Центральный источник** (пробуем по порядку, берём первый рабочий):
+1. `https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop` — основной
+   (GitHub держит нагрузку, сервер разработчика не грузится);
+2. `https://vpn.appswire.ru/desktop` — резерв.
+
+**Целостность:** проверяем sha256 и **подпись Ed25519** публичным ключом
+`mAKrDKVxw35ZXElNCksRYgzEmzESGvfXMx5Zbc2oCUw=`. Подделать нельзя — приватный ключ
+только у разработчика. Поэтому зеркалить с центрального источника безопасно.
+
+### Настройка у провайдера (в панели/админке)
+
+- **Режим обновления приложения:** `Авто` (по умолчанию) или `Закрепить версию`.
+  - `Авто` — как вышла новая версия, панель сама её скачивает и начинает раздавать.
+  - `Закрепить версию X.Y.Z` — панель раздаёт выбранную версию из локального архива
+    и больше не обновляется, пока провайдер не сменит режим.
+
+По умолчанию — `Авто`. Это одно поле в настройках панели.
+
+### Скрипт зеркала (Python, cron ~раз в час; поправь `WEBROOT`, режим — из настроек панели)
 
 ```python
 #!/usr/bin/env python3
-# mirror-desktop.py — тянет свежий релиз приложения с центрального GitHub.
+# mirror-desktop.py — держит /desktop у провайдера в актуальном виде.
+#   режим по умолчанию: auto (последняя версия).
+#   закрепить версию: MODE="pin"; PIN="0.2.5" (из локального архива releases/).
 import os, json, hashlib, base64, urllib.request
 
-SRC = "https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop"
+SOURCES = ["https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop",
+           "https://vpn.appswire.ru/desktop"]
 PUB = "mAKrDKVxw35ZXElNCksRYgzEmzESGvfXMx5Zbc2oCUw="
 WEBROOT = "/var/www/vpn.appswire.ru/desktop"   # <-- путь раздачи /desktop/
+MODE = os.environ.get("NOVPN_MODE", "auto")    # "auto" | "pin"  (бери из настроек панели)
+PIN  = os.environ.get("NOVPN_PIN", "")          # напр. "0.2.5" при MODE=pin
 
-def get(u): return urllib.request.urlopen(u, timeout=60).read()
+def get(path):
+    last = None
+    for base in SOURCES:
+        try: return urllib.request.urlopen(base + path, timeout=60).read()
+        except Exception as e: last = e
+    raise last
 
 def sig_ok(data, sig_b64):
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         Ed25519PublicKey.from_public_bytes(base64.b64decode(PUB)).verify(base64.b64decode(sig_b64), data)
         return True
-    except ImportError:
-        return True  # клиент проверит подпись сам
-    except Exception:
-        return False
+    except ImportError: return True     # клиент проверит подпись сам
+    except Exception:   return False
 
-def main():
-    m = json.loads(get(SRC + "/latest.json"))
-    cur = os.path.join(WEBROOT, "latest.json")
-    if os.path.exists(cur) and json.load(open(cur, encoding="utf-8")).get("version") == m["version"]:
-        return  # уже актуально
-    exe = get(SRC + "/novpn.exe")
-    assert hashlib.sha256(exe).hexdigest() == m["sha256"], "sha не совпал"
-    assert sig_ok(exe, m["signature"]), "подпись невалидна"
-    os.makedirs(WEBROOT, exist_ok=True)
+def publish(m, exe):
+    os.makedirs(os.path.join(WEBROOT, "releases"), exist_ok=True)
+    open(os.path.join(WEBROOT, "releases", "novpn-%s.exe" % m["version"]), "wb").write(exe)
+    open(os.path.join(WEBROOT, "releases", "latest-%s.json" % m["version"]), "w", encoding="utf-8").write(
+        json.dumps(m, ensure_ascii=False, indent=2))
     for name, data in [("novpn.exe", exe),
                        ("latest.json", (json.dumps(m, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))]:
         dst = os.path.join(WEBROOT, name); t = dst + ".tmp"
         open(t, "wb").write(data); os.replace(t, dst)
+
+def current_version():
+    p = os.path.join(WEBROOT, "latest.json")
+    return json.load(open(p, encoding="utf-8"))["version"] if os.path.exists(p) else None
+
+def main():
+    if MODE == "pin" and PIN:
+        if current_version() == PIN: return                       # уже на закреплённой
+        arc_exe = os.path.join(WEBROOT, "releases", "novpn-%s.exe" % PIN)
+        arc_man = os.path.join(WEBROOT, "releases", "latest-%s.json" % PIN)
+        if os.path.exists(arc_exe) and os.path.exists(arc_man):    # берём из локального архива
+            publish(json.load(open(arc_man, encoding="utf-8")), open(arc_exe, "rb").read())
+            print("pinned", PIN); return
+        print("[!] версия", PIN, "не найдена в локальном архиве — сначала поработай в auto"); return
+
+    # auto: последняя версия
+    m = json.loads(get("/latest.json"))
+    if current_version() == m["version"]: return                  # уже актуально, не качаем
+    exe = get("/novpn.exe")
+    assert hashlib.sha256(exe).hexdigest() == m["sha256"], "sha не совпал"
+    assert sig_ok(exe, m["signature"]), "подпись невалидна"
+    publish(m, exe)
     print("mirrored", m["version"])
 
 if __name__ == "__main__":
     main()
 ```
 
-> Это ЗАМЕНА ручной загрузки zip из Задачи 1 для панелей-провайдеров: им не нужно
-> ничего загружать вручную — панель зеркалит сама. Разработчик по-прежнему может
-> заливать zip на свою панель напрямую (Задача 1), а остальные панели подтянут с
-> GitHub.
+### Что это даёт
+
+- Разработчик выложил версию (в GitHub) — **один раз**. Все панели подтянут сами.
+- Скачивание версии каждой панелью — **однократное**; дальше пользователи качают
+  установщик со своего провайдера, а не с сервера разработчика.
+- Провайдер сам решает: жить на авто-обновлении (по умолчанию) или закрепиться на
+  проверенной версии.
+
+> Прямая загрузка zip (Задача 1) остаётся как ручной способ для панели разработчика.
+> Остальные панели ничего не загружают — зеркалят автоматически.
