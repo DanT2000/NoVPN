@@ -1,13 +1,13 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "channel": "stable",
   "releasedAt": "2026-08-20",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/vpn.exe",
-  "sha256": "c11c612ca3d7498c06346b318e2fdac0b3a42bb097c03e276727868dc01ad41b",
-  "signature": "M59DSLbjv6dyJZ4XHjvtRSjiHagW67fcqTkKTzx41zwnZRYUSBCYOe1amFoNMnSdPr+E3iVvF8hcMWF4s7FsDQ==",
-  "sizeBytes": 16120981,
-  "notes": "Списки правил теперь подгружаются с сервера и показывают реальное число (были зашитые 46 вместо тысячи с лишним), обновляются сами; в DNS добавлен вариант «Свой» — можно указать домашний или любой DNS; ссылка обновления ведёт на сайт (устранена ошибка «файл повреждён»); плюс все исправления устойчивости из 0.2.3."
+  "sha256": "67955377d0c49f7e432fb8bc3c04f0a8769f5730c40a4c745e7ba8e1dca9b609",
+  "signature": "ny+P2MGYXDWf8kkCDwgvwDcRkaCVuA1uDMlJALDuuBFT3hQZRCyxjInKI60n4jTAhTyG/rTXr3slqd4WWK50AQ==",
+  "sizeBytes": 16185753,
+  "notes": "Новая иконка приложения; смена папки установки больше не ломает запуск (чистится старая копия, чинятся пути автозапуска) — раньше после переноса писало «не удалось найти файл»; свой DNS и реальные счётчики списков из 0.2.4."
 }
