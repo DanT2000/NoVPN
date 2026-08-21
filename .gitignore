@@ -90,3 +90,5 @@ v2rayTUN.webp
 !desktop/*.dmg
 !desktop/*.AppImage
 !desktop/*.deb
+release/
+*.novpn-keys

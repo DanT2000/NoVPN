@@ -2,12 +2,11 @@
   "product": "NoVPN Desktop",
   "version": "0.2.5",
   "channel": "stable",
-  "releasedAt": "2026-08-20",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
-  "url": "https://vpn.appswire.ru/desktop/vpn.exe",
+  "url": "https://vpn.appswire.ru/desktop/novpn.exe",
   "sha256": "67955377d0c49f7e432fb8bc3c04f0a8769f5730c40a4c745e7ba8e1dca9b609",
   "signature": "ny+P2MGYXDWf8kkCDwgvwDcRkaCVuA1uDMlJALDuuBFT3hQZRCyxjInKI60n4jTAhTyG/rTXr3slqd4WWK50AQ==",
   "sizeBytes": 16185753,
-  "notes": "Новая иконка приложения; смена папки установки больше не ломает запуск (чистится старая копия, чинятся пути автозапуска) — раньше после переноса писало «не удалось найти файл»; свой DNS и реальные счётчики списков из 0.2.4."
+  "notes": "Новая иконка; смена папки установки не ломает запуск; свой DNS; реальные счётчики списков."
 }
