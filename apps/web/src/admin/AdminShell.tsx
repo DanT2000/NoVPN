@@ -13,6 +13,7 @@ import { ServerWizard } from './ServerWizard';
 import { Telegram } from './Telegram';
 import { AppsAdmin } from './AppsAdmin';
 import { SmartRouting } from './SmartRouting';
+import { DesktopUpdates } from './DesktopUpdates';
 import { Logs } from './Logs';
 import { Settings } from './Settings';
 
@@ -29,6 +30,7 @@ const NAV: NavItem[] = [
   { key: 'telegram', label: 'Telegram', match: ['telegram'] },
   { key: 'apps', label: 'Приложения', match: ['apps'] },
   { key: 'smart-routing', label: 'Умная маршрутизация', match: ['smart-routing'] },
+  { key: 'desktop-updates', label: 'Обновления приложения', match: ['desktop-updates'] },
   { key: 'logs', label: 'Логи', match: ['logs'] },
   { key: 'settings', label: 'Настройки', match: ['settings'] },
 ];
@@ -73,6 +75,7 @@ export function AdminShell() {
       {route === 'telegram' && <Telegram />}
       {route === 'apps' && <AppsAdmin />}
       {route === 'smart-routing' && <SmartRouting />}
+      {route === 'desktop-updates' && <DesktopUpdates />}
       {route === 'logs' && <Logs />}
       {route === 'settings' && <Settings />}
     </>

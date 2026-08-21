@@ -585,6 +585,26 @@ export const mockApi: ApiClient = {
     return { servers };
   },
 
+  // ── канал обновлений NoVPN Desktop (in-memory) ──
+  async getDesktop() {
+    await wait(120);
+    return { current: DESKTOP_CUR, config: { ...DESKTOP_CFG }, versions: DESKTOP_VERSIONS };
+  },
+  async saveDesktopConfig(patch) {
+    await wait(120);
+    if (patch.mode) DESKTOP_CFG.mode = patch.mode;
+    if (patch.pinnedVersion !== undefined) DESKTOP_CFG.pinnedVersion = patch.pinnedVersion;
+    return { config: { ...DESKTOP_CFG }, applied: { ok: true, action: 'nochange', version: DESKTOP_CUR.version }, current: DESKTOP_CUR, versions: DESKTOP_VERSIONS };
+  },
+  async uploadDesktopRelease(_file: File) {
+    await wait(300);
+    return { ok: true, version: DESKTOP_CUR.version, current: DESKTOP_CUR, versions: DESKTOP_VERSIONS };
+  },
+  async checkDesktopUpdate() {
+    await wait(200);
+    return { ok: true, action: 'nochange', version: DESKTOP_CUR.version };
+  },
+
   // ── умная маршрутизация (in-memory) ──
   async getRoutingFiles() {
     await wait(120);
@@ -619,6 +639,19 @@ export const mockApi: ApiClient = {
     return { ok: true, changed: false, status: 'nochange' as const, reason: 'Обновлений нет.', count: f.entryCount, added: 0, removed: 0 };
   },
 };
+
+// Демо-состояние канала обновлений десктопа.
+const DESKTOP_CUR = {
+  version: '0.2.5',
+  url: 'https://vpn.appswire.ru/desktop/novpn.exe',
+  sha256: '67955377d0c49f7e432fb8bc3c04f0a8769f5730c40a4c745e7ba8e1dca9b609',
+  signature: 'ny+P2M…',
+  sizeBytes: 16185753,
+  notes: 'Новая иконка; смена папки установки не ломает запуск; свой DNS.',
+  releasedAt: '2026-08-20',
+};
+const DESKTOP_VERSIONS = [{ version: '0.2.5', sizeBytes: 16185753 }];
+const DESKTOP_CFG: { mode: 'auto' | 'pin' | 'manual'; pinnedVersion: string | null } = { mode: 'auto', pinnedVersion: null };
 
 // Демо-состояние трёх файлов для mock-режима.
 const ROUTING: Record<'upstream' | 'sites' | 'apps', {

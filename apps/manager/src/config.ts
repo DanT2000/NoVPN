@@ -92,9 +92,12 @@ export const config = {
   appsDir: env('APPS_DIR', path.join(dataDir, 'apps')),
   // Каталог собранного фронтенда (в проде копируется в образ).
   webDist: env('WEB_DIST', path.join(__dirname, '../../web/dist')),
-  // Канал раздачи NoVPN Desktop: манифест latest.json + установщик .exe + ассеты
-  // гайда. Отдаётся статикой по /desktop/*. В проде копируется в образ (/app/desktop).
-  desktopDir: env('DESKTOP_DIR', path.join(__dirname, '../../../desktop')),
+  // Канал раздачи NoVPN Desktop: манифест + установщик + гайд. Отдаётся статикой по
+  // /desktop/*. На ПОСТОЯННОМ томе (/data/desktop) — чтобы загрузка/авто-зеркало релизов
+  // переживали редеплой (образ read-only). При первом старте сидим из встроенной версии.
+  desktopDir: env('DESKTOP_DIR', path.join(dataDir, 'desktop')),
+  // Встроенная (закоммиченная в образ) версия — источник первичного сида /data/desktop.
+  desktopSeedDir: env('DESKTOP_SEED_DIR', path.join(__dirname, '../../../desktop')),
 
   sessionTtlHours: int('SESSION_TTL_HOURS', 24),
   // TLS обычно терминируется на edge/прокси, а контейнер видит http →

@@ -1,7 +1,7 @@
 // Все HTTP-роуты. Пути совпадают с httpApi фронтенда.
 
 import net from 'node:net';
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type { Request } from 'express';
 import type {
   AppSettings,
@@ -29,6 +29,16 @@ import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from '.
 import * as repo from './repo.js';
 import { checkMirror } from './services/routingSync.js';
 import { renderGuidePage } from './services/guides.js';
+import { renderDownloadPage } from './services/downloadPage.js';
+import {
+  getDesktopConfig,
+  setDesktopConfig,
+  currentManifest,
+  listVersions,
+  acceptUpload,
+  mirrorCheck,
+  type DesktopChannelConfig,
+} from './services/desktopChannel.js';
 
 export const router = Router();
 
@@ -75,6 +85,20 @@ router.get('/routing/:file', (req, res) => {
   if (row) res.setHeader('ETag', `W/"v${row.version}"`);
   res.setHeader('Cache-Control', 'public, max-age=60');
   return res.send(content);
+});
+
+// ── публично: страница «Скачать» (NoVPN Desktop + расширение) ──
+router.get('/download', (_req, res) => {
+  const s = repo.getSettings();
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.send(
+    renderDownloadPage({
+      appName: repo.brandName(),
+      version: currentManifest()?.version ?? null,
+      extChromeUrl: s.extChromeUrl,
+      extFirefoxUrl: s.extFirefoxUrl,
+    }),
+  );
 });
 
 // ── публично: инструкция приложения (Markdown-гайд с картинками) ──
@@ -1419,6 +1443,42 @@ router.post('/api/admin/routing/:name/check', requireAdmin, async (req, res) => 
   try {
     const result = await checkMirror(name as 'upstream' | 'sites' | 'apps', { apply: false });
     res.json(result);
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка проверки.'));
+  }
+});
+
+// ── admin: канал обновлений NoVPN Desktop ──
+router.get('/api/admin/desktop', requireAdmin, (_req, res) => {
+  res.json({ current: currentManifest(), config: getDesktopConfig(), versions: listVersions() });
+});
+router.put('/api/admin/desktop/config', requireAdmin, async (req, res) => {
+  const b = req.body ?? {};
+  const patch: Partial<DesktopChannelConfig> = {};
+  if (b.mode !== undefined) patch.mode = b.mode === 'pin' || b.mode === 'manual' ? b.mode : 'auto';
+  if (b.pinnedVersion !== undefined) patch.pinnedVersion = b.pinnedVersion ? String(b.pinnedVersion) : null;
+  const cfg = setDesktopConfig(patch);
+  // Применяем сразу: pin → выложить из архива, auto → подтянуть свежую версию.
+  let applied: Awaited<ReturnType<typeof mirrorCheck>>;
+  try {
+    applied = await mirrorCheck({ force: true });
+  } catch (e) {
+    applied = { ok: false, action: 'error', error: e instanceof Error ? e.message : 'ошибка' };
+  }
+  res.json({ config: cfg, applied, current: currentManifest(), versions: listVersions() });
+});
+// Загрузка релиза разработчиком: тело = сырой zip (application/zip|octet-stream).
+router.post('/api/admin/desktop/upload', requireAdmin, express.raw({ type: () => true, limit: 210 * 1024 * 1024 }), (req, res) => {
+  const buf = req.body as unknown;
+  if (!Buffer.isBuffer(buf) || buf.length === 0) return res.status(400).json(err('validation', 'Пустое тело загрузки.'));
+  const r = acceptUpload(buf);
+  if (!r.ok) return res.status(400).json(err('validation', r.error ?? 'Не удалось принять релиз.'));
+  repo.addLog(`NoVPN Desktop: загружен релиз ${r.version} через админку`);
+  res.json({ ok: true, version: r.version, current: currentManifest(), versions: listVersions() });
+});
+router.post('/api/admin/desktop/check', requireAdmin, async (_req, res) => {
+  try {
+    res.json(await mirrorCheck({ force: true }));
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка проверки.'));
   }

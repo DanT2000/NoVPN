@@ -54,7 +54,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 ENV NODE_ENV=production \
     PORT=3000 \
     WEB_DIST=/app/apps/web/dist \
-    DESKTOP_DIR=/app/desktop \
+    DESKTOP_SEED_DIR=/app/desktop \
     DATABASE_PATH=/data/database.sqlite
 
 COPY --from=build /app/node_modules ./node_modules

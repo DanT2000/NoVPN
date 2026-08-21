@@ -118,6 +118,39 @@ export interface SaveTelegramInput {
   template: string;
 }
 
+// ── канал обновлений NoVPN Desktop ──
+export interface DesktopManifest {
+  version: string;
+  url?: string;
+  sha256: string;
+  signature: string;
+  sizeBytes: number;
+  notes?: string;
+  releasedAt?: string;
+  channel?: string;
+}
+export type DesktopMode = 'auto' | 'pin' | 'manual';
+export interface DesktopChannelConfig {
+  mode: DesktopMode;
+  pinnedVersion: string | null;
+}
+export interface DesktopVersionInfo {
+  version: string;
+  sizeBytes: number;
+  notes?: string;
+}
+export interface DesktopStatus {
+  current: DesktopManifest | null;
+  config: DesktopChannelConfig;
+  versions: DesktopVersionInfo[];
+}
+export interface DesktopMirrorResult {
+  ok: boolean;
+  action: string;
+  version?: string;
+  error?: string;
+}
+
 export type Ok = { ok: true };
 export type CodeResult = { user: User } | { error: { type: string; message: string } };
 
@@ -207,6 +240,17 @@ export interface ApiClient {
 
   // ── admin: settings ──
   saveSettings(input: AppSettings): Promise<AppSettings>;
+
+  // ── admin: канал обновлений NoVPN Desktop ──
+  getDesktop(): Promise<DesktopStatus>;
+  saveDesktopConfig(patch: Partial<DesktopChannelConfig>): Promise<{
+    config: DesktopChannelConfig;
+    applied: DesktopMirrorResult;
+    current: DesktopManifest | null;
+    versions: DesktopVersionInfo[];
+  }>;
+  uploadDesktopRelease(file: File): Promise<{ ok: boolean; version?: string; current: DesktopManifest | null; versions: DesktopVersionInfo[] }>;
+  checkDesktopUpdate(): Promise<DesktopMirrorResult>;
 
   // ── admin: умная маршрутизация (файлы для NoVPN Desktop) ──
   getRoutingFiles(): Promise<{ files: RoutingFileMeta[] }>;

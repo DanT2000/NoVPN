@@ -24,6 +24,11 @@ import type {
   AddServerInput,
   ApiClient,
   CreateUserInput,
+  DesktopChannelConfig,
+  DesktopManifest,
+  DesktopMirrorResult,
+  DesktopStatus,
+  DesktopVersionInfo,
   EditServerInput,
   Ok,
   SaveTelegramInput,
@@ -141,6 +146,28 @@ export const httpApi: ApiClient = {
   saveSettings: (input: AppSettings) => req<AppSettings>('PUT', '/api/admin/settings', input),
   getStats: (days: number) => req<{ days: number; series: StatsPoint[] }>('GET', `/api/admin/stats?days=${days}`),
   getHealth: () => req<{ servers: ServerHealth[] }>('GET', '/api/admin/health'),
+
+  getDesktop: () => req<DesktopStatus>('GET', '/api/admin/desktop'),
+  saveDesktopConfig: (patch) =>
+    req<{ config: DesktopChannelConfig; applied: DesktopMirrorResult; current: DesktopManifest | null; versions: DesktopVersionInfo[] }>(
+      'PUT',
+      '/api/admin/desktop/config',
+      patch,
+    ),
+  checkDesktopUpdate: () => req<DesktopMirrorResult>('POST', '/api/admin/desktop/check'),
+  uploadDesktopRelease: async (file) => {
+    // Сырой zip телом (application/zip); backend читает express.raw.
+    const res = await fetch(`${BASE}/api/admin/desktop/upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/zip' },
+      credentials: 'include',
+      body: file,
+    });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!res.ok) throw new Error((data && (data.error?.message || data.message)) || `Ошибка ${res.status}`);
+    return data as { ok: boolean; version?: string; current: DesktopManifest | null; versions: DesktopVersionInfo[] };
+  },
 
   getRoutingFiles: () => req<{ files: RoutingFileMeta[] }>('GET', '/api/admin/routing'),
   getRoutingFile: (name) => req<RoutingFileFull>('GET', `/api/admin/routing/${name}`),

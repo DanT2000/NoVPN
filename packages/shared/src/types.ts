@@ -224,6 +224,10 @@ export interface AppSettings {
   /** Слать администратору ежедневную сводку (трафик/пользователи/ошибки). По умолчанию
    *  ВКЛ, если задан adminTelegramChatId. */
   dailyDigest?: boolean;
+  /** Ссылки на расширение для браузера (страница «Скачать»). Пусто → кнопка «скоро».
+   *  Chrome-ссылка используется для Chrome/Edge/Яндекс, Firefox — отдельно. */
+  extChromeUrl?: string;
+  extFirefoxUrl?: string;
 }
 
 // ── Умная маршрутизация (Smart Routing) — управляемые JSON-файлы для NoVPN Desktop ──
