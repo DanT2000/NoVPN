@@ -10,10 +10,14 @@ export function renderDownloadPage(opts: {
   appName: string;
   version: string | null;
   extChromeUrl?: string;
+  extEdgeUrl?: string;
+  extYandexUrl?: string;
   extFirefoxUrl?: string;
 }): string {
   const { appName, version } = opts;
   const chrome = (opts.extChromeUrl ?? '').trim();
+  const edge = (opts.extEdgeUrl ?? '').trim() || chrome; // Chromium → наследует Chrome-ссылку
+  const yandex = (opts.extYandexUrl ?? '').trim() || chrome; // Chromium → наследует Chrome-ссылку
   const firefox = (opts.extFirefoxUrl ?? '').trim();
 
   const browserBtn = (label: string, url: string): string =>
@@ -23,8 +27,8 @@ export function renderDownloadPage(opts: {
 
   const browsers = [
     browserBtn('Chrome', chrome),
-    browserBtn('Edge', chrome),
-    browserBtn('Яндекс', chrome),
+    browserBtn('Edge', edge),
+    browserBtn('Яндекс', yandex),
     browserBtn('Firefox', firefox),
   ].join('');
 

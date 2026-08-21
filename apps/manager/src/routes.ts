@@ -96,6 +96,8 @@ router.get('/download', (_req, res) => {
       appName: repo.brandName(),
       version: currentManifest()?.version ?? null,
       extChromeUrl: s.extChromeUrl,
+      extEdgeUrl: s.extEdgeUrl,
+      extYandexUrl: s.extYandexUrl,
       extFirefoxUrl: s.extFirefoxUrl,
     }),
   );

@@ -225,8 +225,11 @@ export interface AppSettings {
    *  ВКЛ, если задан adminTelegramChatId. */
   dailyDigest?: boolean;
   /** Ссылки на расширение для браузера (страница «Скачать»). Пусто → кнопка «скоро».
-   *  Chrome-ссылка используется для Chrome/Edge/Яндекс, Firefox — отдельно. */
+   *  У каждого браузера своя ссылка; Edge/Яндекс при пустом поле наследуют Chrome-ссылку
+   *  (одно и то же расширение из Chrome Web Store ставится во все Chromium-браузеры). */
   extChromeUrl?: string;
+  extEdgeUrl?: string;
+  extYandexUrl?: string;
   extFirefoxUrl?: string;
 }
 

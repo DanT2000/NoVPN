@@ -31,6 +31,8 @@ export function DesktopUpdates() {
   const [st, setSt] = useState<DesktopStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [chrome, setChrome] = useState('');
+  const [edge, setEdge] = useState('');
+  const [yandex, setYandex] = useState('');
   const [firefox, setFirefox] = useState('');
   const [savingExt, setSavingExt] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -48,9 +50,11 @@ export function DesktopUpdates() {
   useEffect(() => {
     if (s) {
       setChrome(s.extChromeUrl ?? '');
+      setEdge(s.extEdgeUrl ?? '');
+      setYandex(s.extYandexUrl ?? '');
       setFirefox(s.extFirefoxUrl ?? '');
     }
-  }, [s?.extChromeUrl, s?.extFirefoxUrl]);
+  }, [s?.extChromeUrl, s?.extEdgeUrl, s?.extYandexUrl, s?.extFirefoxUrl]);
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   if (!st) return <Loading text="Загрузка…" />;
@@ -104,7 +108,7 @@ export function DesktopUpdates() {
     if (!s) return;
     setSavingExt(true);
     try {
-      await saveSettings({ ...s, extChromeUrl: chrome.trim(), extFirefoxUrl: firefox.trim() });
+      await saveSettings({ ...s, extChromeUrl: chrome.trim(), extEdgeUrl: edge.trim(), extYandexUrl: yandex.trim(), extFirefoxUrl: firefox.trim() });
       showToast('Ссылки на расширение сохранены');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не удалось сохранить.');
@@ -219,9 +223,15 @@ export function DesktopUpdates() {
         </Panel>
 
         <Panel title="Расширение для браузера">
-          <div className="body small muted">Ссылки на страницу расширения. Пусто → на странице «Скачать» кнопка показывается неактивной («скоро»).</div>
-          <Field label="Chrome / Edge / Яндекс (Chrome Web Store)">
+          <div className="body small muted">Ссылки на страницу расширения — по одной на браузер. Пусто → на странице «Скачать» кнопка неактивна («скоро»). Edge и Яндекс при пустом поле берут Chrome-ссылку (расширение из Chrome Web Store ставится во все Chromium-браузеры).</div>
+          <Field label="Chrome (Chrome Web Store)">
             <input className="input mono" style={{ fontSize: 12 }} placeholder="https://chromewebstore.google.com/detail/…" value={chrome} onChange={(e) => setChrome(e.target.value)} />
+          </Field>
+          <Field label="Edge (Edge Add-ons; пусто → Chrome)">
+            <input className="input mono" style={{ fontSize: 12 }} placeholder="https://microsoftedge.microsoft.com/addons/…" value={edge} onChange={(e) => setEdge(e.target.value)} />
+          </Field>
+          <Field label="Яндекс (пусто → Chrome)">
+            <input className="input mono" style={{ fontSize: 12 }} placeholder="https://chromewebstore.google.com/detail/… или ссылка Яндекс" value={yandex} onChange={(e) => setYandex(e.target.value)} />
           </Field>
           <Field label="Firefox (Add-ons)">
             <input className="input mono" style={{ fontSize: 12 }} placeholder="https://addons.mozilla.org/…" value={firefox} onChange={(e) => setFirefox(e.target.value)} />
