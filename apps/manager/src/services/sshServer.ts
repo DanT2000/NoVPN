@@ -250,6 +250,11 @@ if [ "$WANT_AWG" = "1" ]; then
   if ! command -v awg >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     . /etc/os-release 2>/dev/null || true
+    # Свежий бокс: cloud-init/unattended-upgrades держат dpkg-lock → apt install падает
+    # «could not get lock» (частый сбой провижининга на новом Ubuntu). Ждём освобождения
+    # (до ~5 мин) + включаем встроенный таймаут apt для последующих вызовов.
+    mkdir -p /etc/apt/apt.conf.d && printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99lock-timeout 2>/dev/null || true
+    for _ in $(seq 1 100); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || break; sleep 3; done
     # amneziawg-tools из репозитория amnezia. Ubuntu — PPA; если для текущего релиза
     # пакетов нет (свежий релиз типа resolute/26.04) ИЛИ это Debian — подключаем набор
     # noble (LTS) напрямую по ключу. noble-пакеты ставятся и на Ubuntu 26.04, и на Debian.
