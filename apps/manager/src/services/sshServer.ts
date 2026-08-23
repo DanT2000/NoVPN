@@ -527,12 +527,21 @@ PY`,
   }
   for (const a of awg) {
     const ip = (a.clientIp || '').split('/')[0];
+    const pskEsc = a.psk ? a.psk.replace(/'/g, "'\\''") : '';
     if (a.psk) {
-      lines.push(`printf '%s' '${a.psk.replace(/'/g, "'\\''")}' | awg set awg0 peer '${a.awgPub}' preshared-key /dev/stdin allowed-ips ${ip}/32`);
+      lines.push(`printf '%s' '${pskEsc}' | awg set awg0 peer '${a.awgPub}' preshared-key /dev/stdin allowed-ips ${ip}/32`);
     } else {
       lines.push(`awg set awg0 peer '${a.awgPub}' allowed-ips ${ip}/32`);
     }
-    lines.push(`grep -q '${a.awgPub}' /etc/amnezia/amneziawg/awg0.conf || printf '\\n[Peer]\\nPublicKey = %s\\nAllowedIPs = %s/32\\n' '${a.awgPub}' '${ip}' >> /etc/amnezia/amneziawg/awg0.conf`);
+    // Пишем пира в awg0.conf, чтобы пережил перезапуск awg0. PresharedKey ОБЯЗАТЕЛЕН в conf:
+    // без него `awg set` держит PSK только в памяти, а awg-quick up (ребут/рестарт) поднимает
+    // пира БЕЗ PSK → рукопожатие клиента (с PSK) молча отваливается. Раньше PSK терялся при
+    // любом перезапуске интерфейса, в т.ч. при восстановлении сервера на новом боксе.
+    if (a.psk) {
+      lines.push(`grep -q '${a.awgPub}' /etc/amnezia/amneziawg/awg0.conf || printf '\\n[Peer]\\nPublicKey = %s\\nPresharedKey = %s\\nAllowedIPs = %s/32\\n' '${a.awgPub}' '${pskEsc}' '${ip}' >> /etc/amnezia/amneziawg/awg0.conf`);
+    } else {
+      lines.push(`grep -q '${a.awgPub}' /etc/amnezia/amneziawg/awg0.conf || printf '\\n[Peer]\\nPublicKey = %s\\nAllowedIPs = %s/32\\n' '${a.awgPub}' '${ip}' >> /etc/amnezia/amneziawg/awg0.conf`);
+    }
   }
   lines.push('echo RESYNC_DONE');
   await runScript(creds(server.id), lines.join('\n'), 120000);
