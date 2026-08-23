@@ -498,6 +498,18 @@ export function recomputeUserUsage(userId: string): void {
     id: userId,
   });
 }
+
+/** Суммарный трафик сервера — из ПЕРСИСТЕНТНЫХ накопленных счётчиков всех его
+ *  устройств и прокси-аккаунтов (не из «увиденных за один цикл синка»). Иначе цикл,
+ *  в котором из-за холодного SSH/частичного замера видна лишь часть устройств,
+ *  схлопывал бы итог сервера до нуля, а следующий цикл возвращал бы его назад —
+ *  и график считал этот «возврат» фантомным трафиком (см. sync.ts). */
+export function serverTrafficGb(serverId: string): number {
+  const dev = (db.prepare('SELECT COALESCE(SUM(received_bytes + sent_bytes),0) AS b FROM devices WHERE server_id = ?').get(serverId) as { b: number }).b;
+  const prx = (db.prepare('SELECT COALESCE(SUM(received_bytes + sent_bytes),0) AS b FROM proxy_accounts WHERE server_id = ?').get(serverId) as { b: number }).b;
+  return (dev + prx) / 1e9;
+}
+
 export function insertDevice(d: {
   userId: string | null; name: string; serverId: string; protocol: string;
   uuid?: string | null; publicKey?: string | null; privateKeyEnc?: string | null; presharedKeyEnc?: string | null;

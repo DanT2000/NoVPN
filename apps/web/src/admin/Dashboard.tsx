@@ -28,7 +28,12 @@ const pad = (n: number) => String(n).padStart(2, '0');
 
 /** Раскладываем накопительную серию по корзинам: сутки → по часам, неделя/месяц → по
  *  дням. Трафик = ПРИРОСТ за корзину (реальное использование за период), активность =
- *  пик реально используемых конфигов в корзине. */
+ *  пик реально используемых конфигов в корзине.
+ *
+ *  Защита от артефакта рестарта: серверный кумулятив может кратковременно «просесть»
+ *  (цикл синка увидел не все устройства из-за холодного SSH) и на следующем снимке
+ *  вернуться назад. Этот «возврат» — не реальный трафик. Запоминаем провал и гасим им
+ *  последующий скачок, иначе фантомные сотни ГБ «за час». */
 function bucketize(series: StatsPoint[], days: number, metric: Metric): Bar[] {
   if (series.length === 0) return [];
   const now = Date.now();
@@ -37,12 +42,22 @@ function bucketize(series: StatsPoint[], days: number, metric: Metric): Bar[] {
   const start = now - days * 86_400_000;
   const map = new Map<number, { traffic: number; used: number }>();
   let prevCum: number | null = null;
+  let dropCarry = 0; // непогашенное падение кумулятива с прошлого шага (артефакт рестарта)
   for (const s of series) {
     const t = new Date(s.at).getTime();
     if (t < start) { prevCum = s.trafficGb; continue; }
     const bk = Math.floor(t / bucketMs) * bucketMs;
     const b = map.get(bk) ?? { traffic: 0, used: 0 };
-    if (prevCum != null) { const d = s.trafficGb - prevCum; if (d > 0) b.traffic += d; }
+    if (prevCum != null) {
+      const d = s.trafficGb - prevCum;
+      if (d < 0) {
+        dropCarry = -d; // просадка — ждём возврат на следующем снимке, трафиком не считаем
+      } else {
+        const real = dropCarry > 0 ? Math.max(0, d - dropCarry) : d; // возврат гасим провалом
+        dropCarry = 0;
+        if (real > 0) b.traffic += real;
+      }
+    }
     b.used = Math.max(b.used, s.usedDevices);
     map.set(bk, b);
     prevCum = s.trafficGb;

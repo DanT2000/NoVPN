@@ -117,7 +117,6 @@ export async function syncAllServers(): Promise<void> {
       }
       const devices = repo.listServerDeviceKeys(s.id);
       const affected = new Set<string>();
-      let serverBytes = 0;
       let reachable = false;
 
       // --- AmneziaWG ---
@@ -142,7 +141,6 @@ export async function syncAllServers(): Promise<void> {
             const txDelta = p.tx >= prev.txRaw ? p.tx - prev.txRaw : p.tx;
             const rxTotal = prev.rxTotal + rxDelta;
             const txTotal = prev.txTotal + txDelta;
-            serverBytes += rxTotal + txTotal;
 
             const fields: Record<string, unknown> = {
               received_bytes: rxTotal,
@@ -176,7 +174,6 @@ export async function syncAllServers(): Promise<void> {
             const prev = repo.getDeviceCounters(d.id);
             const rxTotal = prev.rxTotal + (x.down || 0); // приём пользователем = downlink
             const txTotal = prev.txTotal + (x.up || 0); // отдача пользователем = uplink
-            serverBytes += rxTotal + txTotal;
 
             const fields: Record<string, unknown> = {
               received_bytes: rxTotal,
@@ -209,7 +206,6 @@ export async function syncAllServers(): Promise<void> {
             const prev = repo.getProxyCounters(acc.id);
             const delta = raw >= prev.rxRaw ? raw - prev.rxRaw : raw;
             const total = prev.total + delta;
-            serverBytes += total;
             repo.updateProxyAccountTraffic(acc.id, {
               receivedBytes: total,
               sentBytes: 0,
@@ -240,7 +236,10 @@ export async function syncAllServers(): Promise<void> {
           agent: 'online',
           endpoint_ok: 1,
           last_sync_at: repo.nowIso(),
-          traffic_gb: serverBytes / 1e9,
+          // Итог из накопленных счётчиков всех устройств сервера в БД (updateDeviceFields
+          // выше уже записал текущий цикл). Устойчиво к частичному замеру: устройства,
+          // не попавшие в этот цикл, сохраняют прошлое значение и не обнуляют итог.
+          traffic_gb: repo.serverTrafficGb(s.id),
         });
       } else {
         // Раньше статус был односторонней защёлкой: «online» ставился при
