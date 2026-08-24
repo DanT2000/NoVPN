@@ -640,7 +640,10 @@ function UserCardInner({ user }: { user: User }) {
                     value={issServer}
                     onChange={(e) => {
                       setIssServer(e.target.value);
-                      setIssProto(issuableFor(e.target.value)[0] ?? 'xray');
+                      // Сохраняем выбранный протокол, если новый сервер его поддерживает,
+                      // иначе берём первый доступный. Раньше всегда сбрасывалось на xray.
+                      const avail = issuableFor(e.target.value);
+                      setIssProto((prev) => (avail.includes(prev) ? prev : (avail[0] ?? 'xray')));
                     }}
                   >
                     {user.allowedServers.map((sid) => {

@@ -814,6 +814,10 @@ ${
 # --- HTTPS через certbot + stunnel. НЕ фатально: если сертификат не выпустился (DNS ещё
 # не пропагировался / порт 80 недоступен) — ставим только HTTP/SOCKS, сервер поднимается,
 # HTTPS добавится позже переустановкой. Одна проблема с cert не рушит всю установку. ---
+# Свежий бокс (только прокси): cloud-init/unattended-upgrades держат dpkg-lock →
+# apt install падал бы «could not get lock». Ждём + встроенный таймаут apt (как в awg-ветке).
+mkdir -p /etc/apt/apt.conf.d && printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99lock-timeout 2>/dev/null || true
+for _ in $(seq 1 100); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || break; sleep 3; done
 apt-get install -y -qq certbot stunnel4 >/tmp/apt.log 2>&1 || true
 # certbot --standalone слушает ВХОДЯЩИЙ :80 для ACME HTTP-01 — открываем порт 80 в
 # файрволе, иначе на ufw-серверах challenge не доходит и сертификат не выпускается (#13).

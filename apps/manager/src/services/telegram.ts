@@ -612,10 +612,12 @@ async function startGetConfig(chatId: number, user: ReturnType<typeof findUser> 
   // (подписка одна на все устройства) лимитом не считается, а раньше эта пред-проверка
   // ложно блокировала выдачу «своего же» конфига пользователю на лимите. Единый
   // источник правды — issueForUser; для AWG он корректно откажет с понятным текстом.
-  // Сервер, на котором реально выпустим (тот же, что и в issueAndSend).
-  const serverId = user.allowedServers[0];
-  const server = serverId ? repo.getServer(serverId) : null;
-  if (!server) return void send(chatId, 'Для вашего доступа не назначен сервер. Обратитесь к администратору.');
+  // Сервер, на котором реально выпустим. Берём первый РАБОЧИЙ (существующий и не
+  // отвязанный) из allowedServers, а не слепо [0]: иначе удалённый/отвязанный сервер
+  // первым в списке ломал выдачу, хотя дальше есть живые.
+  const server = user.allowedServers.map((sid) => repo.getServer(sid)).find((s) => !!s && !s.detached) ?? null;
+  if (!server) return void send(chatId, 'Для вашего доступа не назначен рабочий сервер. Обратитесь к администратору.');
+  const serverId = server.id;
   // Предлагаем ТОЛЬКО протоколы, установленные на этом сервере (как в веб-визарде) —
   // иначе выбор гарантированно упирался бы в «сервер не поддерживает протокол».
   const protos = (user.allowedProtocols.filter((p) => p === 'xray' || p === 'amneziawg') as Array<'xray' | 'amneziawg'>).filter((p) =>
@@ -679,8 +681,10 @@ async function sendDocumentText(chatId: number, filename: string, content: strin
 
 async function issueAndSend(chatId: number, user: ReturnType<typeof findUser> & object, protocol: 'xray' | 'amneziawg'): Promise<void> {
   if (!user.allowedProtocols.includes(protocol)) return void send(chatId, 'Этот протокол вам недоступен.');
-  const serverId = user.allowedServers[0];
-  if (!serverId) return void send(chatId, 'Для вашего доступа не назначен сервер. Обратитесь к администратору.');
+  // Первый РАБОЧИЙ сервер (существующий и не отвязанный), а не слепо [0].
+  const okServer = user.allowedServers.map((sid) => repo.getServer(sid)).find((s) => !!s && !s.detached) ?? null;
+  if (!okServer) return void send(chatId, 'Для вашего доступа не назначен рабочий сервер. Обратитесь к администратору.');
+  const serverId = okServer.id;
   await send(chatId, `Выпускаю конфиг (${PROTO_LABEL[protocol]})…`);
   const siteKb = siteButtonKb(user);
   try {

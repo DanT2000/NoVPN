@@ -26,7 +26,7 @@ import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
 import { analyzeShape } from './lib/routingJson.js';
 import { detectSourceFormat } from './lib/routingConvert.js';
-import { decryptSecret, encConf } from './lib/crypto.js';
+import { decryptSecret, encConf, decConf } from './lib/crypto.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { checkDbIsolation } from './services/dbHealth.js';
@@ -417,9 +417,34 @@ export function listServerDeviceKeys(
 export function getServerDevicesForResync(
   serverId: string,
 ): Array<{ name: string; protocol: string; uuid: string | null; publicKey: string | null; clientIp: string | null; presharedKeyEnc: string | null }> {
+  // quota_blocked = 0: НЕ воскрешаем пиров, снятых за превышение квоты — иначе при
+  // восстановлении сервера over-quota пользователь снова получал бы рабочий туннель
+  // (enforcement его больше не снимет: listDevicesToBlockForQuota требует quota_blocked=0).
   return (
-    db.prepare('SELECT name, protocol, uuid, public_key, client_ip, preshared_key_enc FROM devices WHERE server_id = ? AND is_active = 1').all(serverId) as any[]
+    db.prepare('SELECT name, protocol, uuid, public_key, client_ip, preshared_key_enc FROM devices WHERE server_id = ? AND is_active = 1 AND quota_blocked = 0').all(serverId) as any[]
   ).map((r) => ({ name: r.name, protocol: r.protocol, uuid: r.uuid ?? null, publicKey: r.public_key ?? null, clientIp: r.client_ip ?? null, presharedKeyEnc: r.preshared_key_enc ?? null }));
+}
+
+/** Параметры обфускации AmneziaWG, вытащенные из УЖЕ ВЫДАННОГО клиентского конфига
+ *  этого сервера. Спасательный источник при восстановлении сервера на НОВОМ боксе,
+ *  когда keyvault.awg_params пуст (сервер провижинился до появления колонки awg_params):
+ *  без этого genAwgParams() сгенерил бы НОВЫЕ случайные, и ВСЕ выданные AWG-конфиги
+ *  перестали бы подключаться (обфускация обязана совпадать). */
+export function awgParamsFromDevice(
+  serverId: string,
+): { Jc: number; Jmin: number; Jmax: number; S1: number; S2: number; H1: number; H2: number; H3: number; H4: number } | null {
+  const r = db
+    .prepare("SELECT conf FROM devices WHERE server_id = ? AND protocol = 'amneziawg' AND conf IS NOT NULL ORDER BY created_at ASC LIMIT 1")
+    .get(serverId) as { conf: string | null } | undefined;
+  const conf = decConf(r?.conf);
+  if (!conf) return null;
+  const p = (k: string): number | null => {
+    const m = conf.match(new RegExp('^' + k + '\\s*=\\s*(\\d+)', 'm'));
+    return m ? Number(m[1]) : null;
+  };
+  const v = { Jc: p('Jc'), Jmin: p('Jmin'), Jmax: p('Jmax'), S1: p('S1'), S2: p('S2'), H1: p('H1'), H2: p('H2'), H3: p('H3'), H4: p('H4') };
+  if (Object.values(v).some((x) => x == null)) return null;
+  return v as { Jc: number; Jmin: number; Jmax: number; S1: number; S2: number; H1: number; H2: number; H3: number; H4: number };
 }
 
 /** Накопленный трафик устройства и последнее сырое показание счётчиков сервера.
@@ -788,6 +813,16 @@ export function deleteServer(id: string): void {
       affected.add(r.user_id);
     }
     db.prepare('DELETE FROM devices WHERE server_id = ?').run(id);
+    // Вычищаем id удалённого сервера из allowed_servers ВСЕХ пользователей: иначе он
+    // остаётся «фантомом» — в форме выдачи показывается сырым id (3 сервера при 2 реальных),
+    // а Telegram-бот берёт allowed_servers[0] и может упереться в несуществующий сервер.
+    const us = db.prepare("SELECT id, allowed_servers FROM users WHERE allowed_servers LIKE ?").all('%' + id + '%') as Array<{ id: string; allowed_servers: string | null }>;
+    for (const u of us) {
+      let arr: string[];
+      try { arr = JSON.parse(u.allowed_servers || '[]'); } catch { arr = []; }
+      const next = arr.filter((x) => x !== id);
+      if (next.length !== arr.length) db.prepare('UPDATE users SET allowed_servers = ? WHERE id = ?').run(JSON.stringify(next), u.id);
+    }
     db.prepare('DELETE FROM servers WHERE id = ?').run(id);
   });
   tx();

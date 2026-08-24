@@ -972,6 +972,10 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
       }
     }
     if (!awgParams) awgParams = await sshReadAwgParams(s);
+    // Восстановление на НОВОМ боксе + пустой keyvault.awg_params (сервер до миграции
+    // колонки): вытаскиваем параметры из уже выданного клиентского конфига, иначе
+    // genAwgParams() сгенерил бы НОВЫЕ и все существующие AWG-конфиги отвалились бы.
+    if (!awgParams && restoring) awgParams = repo.awgParamsFromDevice(s.id) as AwgParams | null;
     if (!awgParams) awgParams = genAwgParams();
 
     // Публичные порты endpoint'а. Восстановление по домену → берём сохранённые (старые
