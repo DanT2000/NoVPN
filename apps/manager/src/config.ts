@@ -99,7 +99,7 @@ export const config = {
   // Встроенная (закоммиченная в образ) версия — источник первичного сида /data/desktop.
   desktopSeedDir: env('DESKTOP_SEED_DIR', path.join(__dirname, '../../../desktop')),
 
-  sessionTtlHours: int('SESSION_TTL_HOURS', 24),
+  sessionTtlHours: int('SESSION_TTL_HOURS', 168),
   // TLS обычно терминируется на edge/прокси, а контейнер видит http →
   // secure-cookie тогда молча не ставится. По умолчанию false; включать
   // только при прямом HTTPS до приложения.

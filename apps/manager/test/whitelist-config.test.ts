@@ -78,7 +78,8 @@ test('disableWhitelist=true + lanAccess=true: полный туннель — Н
   assert.equal(directDomain, undefined, 'РФ-домены идут через VPN, не direct');
   assert.equal(privIp, undefined, 'приватные/локалка через VPN (lanAccess)');
   assert.equal(torrent, undefined, 'торренты через VPN');
-  assert.match(cfg.remarks, /через VPN/);
+  // remarks = имя без суффикса режима; без title → appName.
+  assert.equal(cfg.remarks, 'NoVPN');
 });
 
 test('полный туннель fail-close: терминальный fallback балансировщиков = block (не direct)', () => {
@@ -113,9 +114,9 @@ test('QUIC-блок присутствует и в конфиге с прокс�
   assert.ok(quic, 'QUIC-блок должен быть и в многотировом конфиге с балансировщиками');
 });
 
-test('бренд в remarks: без имени сервера используется appName (кастомный бренд)', () => {
+test('бренд в remarks: без имени сервера используется appName (без суффикса режима)', () => {
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'МойСервис'));
-  assert.match(cfg.remarks, /^МойСервис — обход/);
+  assert.equal(cfg.remarks, 'МойСервис');
 });
 
 test('buildWhitelistXrayConfig: несколько Xray-серверов без прокси — балансировщик по тиру 0', () => {

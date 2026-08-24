@@ -98,10 +98,10 @@ export function buildWhitelistXrayConfig(
   lanAccess = false,
   disableWhitelist = false,
 ): string {
-  // Название профиля (remarks). disableWhitelist=true → «весь трафик через VPN» (никаких
-  // исключений: ни RU-доменов, ни торрентов напрямую) — режим для домашнего/полного туннеля.
-  const mode = disableWhitelist ? 'Весь трафик через VPN' : 'Обход белых списков';
-  const remarks = title ? `${title} | ${mode}` : `${appName} — ${disableWhitelist ? 'весь трафик через VPN' : 'обход белых списков'}`;
+  // Имя профиля (remarks) = имя сервера с флагом, ровно как в панели («🇫🇷 Франция»).
+  // Режим (обход белых списков / полный туннель) в НАЗВАНИЕ не добавляем — владелец сам
+  // настраивает сервер, лишние приписки в Happ/приложении не нужны и мешают опознать страну.
+  const remarks = title || appName;
   // Список доменов может приходить из редактируемой настройки админки; нормализуем и,
   // если он пуст, откатываемся к встроенному дефолту (иначе обход бы не работал).
   const routes = normalizeWhitelistRoutes(whitelistRoutes);

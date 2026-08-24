@@ -217,6 +217,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // (после входа, если сессии нет — AdminShell покажет экран входа, маршрут сохранится).
   const [nav, setNav] = useState<NavState>(initialNav);
 
+  // Протухла админ-сессия (401 от админ-API) → мягко разлогиниваем: показываем экран
+  // входа вместо «дохлой» ошибки посреди действия.
+  useEffect(() => {
+    const onExpired = () => setAdminAuthed(false);
+    window.addEventListener('novpn:auth-expired', onExpired);
+    return () => window.removeEventListener('novpn:auth-expired', onExpired);
+  }, []);
+
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
   const [confirm, setConfirm] = useState<ConfirmOptions | null>(null);

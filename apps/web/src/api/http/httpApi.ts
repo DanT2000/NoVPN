@@ -50,6 +50,11 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
+    // Протухла админ-сессия → не показываем «дохлую» ошибку, а мягко разлогиниваем
+    // (AppStore ловит событие и показывает экран входа).
+    if (res.status === 401 && typeof window !== 'undefined' && (path.startsWith('/api/admin') || path === '/api/bootstrap')) {
+      window.dispatchEvent(new Event('novpn:auth-expired'));
+    }
     const message = (data && (data.error?.message || data.message)) || `Ошибка ${res.status}`;
     throw new Error(message);
   }

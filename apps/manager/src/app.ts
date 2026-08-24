@@ -45,6 +45,10 @@ export function createApp() {
       secret: config.sessionSecret,
       resave: false,
       saveUninitialized: false,
+      // rolling: продлеваем сессию при КАЖДОМ запросе (touch обновляет expire и в
+      // хранилище). Иначе сессия протухала по фиксированному времени от входа и
+      // выкидывала админа посреди работы. Теперь активная сессия не истекает.
+      rolling: true,
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
