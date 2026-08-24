@@ -770,12 +770,18 @@ if [ -z "$USERSLINE" ]; then USERSLINE="$PUSER:CL:$PPASS"; fi
 # иначе 3proxy читает второй логин как IP и падает «Invalid IP … line»).
 ALLOWU=$(echo "$USERSLINE" | tr ' ' '\\n' | cut -d: -f1 | paste -sd, -)
 
-# --- 3proxy (http + socks) ---
+# --- 3proxy (http + socks): собираем из исходников (в apt Ubuntu 24.04 пакета нет) ---
 if [ ! -x /usr/local/bin/3proxy ]; then
+  # Инструменты сборки (свежий Ubuntu может не иметь git/make/gcc). Ждём dpkg-lock.
+  mkdir -p /etc/apt/apt.conf.d && printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99lock-timeout 2>/dev/null || true
+  for _ in $(seq 1 100); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || break; sleep 3; done
+  apt-get install -y -qq build-essential git >/tmp/build-deps.log 2>&1 || true
+  command -v git >/dev/null 2>&1 || { echo "PROXY_FAIL: не удалось поставить git/build-essential"; tail -8 /tmp/build-deps.log 2>/dev/null; exit 1; }
   cd /opt; rm -rf 3proxy-src
-  git clone --depth 1 https://github.com/3proxy/3proxy 3proxy-src >/dev/null 2>&1
-  cd 3proxy-src; ln -sf Makefile.Linux Makefile; make -j2 >/tmp/3p.log 2>&1
-  BIN=$(find . -name 3proxy -type f -perm -u+x | head -1); install -m0755 "$BIN" /usr/local/bin/3proxy
+  git clone --depth 1 https://github.com/3proxy/3proxy 3proxy-src >/tmp/3pclone.log 2>&1 || { echo "PROXY_FAIL: git clone 3proxy"; tail -5 /tmp/3pclone.log; exit 1; }
+  cd 3proxy-src; ln -sf Makefile.Linux Makefile; make -j2 >/tmp/3p.log 2>&1 || { echo "PROXY_FAIL: make 3proxy"; tail -8 /tmp/3p.log; exit 1; }
+  BIN=$(find . -name 3proxy -type f -perm -u+x | head -1)
+  [ -n "$BIN" ] && install -m0755 "$BIN" /usr/local/bin/3proxy || { echo "PROXY_FAIL: бинарь 3proxy не собрался"; exit 1; }
 fi
 mkdir -p /etc/3proxy /var/log/3proxy
 {

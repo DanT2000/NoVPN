@@ -179,12 +179,12 @@ function buildUserXrayFull(
   overQuota: boolean,
 ): string | null {
   if (links.length === 0) return null;
-  // Свой значок сервера И флаг страны показываем ВМЕСТЕ (🏠🇫🇮), но если значок = флагу
-  // страны (владелец задал флаг как значок) — НЕ дублируем: «🇫🇷 Франция», а не «🇫🇷🇫🇷 Франция»
-  // (задвоение мешало Happ опознать страну — показывал «интернет» вместо флага).
+  // Значок сервера И флаг страны показываем ВМЕСТЕ, но ФЛАГ СТРАНЫ — ПЕРВЫМ: Happ рисует
+  // флаг по ведущему региональному символу. Если значок был первым (напр. 🚀), Happ не
+  // опознавал страну и показывал «интернет». Значок = флагу → не дублируем.
   const emoji = srv ? (srv.flagEmoji || '').trim() : '';
   const cflag = srv ? ((srv.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '') : '';
-  const icon = emoji && emoji !== cflag ? emoji + cflag : emoji || cflag;
+  const icon = cflag && emoji && cflag !== emoji ? cflag + emoji : cflag || emoji;
   const title = srv ? [icon, srv.name].filter(Boolean).join(' ') : '';
   // Настройки генерации ПЕР-СЕРВЕР (обход-домены, LAN, набор фоллбэк-прокси, полный
   // туннель), с фолбэком на глобальные, если сервер не задан (агрегированная подписка).
