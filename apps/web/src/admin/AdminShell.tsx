@@ -10,6 +10,7 @@ import { UserCreated } from './UserCreated';
 import { UserCard } from './UserCard';
 import { Servers } from './Servers';
 import { ServerWizard } from './ServerWizard';
+import { MigrateServer } from './MigrateServer';
 import { Telegram } from './Telegram';
 import { AppsAdmin } from './AppsAdmin';
 import { SmartRouting } from './SmartRouting';
@@ -26,7 +27,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { key: 'dashboard', label: 'Обзор', match: ['dashboard'] },
   { key: 'users', label: 'Пользователи', match: ['users', 'user-create', 'user-created', 'user-card'] },
-  { key: 'servers', label: 'Серверы', match: ['servers', 'server-wizard'] },
+  { key: 'servers', label: 'Серверы', match: ['servers', 'server-wizard', 'server-migrate'] },
   { key: 'telegram', label: 'Telegram', match: ['telegram'] },
   { key: 'apps', label: 'Приложения', match: ['apps'] },
   { key: 'smart-routing', label: 'Умная маршрутизация', match: ['smart-routing'] },
@@ -72,6 +73,7 @@ export function AdminShell() {
       {route === 'user-card' && <UserCard />}
       {route === 'servers' && <Servers />}
       {route === 'server-wizard' && <ServerWizard />}
+      {route === 'server-migrate' && <MigrateServer />}
       {route === 'telegram' && <Telegram />}
       {route === 'apps' && <AppsAdmin />}
       {route === 'smart-routing' && <SmartRouting />}

@@ -121,6 +121,8 @@ export const httpApi: ApiClient = {
     req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports }),
   provisionStatus: (id: string) =>
     req<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>('GET', `/api/admin/servers/${id}/provision-status`),
+  dnsCheck: (id: string) =>
+    req<{ domain: string; resolved: string[]; boxIp: string | null; match: boolean; domainIsIp: boolean }>('GET', `/api/admin/servers/${id}/dns-check`),
   uninstallServer: (id: string, purgeKeys?: boolean) => req<Ok>('POST', `/api/admin/servers/${id}/uninstall`, { purgeKeys: !!purgeKeys }),
   setServerAutoIssue: (id, on) => req<Server>('POST', `/api/admin/servers/${id}/auto-issue`, { on }),
   deleteServer: (id, purgeEndpoint?: boolean) => req<Ok>('DELETE', `/api/admin/servers/${id}`, { purgeEndpoint: !!purgeEndpoint }),

@@ -26,11 +26,13 @@ import type {
 export type PublicRoute = 'home' | 'cabinet' | 'wizard' | 'devices' | 'apps';
 export type AdminRoute =
   | 'login' | 'dashboard' | 'users' | 'user-create' | 'user-created'
-  | 'user-card' | 'servers' | 'server-wizard' | 'telegram' | 'apps' | 'logs' | 'settings'
+  | 'user-card' | 'servers' | 'server-wizard' | 'server-migrate' | 'telegram' | 'apps' | 'logs' | 'settings'
   | 'smart-routing' | 'desktop-updates';
 
 export interface NavParams {
   userId?: string;
+  /** Для мастера «Перенести сервер». */
+  serverId?: string;
   deviceId?: string;
   /** Режим мастера устройства: issue (новое) | view (просмотр). */
   wizardMode?: 'issue' | 'view';
@@ -144,6 +146,7 @@ function pathForNav(nav: NavState): string {
       case 'user-card': return nav.params.userId ? `/admin/users/${nav.params.userId}` : '/admin/users';
       case 'servers': return '/admin/servers';
       case 'server-wizard': return '/admin/servers/new';
+      case 'server-migrate': return nav.params.serverId ? `/admin/servers/${nav.params.serverId}/migrate` : '/admin/servers';
       case 'telegram': return '/admin/telegram';
       case 'apps': return '/admin/apps';
       case 'logs': return '/admin/logs';
@@ -173,9 +176,9 @@ function navForPath(p: string): NavState {
       return { area: 'admin', route: 'user-card', params: { userId: seg[1] } };
     }
     if (seg[0] === 'servers') {
-      return seg[1] === 'new'
-        ? { area: 'admin', route: 'server-wizard', params: {} }
-        : { area: 'admin', route: 'servers', params: {} };
+      if (seg[1] === 'new') return { area: 'admin', route: 'server-wizard', params: {} };
+      if (seg[1] && seg[2] === 'migrate') return { area: 'admin', route: 'server-migrate', params: { serverId: seg[1] } };
+      return { area: 'admin', route: 'servers', params: {} };
     }
     if (seg[0] === 'telegram' || seg[0] === 'apps' || seg[0] === 'logs' || seg[0] === 'settings' || seg[0] === 'smart-routing') {
       return { area: 'admin', route: seg[0], params: {} };

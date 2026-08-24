@@ -638,6 +638,13 @@ export function Servers() {
                     </button>
                     <button
                       className="btn btn-outline btn-sm"
+                      title="Перенести этот сервер на новый бокс: домен/ключи/конфиги сохраняются, меняется только машина"
+                      onClick={() => goAdmin('server-migrate', { serverId: s.id })}
+                    >
+                      Перенести
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
                       onClick={() =>
                         showConfirm({
                           title: 'Отвязать сервер?',

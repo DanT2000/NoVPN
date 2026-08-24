@@ -422,6 +422,10 @@ export const mockApi: ApiClient = {
     await wait(150);
     return { state: 'done' as const, message: 'Установка завершена.', restored: false };
   },
+  async dnsCheck(_id: string) {
+    await wait(150);
+    return { domain: 'demo.example.com', resolved: ['203.0.113.10'], boxIp: '203.0.113.10', match: true, domainIsIp: false };
+  },
   async uninstallServer(id: string, _purgeKeys?: boolean): Promise<Ok> {
     await wait(500);
     const s = state.servers.find((x) => x.id === id)!;

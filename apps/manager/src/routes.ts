@@ -1,6 +1,7 @@
 // Все HTTP-роуты. Пути совпадают с httpApi фронтенда.
 
 import net from 'node:net';
+import { resolve4 } from 'node:dns/promises';
 import express, { Router } from 'express';
 import type { Request } from 'express';
 import type {
@@ -1079,6 +1080,24 @@ router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) =
 
 router.get('/api/admin/servers/:id/provision-status', requireAdmin, (req, res) => {
   res.json(provisionStatus.get(req.params.id!) ?? { state: 'idle', message: '' });
+});
+
+// DNS-сверка для мастера «Перенести сервер»: резолвим клиентский домен сервера и
+// сравниваем с IP нового бокса (ssh_host). match=true → домен уже указывает на новый
+// бокс, конфиги пользователей поедут туда. Пока false — админ ждёт пропагацию.
+router.get('/api/admin/servers/:id/dns-check', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const boxIp = repo.getServerSsh(s.id)?.host ?? null; // IP нового бокса (ssh_host)
+  let resolved: string[] = [];
+  try {
+    resolved = await resolve4(s.host);
+  } catch {
+    resolved = [];
+  }
+  const domainIsIp = net.isIP(s.host) > 0; // домен = сам IP → сверка не нужна
+  const match = domainIsIp || (!!boxIp && resolved.includes(boxIp));
+  res.json({ domain: s.host, resolved, boxIp, match, domainIsIp });
 });
 
 // Сменить reality-SNI на сервере (без переустановки). vk.com режется DPI —
