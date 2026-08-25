@@ -214,7 +214,7 @@ export interface ApiClient {
   editServer(id: string, input: EditServerInput): Promise<Server>;
   installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
   getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
-  provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }): Promise<{ ok: boolean; running: boolean }>;
+  provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }): Promise<{ ok: boolean; running: boolean }>;
   provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;
   dnsCheck(id: string): Promise<{ domain: string; resolved: string[]; boxIp: string | null; match: boolean; domainIsIp: boolean }>;
   uninstallServer(id: string, purgeKeys?: boolean): Promise<Ok>;

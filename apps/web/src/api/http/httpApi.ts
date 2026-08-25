@@ -117,8 +117,8 @@ export const httpApi: ApiClient = {
   installServerProxies: (id: string, types: { http: boolean; https: boolean; socks: boolean }) =>
     req<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
   getServerProxy: (id: string) => req<{ proxy: ServerProxyConfig | null; host: string }>('GET', `/api/admin/servers/${id}/proxy`),
-  provisionServer: (id: string, components: string[], ports?: { portXray?: number; portAwg?: number }) =>
-    req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports }),
+  provisionServer: (id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }) =>
+    req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports, ...(opts?.migrate ? { migrate: true } : {}) }),
   provisionStatus: (id: string) =>
     req<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>('GET', `/api/admin/servers/${id}/provision-status`),
   dnsCheck: (id: string) =>

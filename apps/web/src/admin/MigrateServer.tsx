@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { Chip, Field, ProgressBar, ScreenHeader } from '../components/ui';
@@ -29,6 +29,18 @@ export function MigrateServer() {
   const [err, setErr] = useState<string | null>(null);
   const [dns, setDns] = useState<{ resolved: string[]; boxIp: string | null; match: boolean } | null>(null);
   const [dnsBusy, setDnsBusy] = useState(false);
+  // Отмена поллинга при уходе со экрана: иначе setTimeout-цикл продолжал бы дёргать
+  // provision-status, звать reload() и писать в state размонтированного компонента,
+  // а повторный вход запускал бы второй цикл.
+  const aliveRef = useRef(true);
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, []);
 
   if (!server) {
     return (
@@ -88,23 +100,38 @@ export function MigrateServer() {
     setStep(2);
     try {
       await api.editServer(server.id, { sshHost: host.trim(), sshPort: Number(sshPort) || 22, sshUser: sshUser.trim() || 'root', secret: secret.trim() });
-      await api.provisionServer(server.id, comps);
+      // migrate:true — сервер откажет заранее, если приватных ключей нет (иначе «успешный»
+      // перенос оказался бы чистой установкой с новыми ключами = все конфиги мертвы).
+      await api.provisionServer(server.id, comps, undefined, { migrate: true });
+      const deadline = Date.now() + 12 * 60_000;
       const poll = async (): Promise<void> => {
+        if (!aliveRef.current) return;
         const st = await api.provisionStatus(server.id);
-        setLog((l) => (l[l.length - 1] === st.message ? l : [...l, st.message]));
-        if (st.state === 'running') {
-          setPct((p) => Math.min(90, p + 6));
-          setTimeout(() => void poll(), 2500);
-          return;
-        }
+        if (!aliveRef.current) return;
+        if (st.message) setLog((l) => (l[l.length - 1] === st.message ? l : [...l, st.message]));
         if (st.state === 'error') {
           setErr(st.message || 'Ошибка установки');
           return;
         }
-        setPct(100);
-        setStep(3);
-        void reload();
-        void checkDns();
+        // Успех — ТОЛЬКО явный 'done'. 'idle'/'running' продолжаем ждать: idle бывает,
+        // если панель перезапустилась (статус живёт в памяти) — это не успех.
+        if (st.state === 'done') {
+          if (st.restored === false) {
+            setErr('Панель выполнила ЧИСТУЮ установку: приватные ключи не найдены, поэтому выданные ранее конфиги НЕ работают — их нужно перевыпустить.');
+            return;
+          }
+          setPct(100);
+          setStep(3);
+          void reload();
+          void checkDns();
+          return;
+        }
+        if (Date.now() > deadline) {
+          setErr('Установка не завершилась за 12 минут — проверьте сервер и статус в разделе «Серверы».');
+          return;
+        }
+        setPct((p) => Math.min(90, p + 6));
+        timerRef.current = window.setTimeout(() => void poll(), 2500);
       };
       void poll();
     } catch (e) {

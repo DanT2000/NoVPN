@@ -926,7 +926,10 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
   if (b.sshPort !== undefined) fields.ssh_port = Number(b.sshPort) || 22;
   if (b.sshUser !== undefined) fields.ssh_user = b.sshUser;
   // Новый секрет (пароль или ключ) — только если пришёл непустой (иначе не трогаем).
-  if (b.secret) fields.ssh_pass_enc = encryptSecret(String(b.secret));
+  // Сбрасываем и сохранённый SSH-ключ: creds() предпочитает ключ паролю, и при переносе
+  // на НОВЫЙ бокс панель иначе ломилась бы туда старым ключом (auth fail), игнорируя
+  // только что введённый пароль.
+  if (b.secret) { fields.ssh_pass_enc = encryptSecret(String(b.secret)); fields.ssh_key_enc = null; }
   if (Array.isArray(b.components)) {
     const protocols = b.components.filter((p: string) => p === 'xray' || p === 'amneziawg' || p === 'http' || p === 'https' || p === 'socks5');
     fields.protocols = JSON.stringify(protocols);
@@ -1058,9 +1061,15 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     }
     const proto = new Set(comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)));
     // Не сбрасываем уже установленные прокси, если их не трогали в этой установке.
-    for (const p of ['http', 'https', 'socks5']) if ((s.protocols as string[]).includes(p)) proto.add(p);
+    // ИСКЛЮЧЕНИЕ — перенос на новый бокс (restoring): на нём стоит ровно то, что
+    // поставили сейчас; «наследовать» прокси со старого бокса = обещать пользователям
+    // мёртвый прокси (креды есть, 3proxy на новом боксе нет).
+    if (!restoring) for (const p of ['http', 'https', 'socks5']) if ((s.protocols as string[]).includes(p)) proto.add(p);
     const protocols = [...proto];
-    repo.updateServerFields(s.id, { protocols: JSON.stringify(protocols), agent: 'online', endpoint_ok: 1, last_sync_at: repo.nowIso() });
+    // detached: 0 — перенос/переустановка отвязанного сервера снова делает его живым.
+    // Иначе после «успешного» переноса sync его пропускал, подписки исключали (404),
+    // а бот считал нерабочим — при зелёном статусе в UI.
+    repo.updateServerFields(s.id, { protocols: JSON.stringify(protocols), agent: 'online', endpoint_ok: 1, detached: 0, last_sync_at: repo.nowIso() });
     repo.addLog(`${restoring ? 'Переустановлен' : 'Установлен'} сервер «${s.name}» (${protocols.join(', ')})`);
     provisionStatus.set(serverId, { state: 'done', message: 'Установка завершена.', restored: restoring, at: Date.now() });
   } catch (e) {
@@ -1076,6 +1085,15 @@ router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) =
   if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
   if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
   if (provisionStatus.get(s.id)?.state === 'running') return res.json({ ok: true, running: true });
+  // Перенос на новый бокс (мастер «Перенести»): обещание — «те же ключи, все конфиги
+  // живут». Без ПРИВАТНЫХ ключей в keyvault это была бы чистая установка с новыми
+  // ключами (все выданные конфиги умерли бы) при зелёном «успех» — отказываем заранее.
+  if (req.body?.migrate === true) {
+    const k = getServerKeys(s.host);
+    if (!k?.xrayRealityPrivKey && !k?.awgServerPrivKey) {
+      return res.status(400).json(err('no_keys', 'В панели нет приватных ключей этого сервера — перенос с сохранением конфигов невозможен. Используйте обычную переустановку (конфиги придётся перевыпустить).'));
+    }
+  }
   const comps: string[] = Array.isArray(req.body?.components) ? req.body.components : ['xray', 'amneziawg'];
   // Явные порты из формы (режим «Вручную»). Пусто → auto/сохранённые в runProvision.
   const ports = { xray: Number(req.body?.portXray) || undefined, awg: Number(req.body?.portAwg) || undefined };
@@ -1094,15 +1112,18 @@ router.get('/api/admin/servers/:id/provision-status', requireAdmin, (req, res) =
 router.get('/api/admin/servers/:id/dns-check', requireAdmin, async (req, res) => {
   const s = repo.getServer(req.params.id!);
   if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
-  const boxIp = repo.getServerSsh(s.id)?.host ?? null; // IP нового бокса (ssh_host)
-  let resolved: string[] = [];
-  try {
-    resolved = await resolve4(s.host);
-  } catch {
-    resolved = [];
-  }
+  const sshHost = repo.getServerSsh(s.id)?.host ?? null; // новый бокс: IP или hostname (ssh_host)
+  const safeResolve = async (h: string): Promise<string[]> => {
+    if (net.isIP(h) > 0) return [h];
+    try { return await resolve4(h); } catch { return []; }
+  };
+  const resolved = await safeResolve(s.host);
+  // ssh_host может быть hostname (админ ввёл имя, а не IP) — сравниваем по резолву,
+  // иначе вечный ложный «DNS не догнал».
+  const boxIps = sshHost ? await safeResolve(sshHost) : [];
+  const boxIp = boxIps[0] ?? sshHost;
   const domainIsIp = net.isIP(s.host) > 0; // домен = сам IP → сверка не нужна
-  const match = domainIsIp || (!!boxIp && resolved.includes(boxIp));
+  const match = domainIsIp || resolved.some((ip) => boxIps.includes(ip));
   res.json({ domain: s.host, resolved, boxIp, match, domainIsIp });
 });
 

@@ -410,7 +410,7 @@ export const mockApi: ApiClient = {
     const s = state.servers.find((x) => x.id === id)!;
     return { proxy: null, host: s.host };
   },
-  async provisionServer(id: string, components: string[], _ports?: { portXray?: number; portAwg?: number }) {
+  async provisionServer(id: string, components: string[], _ports?: { portXray?: number; portAwg?: number }, _opts?: { migrate?: boolean }) {
     await wait(600);
     const s = state.servers.find((x) => x.id === id)!;
     s.protocols = components.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)) as Server['protocols'];

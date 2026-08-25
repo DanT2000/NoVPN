@@ -362,6 +362,34 @@ for (const stmt of [
   }
 }
 
+// Схлопывание расщеплённых строк server_keys. Раньше keyvault писал ключи по
+// НОРМАЛИЗОВАННОМУ домену (lower/без порта), а repo — порты/legacy/endpoint-config по
+// сырому host. При неканоничном host один сервер жил двумя строками: ключи в одной,
+// порты и настройки в другой → восстановление брало DEFAULT_PORTS и выданные конфиги
+// отваливались. Теперь всё нормализуется; переносим данные осиротевших строк в
+// каноническую (только там, где в канонической пусто) и удаляем дубль.
+try {
+  const rows = db.prepare('SELECT domain FROM server_keys').all() as Array<{ domain: string }>;
+  const canon = (h: string) => h.trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[:/].*$/, '');
+  const cols = (db.prepare("PRAGMA table_info(server_keys)").all() as Array<{ name: string }>)
+    .map((c) => c.name)
+    .filter((n) => n !== 'domain');
+  for (const { domain } of rows) {
+    const key = canon(domain);
+    if (key === domain) continue; // уже канонична
+    const tx = db.transaction(() => {
+      db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(key, new Date().toISOString());
+      for (const c of cols) {
+        db.prepare(`UPDATE server_keys SET ${c} = (SELECT ${c} FROM server_keys WHERE domain = @old) WHERE domain = @new AND ${c} IS NULL`).run({ old: domain, new: key });
+      }
+      db.prepare('DELETE FROM server_keys WHERE domain = ?').run(domain);
+    });
+    tx();
+  }
+} catch {
+  /* таблицы/строк ещё нет */
+}
+
 try {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_token ON users(access_token)');
 } catch {
