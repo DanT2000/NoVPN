@@ -27,6 +27,7 @@ import { db, getSetting, setSetting } from './db.js';
 import { analyzeShape } from './lib/routingJson.js';
 import { detectSourceFormat } from './lib/routingConvert.js';
 import { decryptSecret, encConf, decConf } from './lib/crypto.js';
+import { domainKey } from './lib/domain.js';
 import { rowToApp, rowToDevice, rowToServer, rowToUser } from './mappers.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { checkDbIsolation } from './services/dbHealth.js';
@@ -447,6 +448,29 @@ export function awgParamsFromDevice(
   return v as { Jc: number; Jmin: number; Jmax: number; S1: number; S2: number; H1: number; H2: number; H3: number; H4: number };
 }
 
+/** Порт AmneziaWG из УЖЕ ВЫДАННОГО клиентского конфига (строка «Endpoint = host:port»).
+ *  Спасательный источник при восстановлении, когда порты в server_keys не сохранены
+ *  (старая установка до персиста портов): иначе restore взял бы DEFAULT 51820, а
+ *  клиентские .conf целятся в старый порт → AWG отваливается. */
+export function awgPortFromDevice(serverId: string): number | null {
+  const r = db
+    .prepare("SELECT conf FROM devices WHERE server_id = ? AND protocol = 'amneziawg' AND conf IS NOT NULL ORDER BY created_at ASC LIMIT 1")
+    .get(serverId) as { conf: string | null } | undefined;
+  const conf = decConf(r?.conf);
+  const m = conf?.match(/^Endpoint\s*=\s*\S+?:(\d+)\s*$/m);
+  const port = m ? Number(m[1]) : NaN;
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+/** Порт Xray из уже выданной ссылки устройства (vless://uuid@host:port?...). */
+export function xrayPortFromDevice(serverId: string): number | null {
+  const r = db
+    .prepare("SELECT link FROM devices WHERE server_id = ? AND protocol = 'xray' AND link IS NOT NULL ORDER BY created_at ASC LIMIT 1")
+    .get(serverId) as { link: string | null } | undefined;
+  const m = r?.link?.match(/@[^/?#:]+:(\d+)/);
+  const port = m ? Number(m[1]) : NaN;
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
 /** Накопленный трафик устройства и последнее сырое показание счётчиков сервера.
  *  received_bytes/sent_bytes — накопленное за всё время, rx_raw/tx_raw — что
  *  показывал сервер в прошлый замер (для вычисления прироста). */
@@ -645,7 +669,8 @@ export function getServer(id: string): Server | null {
 // удаление физического сервера, как и ключи) ──
 export const DEFAULT_PORTS: ServerPorts = { xray: 443, awg: 51820, http: 8080, socks: 1080, https: 8443 };
 
-export function getEndpointPorts(host: string): ServerPorts {
+export function getEndpointPorts(rawHost: string): ServerPorts {
+  const host = domainKey(rawHost);
   const r = db.prepare('SELECT port_xray, port_awg, port_http, port_socks, port_https FROM server_keys WHERE domain = ?').get(host) as any;
   return {
     xray: r?.port_xray ?? DEFAULT_PORTS.xray,
@@ -655,7 +680,14 @@ export function getEndpointPorts(host: string): ServerPorts {
     https: r?.port_https ?? DEFAULT_PORTS.https,
   };
 }
-export function saveEndpointPorts(host: string, p: Partial<ServerPorts>): void {
+/** Порты, ЯВНО сохранённые в server_keys (null = не персистились; getEndpointPorts тогда
+ *  молча отдаёт DEFAULT_PORTS, что при restore опасно — см. awgPortFromDevice). */
+export function getSavedEndpointPorts(rawHost: string): { xray: number | null; awg: number | null } {
+  const r = db.prepare('SELECT port_xray, port_awg FROM server_keys WHERE domain = ?').get(domainKey(rawHost)) as { port_xray?: number | null; port_awg?: number | null } | undefined;
+  return { xray: r?.port_xray ?? null, awg: r?.port_awg ?? null };
+}
+export function saveEndpointPorts(rawHost: string, p: Partial<ServerPorts>): void {
+  const host = domainKey(rawHost);
   // upsert: строка server_keys может ещё не существовать (порты выбраны до установки).
   db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
   const cur = getEndpointPorts(host);
@@ -663,7 +695,8 @@ export function saveEndpointPorts(host: string, p: Partial<ServerPorts>): void {
   db.prepare('UPDATE server_keys SET port_xray=?, port_awg=?, port_http=?, port_socks=?, port_https=?, updated_at=? WHERE domain=?')
     .run(next.xray, next.awg, next.http, next.socks, next.https, nowIso(), host);
 }
-export function getLegacyPorts(host: string): LegacyPort[] {
+export function getLegacyPorts(rawHost: string): LegacyPort[] {
+  const host = domainKey(rawHost);
   const r = db.prepare('SELECT legacy_ports FROM server_keys WHERE domain = ?').get(host) as { legacy_ports?: string } | undefined;
   try {
     const arr = JSON.parse(r?.legacy_ports || '[]');
@@ -672,25 +705,29 @@ export function getLegacyPorts(host: string): LegacyPort[] {
     return [];
   }
 }
-export function addLegacyPort(host: string, proto: LegacyPort['proto'], port: number, target: number): void {
+export function addLegacyPort(rawHost: string, proto: LegacyPort['proto'], port: number, target: number): void {
+  const host = domainKey(rawHost);
   db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
   const list = getLegacyPorts(host).filter((l) => !(l.proto === proto && l.port === port));
   list.push({ proto, port, target, since: nowIso() });
   db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list), host);
 }
-export function removeLegacyPort(host: string, proto: LegacyPort['proto'], port: number): LegacyPort | null {
+export function removeLegacyPort(rawHost: string, proto: LegacyPort['proto'], port: number): LegacyPort | null {
+  const host = domainKey(rawHost);
   const list = getLegacyPorts(host);
   const found = list.find((l) => l.proto === proto && l.port === port) ?? null;
   db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list.filter((l) => l !== found)), host);
   return found;
 }
 /** Пере-указать цель всех legacy-алиасов данного протокола на новый порт (в БД). */
-export function retargetLegacyPorts(host: string, proto: LegacyPort['proto'], newTarget: number): void {
+export function retargetLegacyPorts(rawHost: string, proto: LegacyPort['proto'], newTarget: number): void {
+  const host = domainKey(rawHost);
   const list = getLegacyPorts(host).map((l) => (l.proto === proto ? { ...l, target: newTarget } : l));
   db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list), host);
 }
 /** Профиль endpoint'а для мастера: есть ли сохранённые ключи/порты по этому домену. */
-export function getEndpointProfile(host: string): { exists: boolean; ports: ServerPorts; legacyPorts: LegacyPort[]; hasXrayKeys: boolean; hasAwgKeys: boolean; updatedAt: string | null } {
+export function getEndpointProfile(rawHost: string): { exists: boolean; ports: ServerPorts; legacyPorts: LegacyPort[]; hasXrayKeys: boolean; hasAwgKeys: boolean; updatedAt: string | null } {
+  const host = domainKey(rawHost);
   const r = db.prepare('SELECT xray_reality_pubkey, awg_server_pubkey, updated_at FROM server_keys WHERE domain = ?').get(host) as any;
   return {
     exists: !!r,
@@ -701,8 +738,8 @@ export function getEndpointProfile(host: string): { exists: boolean; ports: Serv
     updatedAt: r?.updated_at ?? null,
   };
 }
-export function deleteEndpointProfile(host: string): void {
-  db.prepare('DELETE FROM server_keys WHERE domain = ?').run(host);
+export function deleteEndpointProfile(rawHost: string): void {
+  db.prepare('DELETE FROM server_keys WHERE domain = ?').run(domainKey(rawHost));
 }
 
 /** Пер-серверные настройки генерации конфига (маршрутизация НА УСТРОЙСТВЕ). Каждое
@@ -715,7 +752,8 @@ export interface EndpointConfig {
   lanAccess: boolean;
   fallbackTypes: FallbackType[] | null; // null = все доступные
 }
-export function getEndpointConfig(host: string): EndpointConfig {
+export function getEndpointConfig(rawHost: string): EndpointConfig {
+  const host = domainKey(rawHost);
   const r = db.prepare('SELECT xray_whitelist, whitelist_domains, lan_access, fallback_types FROM server_keys WHERE domain = ?').get(host) as any;
   const g = getSettings();
   const jsonArr = (s: unknown): string[] | undefined => {
@@ -735,7 +773,8 @@ export function getEndpointConfig(host: string): EndpointConfig {
     fallbackTypes: (jsonArr(r?.fallback_types) as FallbackType[] | undefined) ?? null,
   };
 }
-export function setEndpointConfig(host: string, patch: Partial<{ xrayWhitelist: boolean | null; whitelistDomains: string[] | null; lanAccess: boolean | null; fallbackTypes: FallbackType[] | null }>): void {
+export function setEndpointConfig(rawHost: string, patch: Partial<{ xrayWhitelist: boolean | null; whitelistDomains: string[] | null; lanAccess: boolean | null; fallbackTypes: FallbackType[] | null }>): void {
+  const host = domainKey(rawHost);
   db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
   const set: string[] = [];
   const vals: Record<string, unknown> = { host };

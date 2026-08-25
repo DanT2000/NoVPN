@@ -990,6 +990,12 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     // живут). Свежий endpoint → auto-pick. Гейт по `restoring` (реальные ключи), а НЕ
     // по факту строки server_keys — она могла появиться от upsert настроек без ключей. #7.
     const savedPorts = repo.getEndpointPorts(s.host);
+    // Восстановление, но порты в server_keys НЕ персистились (старая установка): не брать
+    // молча DEFAULT — вытащить порт из уже выданных конфигов, иначе клиенты целятся в
+    // старый порт, а сервер поднимется на дефолтном → AWG/Xray отвалятся. Аналог #1.
+    const explicit = repo.getSavedEndpointPorts(s.host);
+    if (restoring && explicit.awg == null) { const p = repo.awgPortFromDevice(s.id); if (p) savedPorts.awg = p; }
+    if (restoring && explicit.xray == null) { const p = repo.xrayPortFromDevice(s.id); if (p) savedPorts.xray = p; }
     const reqPortXray = Number(req_portXray);
     const reqPortAwg = Number(req_portAwg);
     let portXray = restoring ? savedPorts.xray : 443;

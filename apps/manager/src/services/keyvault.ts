@@ -6,6 +6,8 @@
 import { db } from '../db.js';
 import { decryptSecret, encryptSecret } from '../lib/crypto.js';
 import { nowIso } from '../repo.js';
+import { domainKey } from '../lib/domain.js';
+export { domainKey };
 
 export interface ServerKeys {
   awgServerPrivKey?: string;
@@ -17,15 +19,6 @@ export interface ServerKeys {
   /** Параметры обфускации AmneziaWG (JSON) — уникальны для сервера, нужны для
    *  восстановления по домену: без них старые конфиги не подключатся. */
   awgParams?: string;
-}
-
-/** Нормализуем домен как ключ (без протокола/порта, в нижний регистр). */
-export function domainKey(host: string): string {
-  return host
-    .trim()
-    .toLowerCase()
-    .replace(/^[a-z]+:\/\//, '')
-    .replace(/[:/].*$/, '');
 }
 
 export function saveServerKeys(host: string, k: ServerKeys): void {
