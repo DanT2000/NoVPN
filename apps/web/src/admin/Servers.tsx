@@ -483,6 +483,24 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
           <button className="btn btn-danger-outline btn-sm" disabled={!!provBusy} onClick={() => uninstall(true)}>
             Удалить ПО и ключи
           </button>
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={!!provBusy}
+            title="Залить на сервер все выданные конфиги из панели. Лечит случай «в панели конфиг есть, а подключиться нельзя» (пир потерялся на сервере)."
+            onClick={async () => {
+              setProvBusy('resync');
+              try {
+                const r = await api.resyncDevices(server.id);
+                showToast(r.message ?? `Синхронизировано: Xray ${r.xray}, AmneziaWG ${r.awg}`);
+              } catch (e) {
+                showToast(e instanceof Error ? e.message : 'Не удалось синхронизировать');
+              } finally {
+                setProvBusy(null);
+              }
+            }}
+          >
+            {provBusy === 'resync' ? 'Синхронизирую…' : 'Синхронизировать конфиги'}
+          </button>
         </div>
         <span className="small muted">
           Ставит xray + AmneziaWG (+ отмеченные прокси) прямо на сервер. Если ключи домена сохранены — переустановка

@@ -217,6 +217,7 @@ export interface ApiClient {
   provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }): Promise<{ ok: boolean; running: boolean }>;
   provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;
   dnsCheck(id: string): Promise<{ domain: string; resolved: string[]; boxIp: string | null; match: boolean; domainIsIp: boolean }>;
+  resyncDevices(id: string): Promise<{ ok: boolean; xray: number; awg: number; message?: string }>;
   uninstallServer(id: string, purgeKeys?: boolean): Promise<Ok>;
   setServerAutoIssue(id: string, on: boolean): Promise<Server>;
   deleteServer(id: string, purgeEndpoint?: boolean): Promise<Ok>;

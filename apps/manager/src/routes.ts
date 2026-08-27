@@ -1106,6 +1106,29 @@ router.get('/api/admin/servers/:id/provision-status', requireAdmin, (req, res) =
   res.json(provisionStatus.get(req.params.id!) ?? { state: 'idle', message: '' });
 });
 
+// Пересинхронизация выданных конфигов с сервером: заливает на сервер ВСЕ активные
+// устройства из базы (ключи/PSK/IP). Лечит «дрейф» — когда конфиг в панели есть, а пира
+// на сервере нет (после ручного восстановления awg0.conf из бэкапа, замены бокса,
+// потери пиров при перезапуске интерфейса). Пользователь у такого конфига не может
+// подключиться, хотя в панели всё выглядит нормально.
+router.post('/api/admin/servers/:id/resync-devices', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  try {
+    const devs = repo.getServerDevicesForResync(s.id).map((d) => ({
+      name: d.name, protocol: d.protocol, uuid: d.uuid, awgPub: d.publicKey, clientIp: d.clientIp,
+      psk: d.presharedKeyEnc ? decryptSecret(d.presharedKeyEnc) : null,
+    }));
+    if (!devs.length) return res.json({ ok: true, xray: 0, awg: 0, message: 'Активных конфигов нет.' });
+    const r = await sshResyncDevices(s, devs);
+    repo.addLog(`Синхронизированы конфиги с «${s.name}» (Xray: ${r.xray.length}, AmneziaWG: ${r.awg.length})`);
+    res.json({ ok: true, xray: r.xray.length, awg: r.awg.length });
+  } catch (e) {
+    res.status(500).json(err('server', e instanceof Error ? e.message : 'Не удалось синхронизировать.'));
+  }
+});
+
 // DNS-сверка для мастера «Перенести сервер»: резолвим клиентский домен сервера и
 // сравниваем с IP нового бокса (ssh_host). match=true → домен уже указывает на новый
 // бокс, конфиги пользователей поедут туда. Пока false — админ ждёт пропагацию.

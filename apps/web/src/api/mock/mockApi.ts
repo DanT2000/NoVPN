@@ -422,6 +422,10 @@ export const mockApi: ApiClient = {
     await wait(150);
     return { state: 'done' as const, message: 'Установка завершена.', restored: false };
   },
+  async resyncDevices(_id: string) {
+    await wait(400);
+    return { ok: true, xray: 3, awg: 5 };
+  },
   async dnsCheck(_id: string) {
     await wait(150);
     return { domain: 'demo.example.com', resolved: ['203.0.113.10'], boxIp: '203.0.113.10', match: true, domainIsIp: false };
