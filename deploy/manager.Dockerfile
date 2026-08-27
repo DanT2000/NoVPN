@@ -51,9 +51,17 @@ COPY apps/agent/package.json apps/agent/
 # пакеты и падал «Exit handler never called!». Зеркало отдаёт те же пакеты в обход.
 # Переписываем и resolved-URL в lock (иначе тарболы всё равно тянулись бы с npmjs.org).
 # --no-audit/--no-fund — не ходить в Cloudflare-эндпоинты аудита. Откат — build-arg NPM_REGISTRY.
+# better-sqlite3 ставится скриптом «prebuild-install || node-gyp rebuild», и обе ветки
+# ходили мимо зеркал: prebuild-install — на github.com (Request timed out), node-gyp —
+# за заголовками на nodejs.org (тоже таймаут); оба хоста с прод-build-хоста недоступны.
+# Переводим на то же зеркало Alibaba, откуда уже успешно тянутся npm-пакеты:
+#   binary_host → …/v11.10.0/better-sqlite3-v11.10.0-node-v115-linux-x64.tar.gz (готовый бинарь),
+#   disturl     → заголовки node, если всё же придётся компилировать из исходников.
 ENV npm_config_registry=https://registry.npmmirror.com \
     npm_config_audit=false \
-    npm_config_fund=false
+    npm_config_fund=false \
+    npm_config_better_sqlite3_binary_host=https://registry.npmmirror.com/-/binary/better-sqlite3 \
+    npm_config_disturl=https://cdn.npmmirror.com/binaries/node
 RUN sed -i 's#registry\.npmjs\.org#registry.npmmirror.com#g' package-lock.json 2>/dev/null || true
 # --include=dev обязателен: Coolify задаёт NODE_ENV=production, иначе devDeps
 # (typescript, vite) не установятся и сборка упадёт с «tsc: not found».
