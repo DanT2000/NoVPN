@@ -10,9 +10,12 @@ ARG NODE_IMAGE=mirror.gcr.io/library/node:20-bookworm-slim
 
 # Зеркало пакетов Debian. С прод-build-хоста (107_AppsServer) deb.debian.org (Fastly)
 # недоступен: по IPv6 «network unreachable», по IPv4 connect timeout — из-за этого
-# apt-get валил сборку с «Unable to locate package». mirror.yandex.ru отдаёт те же
-# пакеты по HTTPS и с этого хоста доступен. Откат — build-arg DEBIAN_MIRROR.
-ARG DEBIAN_MIRROR=https://mirror.yandex.ru
+# apt-get валил сборку с «Unable to locate package». mirror.yandex.ru с этого хоста
+# доступен (TLS-рукопожатие проходит), но ИМЕННО HTTP: в node:*-slim нет
+# ca-certificates (базовый образ их purge'ит), поэтому https-источник падает с
+# «No system certificates available». Подписи пакетов всё равно проверяются по
+# debian-archive-keyring. Откат — build-arg DEBIAN_MIRROR.
+ARG DEBIAN_MIRROR=http://mirror.yandex.ru
 
 # ---- build ----
 FROM ${NODE_IMAGE} AS build
@@ -79,7 +82,7 @@ RUN set -eux; \
           -e "s#https\?://deb.debian.org/debian-security#${DEBIAN_MIRROR}/debian-security#g" \
           -e "s#https\?://deb.debian.org/debian#${DEBIAN_MIRROR}/debian#g" "$f" || true; \
       done; \
-      apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* || true; \
+      apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/* || true; \
     fi; \
     command -v curl >/dev/null 2>&1 && curl --version | head -n1 \
       || echo "ВНИМАНИЕ: curl отсутствует — healthcheck работает через node (см. HEALTHCHECK ниже)"
