@@ -139,6 +139,18 @@ export function Dashboard() {
 
   const recentLog = adminLog.slice(0, 6);
 
+  // На дашборде — только СВЕЖИЕ ошибки задач (за двое суток). Журнал отдаёт последние
+  // 20 записей без отсечки по времени, поэтому после разовой аварии дашборд неделями
+  // показывал стену провалов — часто по серверам, которых уже нет. Полная история
+  // никуда не делась: она на экране «Логи», с расшифровкой каждой ошибки.
+  const FRESH_MS = 48 * 3600 * 1000;
+  const nowMs = Date.now();
+  const freshErrors = jobErrors.filter((j) => {
+    const t = Date.parse(j.at);
+    return Number.isNaN(t) || nowMs - t <= FRESH_MS;
+  });
+  const staleErrors = jobErrors.length - freshErrors.length;
+
   // Трафик по серверам — компактные горизонтальные бары (из текущих метрик).
   const trafficRows = servers
     .map((s) => ({ id: s.id, name: s.name, country: s.country, gb: s.trafficGb || 0, online: s.agent === 'online' }))
@@ -301,17 +313,23 @@ export function Dashboard() {
             )}
 
             <div style={{ marginTop: 14 }}>
-              <div className="eyebrow" style={{ marginBottom: 8 }}>Ошибки заданий</div>
-              {jobErrors.length === 0 ? (
-                <div className="small muted">Ошибок нет.</div>
+              <div className="eyebrow" style={{ marginBottom: 8 }}>Ошибки заданий · за 2 суток</div>
+              {freshErrors.length === 0 ? (
+                <div className="small muted">
+                  Свежих ошибок нет. ✅
+                  {staleErrors > 0 ? <> Старые ({staleErrors}) — в разделе «Логи».</> : null}
+                </div>
               ) : (
                 <div className="stack" style={{ gap: 10 }}>
-                  {jobErrors.map((j, i) => (
+                  {freshErrors.map((j, i) => (
                     <div key={`${j.server}-${i}`} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span className="small mono muted">{j.server} · {rel(j.at)}</span>
                       <span className="small">{j.text}</span>
                     </div>
                   ))}
+                  {staleErrors > 0 ? (
+                    <span className="small muted">Ещё {staleErrors} старых — в разделе «Логи».</span>
+                  ) : null}
                 </div>
               )}
             </div>
