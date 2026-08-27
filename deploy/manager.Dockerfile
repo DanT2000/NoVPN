@@ -8,14 +8,33 @@
 # build-arg'ом NODE_IMAGE, если понадобится вернуть docker.io.
 ARG NODE_IMAGE=mirror.gcr.io/library/node:20-bookworm-slim
 
+# Зеркало пакетов Debian. С прод-build-хоста (107_AppsServer) deb.debian.org (Fastly)
+# недоступен: по IPv6 «network unreachable», по IPv4 connect timeout — из-за этого
+# apt-get валил сборку с «Unable to locate package». mirror.yandex.ru отдаёт те же
+# пакеты по HTTPS и с этого хоста доступен. Откат — build-arg DEBIAN_MIRROR.
+ARG DEBIAN_MIRROR=https://mirror.yandex.ru
+
 # ---- build ----
 FROM ${NODE_IMAGE} AS build
+ARG DEBIAN_MIRROR
 WORKDIR /app
 
+# apt: IPv6 на build-хосте нерабочий — форсируем IPv4 и переключаем на зеркало
+# (bookworm-slim хранит источники в deb822-файле, старый sources.list — на всякий).
+RUN set -eux; \
+    printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4; \
+    for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+      [ -f "$f" ] && sed -i \
+        -e "s#https\?://deb.debian.org/debian-security#${DEBIAN_MIRROR}/debian-security#g" \
+        -e "s#https\?://deb.debian.org/debian#${DEBIAN_MIRROR}/debian#g" "$f" || true; \
+    done
+
 # инструменты сборки нативных модулей (better-sqlite3) — на случай, если
-# prebuilt-бинарь недоступен и нужна компиляция из исходников.
+# prebuilt-бинарь недоступен и нужна компиляция из исходников. Не роняем сборку,
+# если зеркало недоступно: при наличии prebuilt-бинаря компилятор не понадобится.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ || echo "ВНИМАНИЕ: apt недоступен — собираем без компилятора (нужен prebuilt better-sqlite3)"
 
 # сначала манифесты — для кэша слоёв
 COPY package.json package-lock.json* tsconfig.base.json ./
@@ -47,10 +66,23 @@ RUN npm run build --workspace packages/shared \
 
 # ---- runtime ----
 FROM ${NODE_IMAGE} AS runtime
+ARG DEBIAN_MIRROR
 WORKDIR /app
-# curl нужен healthcheck'у Coolify (он вызывает curl/wget внутри контейнера)
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/*
+# curl нужен healthcheck'у Coolify (он вызывает curl/wget внутри контейнера).
+# В node:*-slim curl уже есть — лезем в apt только если его вдруг нет, иначе
+# недоступность репозиториев с build-хоста роняет сборку на пустом месте.
+RUN set -eux; \
+    if ! command -v curl >/dev/null 2>&1; then \
+      printf 'Acquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99force-ipv4; \
+      for f in /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list; do \
+        [ -f "$f" ] && sed -i \
+          -e "s#https\?://deb.debian.org/debian-security#${DEBIAN_MIRROR}/debian-security#g" \
+          -e "s#https\?://deb.debian.org/debian#${DEBIAN_MIRROR}/debian#g" "$f" || true; \
+      done; \
+      apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* || true; \
+    fi; \
+    command -v curl >/dev/null 2>&1 && curl --version | head -n1 \
+      || echo "ВНИМАНИЕ: curl отсутствует — healthcheck работает через node (см. HEALTHCHECK ниже)"
 ENV NODE_ENV=production \
     PORT=3000 \
     WEB_DIST=/app/apps/web/dist \
