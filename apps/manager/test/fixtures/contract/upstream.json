@@ -14,6 +14,8 @@
     "2001:b28:f23d::/48",
     "2001:b28:f23f::/48",
     "2a0a:f280::/32",
+    "5.28.192.0/18",
+    "95.161.64.0/20",
     "telegram.org",
     "telegram.me",
     "t.me",
@@ -28,6 +30,9 @@
     "graph.org",
     "contest.com",
     "usercontent.dev",
+    "dns.google.com",
+    "dns.google",
+    "firebaseremoteconfig.googleapis.com",
     "blocked.example",
     "full:exact.example",
     "10.10.0.0/16"

@@ -474,6 +474,23 @@ try {
     if (have.has(s.url)) continue;
     ins.run(s.id, s.title, s.url, next++, new Date().toISOString());
   }
+  // Подсети Telegram — отдельными источниками и ВЫШЕ объёмных списков. Почему выше:
+  // их единицы, а Re:filter даёт десятки тысяч подсетей, и при общем потолке подписки
+  // (6000 IP) телеграмовские диапазоны оказывались за границей — мессенджер шёл
+  // напрямую и упирался в блокировку. Встроенный список уже покрывает известное на
+  // сегодня; эти источники приносят то, что появится ПОЗЖЕ, без правок кода.
+  const TG_SOURCES: Array<{ id: string; title: string; url: string }> = [
+    { id: 'rs_tg_ipv4', title: 'Telegram · подсети IPv4', url: 'https://ghfast.top/https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Subnets/IPv4/telegram.lst' },
+    { id: 'rs_tg_ipv6', title: 'Telegram · подсети IPv6', url: 'https://ghfast.top/https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Subnets/IPv6/telegram.lst' },
+  ];
+  const tgMissing = TG_SOURCES.filter((s) => !have.has(s.url));
+  if (tgMissing.length) {
+    // Освобождаем начало очереди: остальные источники сдвигаются, телеграмовские — первыми.
+    db.prepare("UPDATE routing_sources SET priority = priority + ? WHERE dataset = 'upstream'").run(tgMissing.length);
+    let tgPriority = 0;
+    for (const s of tgMissing) ins.run(s.id, s.title, s.url, tgPriority++, new Date().toISOString());
+  }
+
   // Сидированные источники, оставшиеся на прямом github, — на зеркало (только наши id:
   // источники, добавленные администратором руками, не трогаем).
   for (const id of ['rs_legacy_upstream', 'rs_itdog_inside', 'rs_refilter_domains', 'rs_refilter_ips']) {
