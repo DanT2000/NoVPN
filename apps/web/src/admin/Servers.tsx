@@ -568,6 +568,9 @@ function Metric({ label, value, color }: { label: string; value: React.ReactNode
 export function Servers() {
   const { data, isMobile, goAdmin, setServerAutoIssue, deleteServer, showToast, showConfirm } = useApp();
   const [editing, setEditing] = useState<string | null>(null);
+  // Синхронизация конфигов вынесена в футер строки: раньше она жила только внутри
+  // формы «Изменить», ниже прокси и серверных ключей, и там её никто не находил.
+  const [syncing, setSyncing] = useState<string | null>(null);
   if (!data) return null;
 
   const servers = data.servers;
@@ -660,6 +663,24 @@ export function Servers() {
                       onClick={() => goAdmin('server-migrate', { serverId: s.id })}
                     >
                       Перенести
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      disabled={syncing === s.id}
+                      title="Залить на сервер все выданные конфиги из панели. Лечит «в панели конфиг есть, а подключиться нельзя»."
+                      onClick={async () => {
+                        setSyncing(s.id);
+                        try {
+                          const r = await api.resyncDevices(s.id);
+                          showToast(r.message ?? `Синхронизировано: Xray ${r.xray}, AmneziaWG ${r.awg}`);
+                        } catch (e) {
+                          showToast(e instanceof Error ? e.message : 'Не удалось синхронизировать');
+                        } finally {
+                          setSyncing(null);
+                        }
+                      }}
+                    >
+                      {syncing === s.id ? 'Синхронизирую…' : 'Синхронизировать'}
                     </button>
                     <button
                       className="btn btn-outline btn-sm"
