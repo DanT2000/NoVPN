@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>NoVPN</title>
+  </head>
+  <body>
+    <header>
+      <span class="wordmark">no<span>vpn</span></span>
+      <span id="conn" class="conn"></span>
+    </header>
+
+    <main id="body">
+      <div id="site" class="site">
+        <span id="avatar" class="avatar"></span>
+        <span class="site-main">
+          <span id="domain" class="domain">—</span>
+          <span id="source" class="source"></span>
+        </span>
+      </div>
+
+      <div id="choices" role="radiogroup" aria-label="Маршрут">
+        <button class="choice" data-route="vpn" role="radio" aria-checked="false">
+          <span class="radio"></span>
+          <span class="label">Через VPN</span>
+        </button>
+        <button class="choice" data-route="direct" role="radio" aria-checked="false">
+          <span class="radio"></span>
+          <span class="label">Напрямую</span>
+        </button>
+      </div>
+
+      <button id="clear" class="link">Убрать правило</button>
+    </main>
+
+    <p id="note" class="note"></p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

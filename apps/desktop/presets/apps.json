@@ -1,0 +1,337 @@
+{
+ "version": 1,
+ "kind": "apps",
+ "updated": "2026-08-19",
+ "note": "По умолчанию весь трафик идёт напрямую. Здесь перечислено только то, чему нужен VPN, и отдельно то, что обязано остаться напрямую.",
+ "items": [
+  {
+   "id": "discord",
+   "name": "Discord",
+   "route": "vpn",
+   "reason": "Заблокирован в России",
+   "processes": [
+    "Discord.exe",
+    "DiscordPTB.exe",
+    "DiscordCanary.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Discord\\app-*\\Discord.exe"
+    ]
+   },
+   "icon": "icons/discord.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "telegram",
+   "name": "Telegram",
+   "route": "vpn",
+   "reason": "Ограничен, часть медиа не грузится",
+   "processes": [
+    "Telegram.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%APPDATA%\\Telegram Desktop\\Telegram.exe",
+     "%LOCALAPPDATA%\\Programs\\Telegram Desktop\\Telegram.exe"
+    ]
+   },
+   "icon": "icons/telegram.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "vscode",
+   "name": "Visual Studio Code",
+   "route": "vpn",
+   "reason": "Внутри работают Claude Code и ChatGPT — им нужен VPN",
+   "processes": [
+    "Code.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe",
+     "%ProgramFiles%\\Microsoft VS Code\\Code.exe"
+    ]
+   },
+   "icon": "icons/vscode.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "docker",
+   "name": "Docker Desktop",
+   "route": "vpn",
+   "reason": "Docker Hub не отдаёт образы на российские адреса",
+   "processes": [
+    "Docker Desktop.exe",
+    "com.docker.backend.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%ProgramFiles%\\Docker\\Docker\\Docker Desktop.exe"
+    ]
+   },
+   "icon": "icons/docker.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "githubdesktop",
+   "name": "GitHub Desktop",
+   "route": "vpn",
+   "reason": "GitHub периодически недоступен",
+   "processes": [
+    "GitHubDesktop.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\GitHubDesktop\\GitHubDesktop.exe"
+    ]
+   },
+   "icon": "icons/githubdesktop.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "epicgames",
+   "name": "Epic Games Launcher",
+   "route": "vpn",
+   "reason": "Магазин и оплата закрыты для России",
+   "processes": [
+    "EpicGamesLauncher.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%ProgramFiles%\\Epic Games\\Launcher\\Portal\\Binaries\\Win64\\EpicGamesLauncher.exe"
+    ]
+   },
+   "icon": "icons/epicgames.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "androidstudio",
+   "name": "Android Studio",
+   "route": "vpn",
+   "reason": "SDK и Gradle тянутся с серверов Google",
+   "processes": [
+    "studio64.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%ProgramFiles%\\Android\\Android Studio\\bin\\studio64.exe"
+    ]
+   },
+   "icon": "icons/androidstudio.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "gpt4all",
+   "name": "GPT4All",
+   "route": "vpn",
+   "reason": "Модели качаются с Hugging Face",
+   "processes": [
+    "chat.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%USERPROFILE%\\gpt4all\\bin\\chat.exe"
+    ]
+   },
+   "icon": "icons/gpt4all.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "bitwarden",
+   "name": "Bitwarden",
+   "route": "vpn",
+   "reason": "Бывает недоступен",
+   "processes": [
+    "Bitwarden.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Programs\\Bitwarden\\Bitwarden.exe"
+    ]
+   },
+   "icon": "icons/bitwarden.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "lmstudio",
+   "name": "LM Studio",
+   "route": "vpn",
+   "reason": "Модели качаются с Hugging Face",
+   "processes": [
+    "LM Studio.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Programs\\lm-studio\\LM Studio.exe"
+    ]
+   },
+   "icon": "icons/lmstudio.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "whatsapp",
+   "name": "WhatsApp",
+   "route": "vpn",
+   "reason": "Ограничен в России",
+   "processes": [
+    "WhatsApp.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\WhatsApp\\WhatsApp.exe",
+     "%ProgramFiles%\\WindowsApps\\5319275A.WhatsAppDesktop_*\\WhatsApp.exe"
+    ]
+   },
+   "icon": "icons/whatsapp.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "signal",
+   "name": "Signal",
+   "route": "vpn",
+   "reason": "Заблокирован в России",
+   "processes": [
+    "Signal.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Programs\\signal-desktop\\Signal.exe"
+    ]
+   },
+   "icon": "icons/signal.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "spotify",
+   "name": "Spotify",
+   "route": "vpn",
+   "reason": "Сервис ушёл из России",
+   "processes": [
+    "Spotify.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%APPDATA%\\Spotify\\Spotify.exe"
+    ]
+   },
+   "icon": "icons/spotify.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "slack",
+   "name": "Slack",
+   "route": "vpn",
+   "reason": "Ограничен для российских организаций",
+   "processes": [
+    "slack.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\slack\\slack.exe"
+    ]
+   },
+   "icon": "icons/slack.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "notion",
+   "name": "Notion",
+   "route": "vpn",
+   "reason": "Сервис ушёл из России",
+   "processes": [
+    "Notion.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Programs\\Notion\\Notion.exe"
+    ]
+   },
+   "icon": "icons/notion.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "figma",
+   "name": "Figma",
+   "route": "vpn",
+   "reason": "Сервис ушёл из России",
+   "processes": [
+    "Figma.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Figma\\app-*\\Figma.exe"
+    ]
+   },
+   "icon": "icons/figma.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "cursor",
+   "name": "Cursor",
+   "route": "vpn",
+   "reason": "ИИ-редактор, работает через зарубежные API",
+   "processes": [
+    "Cursor.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%LOCALAPPDATA%\\Programs\\cursor\\Cursor.exe"
+    ]
+   },
+   "icon": "icons/cursor.png",
+   "installedOnSource": false
+  },
+  {
+   "id": "steam",
+   "name": "Steam",
+   "route": "direct",
+   "reason": "Работает в России, VPN только замедлит",
+   "processes": [
+    "steam.exe",
+    "steamwebhelper.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%ProgramFiles(x86)%\\Steam\\steam.exe"
+    ]
+   },
+   "icon": "icons/steam.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "lesta",
+   "name": "Lesta Game Center",
+   "route": "direct",
+   "reason": "Российский сервис, с зарубежного адреса не пустит",
+   "processes": [
+    "lgc.exe",
+    "WorldOfTanks.exe",
+    "Tanki.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%ProgramFiles(x86)%\\Lesta\\GameCenter\\lgc.exe"
+    ]
+   },
+   "icon": "icons/lesta.png",
+   "installedOnSource": true
+  },
+  {
+   "id": "qbittorrent",
+   "name": "qBittorrent",
+   "route": "direct",
+   "reason": "Торренты через VPN забивают канал и мешают остальному",
+   "processes": [
+    "qbittorrent.exe"
+   ],
+   "detect": {
+    "paths": [
+     "%ProgramFiles%\\qBittorrent\\qbittorrent.exe"
+    ]
+   },
+   "icon": "icons/qbittorrent.png",
+   "installedOnSource": true
+  }
+ ]
+}

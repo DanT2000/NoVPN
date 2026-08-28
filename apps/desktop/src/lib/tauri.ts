@@ -1,0 +1,172 @@
+/* Мостик к оболочке. В браузере всё это молча возвращает заглушки — прототип
+   должен открываться и без Tauri, иначе быстрый цикл правок сломается. */
+
+export const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T | null> {
+  if (!inTauri) return null;
+  const { invoke } = await import('@tauri-apps/api/core');
+  return (await invoke(cmd, args)) as T;
+}
+
+/** Как `call`, но ошибку не глотает: её нужно показать человеку. */
+async function callOrThrow<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  return (await invoke(cmd, args)) as T;
+}
+
+/* ── Окно и трей ──────────────────────────────────────────── */
+
+export const syncTray = (connected: boolean) => call('set_tray_state', { connected }).catch(() => null);
+export const syncCloseToTray = (enabled: boolean) => call('set_close_to_tray', { enabled }).catch(() => null);
+export const quitApp = () => call('quit_app').catch(() => null);
+
+export async function hideWindow(): Promise<void> {
+  if (!inTauri) return;
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  await getCurrentWindow().hide();
+}
+
+export async function minimizeWindow(): Promise<void> {
+  if (!inTauri) return;
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  await getCurrentWindow().minimize();
+}
+
+export async function onTrayToggle(cb: () => void): Promise<() => void> {
+  if (!inTauri) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return await listen('tray-toggle', () => cb());
+}
+
+/* ── Подписка и подключение ───────────────────────────────── */
+
+export interface ServerInfo {
+  name: string;
+  server: string;
+  port: number;
+  kind: string;
+}
+
+export interface SubResult {
+  servers: ServerInfo[];
+  format: string;
+}
+
+export interface RulesPayload {
+  /** Выключенная умная маршрутизация означает «весь трафик в туннель». */
+  smart: boolean;
+  /** Режим сетевого адаптера вместо системного прокси. */
+  tunnel: boolean;
+  /** Обход локальных доменов напрямую. */
+  bypassLocal: boolean;
+  customLocal: string[];
+  dnsProvider: string;
+  /** Домены, заданные человеком, уже в порядке важности: браузер, затем окно.
+      Их не отменяет ни один подгруженный список. */
+  userDomains: { domain: string; route: 'vpn' | 'direct' }[];
+  listDirectDomains: string[];
+  listVpnDomains: string[];
+  vpnProcesses: string[];
+  directProcesses: string[];
+}
+
+export const subFetch = (url: string) => callOrThrow<SubResult>('sub_fetch', { url });
+export const subCached = () => callOrThrow<SubResult>('sub_cached');
+
+export const vpnConnect = (selected: string | null, rules: RulesPayload) =>
+  callOrThrow<void>('vpn_connect', { selected, rules });
+
+export const vpnDisconnect = () => callOrThrow<void>('vpn_disconnect');
+
+/** Применяет изменённые правила к работающему движку, не разрывая соединений. */
+export const vpnReload = (selected: string | null, rules: RulesPayload) =>
+  callOrThrow<void>('vpn_reload', { selected, rules });
+export const vpnAlive = () => call<boolean>('vpn_alive').then((v) => v ?? false);
+export const vpnPort = () => call<number>('vpn_port');
+
+/** Открыть папку настроек NoVPN в проводнике. */
+export const openConfigDir = () => call('open_config_dir').catch(() => null);
+/** Открыть журнал движка. */
+export const openEngineLog = () => call('open_engine_log').catch(() => null);
+/** Открыть URL в браузере по умолчанию. */
+export const openUrl = (url: string) => call('open_url', { url }).catch(() => null);
+
+/** Настоящее состояние автозапуска, а не сохранённое в файле. */
+export const autostartGet = () => call<boolean>('autostart_get').then((v) => v ?? false);
+/** Приводит автозапуск к нужному виду с учётом режима адаптера. */
+export const autostartSync = (autostart: boolean, tunnel: boolean) =>
+  call('autostart_sync', { autostart, tunnel }).catch(() => null);
+/** Настроен ли тихий elevated-автозапуск (задача планировщика). */
+export const autostartHasTask = () => call<boolean>('autostart_has_task').then((v) => v ?? false);
+
+export interface AppItem {
+  name: string;
+  processes: string[];
+  path: string | null;
+  running: boolean;
+}
+
+/** Установленные программы (из реестра). */
+export const appsInstalled = () => call<AppItem[]>('apps_installed').then((v) => v ?? []);
+/** Запущенные сейчас процессы, свёрнутые по имени файла. */
+export const appsRunning = () => call<AppItem[]>('apps_running').then((v) => v ?? []);
+
+/** Системное окно выбора: .exe или папка. Возвращает путь или null. */
+export async function pickExe(): Promise<string | null> {
+  if (!inTauri) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const r = await open({ filters: [{ name: 'Программа', extensions: ['exe'] }], multiple: false, directory: false });
+  return typeof r === 'string' ? r : null;
+}
+export async function pickFolder(): Promise<string | null> {
+  if (!inTauri) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const r = await open({ directory: true, multiple: false });
+  return typeof r === 'string' ? r : null;
+}
+
+export interface UpdateInfo {
+  available: boolean;
+  current: string;
+  latest: string;
+  notes: string;
+  sizeBytes: number;
+}
+
+/** Проверка обновления на GitHub. */
+export const updateCheck = () => callOrThrow<UpdateInfo>('update_check');
+/** Скачать и запустить установщик новой версии. */
+export const updateInstall = () => callOrThrow<void>('update_install');
+
+/** Запущено ли приложение с правами администратора. */
+export const isElevated = () => call<boolean>('is_elevated').then((v) => v ?? false);
+/** Перезапуск с запросом прав. Согласие даёт человек в окне Windows. */
+export const relaunchElevated = () => callOrThrow<void>('relaunch_elevated');
+
+/* ── Хранение ─────────────────────────────────────────────── */
+
+export interface ServerLists {
+  vpnDomains: string[];
+  directDomains: string[];
+  apps: { id: string; name: string; route: 'vpn' | 'direct'; processes: string[] }[];
+  /** Сколько элементов пришло в каждом файле. */
+  counts: [string, number][];
+}
+
+/** Обновляет списки с сервера NoVPN. */
+export const listsSync = () => callOrThrow<ServerLists>('lists_sync');
+/** Списки, уже лежащие на диске. */
+export const listsLoad = () => call<ServerLists>('lists_load');
+
+export interface BrowserRule {
+  domain: string;
+  route: 'vpn' | 'direct';
+}
+
+/** Правила, добавленные кнопкой в браузере. */
+export const browserRules = () => call<BrowserRule[]>('browser_rules');
+
+export const stateLoad = <T>(name: string) => call<T | null>('state_load', { name });
+export const stateSave = (name: string, value: unknown) =>
+  call('state_save', { name, value }).catch(() => null);

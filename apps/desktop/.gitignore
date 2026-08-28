@@ -1,0 +1,14 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+*.local
+# временные файлы и тестовые установщики — только локально
+.tmp
+.installtest
+# движок и драйвер адаптера — из официальных релизов (scripts/fetch-engine.ps1)
+src-tauri/bin/*.exe
+src-tauri/bin/*.dll
+# живые конфиги/подписки никогда не коммитим
+*.conf
+subscription.txt

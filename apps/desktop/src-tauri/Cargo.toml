@@ -1,0 +1,42 @@
+[package]
+name = "novpn-desktop"
+version = "0.2.5"
+description = "NoVPN Desktop"
+edition = "2021"
+
+[lib]
+name = "novpn_desktop"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# image-png нужен для Image::from_bytes — иконка трея грузится из PNG
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Подписка чужого провайдера часто приходит готовым Clash-YAML: разбираем его
+# и берём как основу, подменяя только правила.
+serde_yaml = "0.9"
+base64 = "0.22"
+urlencoding = "2"
+sha2 = "0.10"
+ed25519-dalek = "2"
+sysinfo = "0.32"
+tauri-plugin-dialog = "2"
+# rustls вместо схемы Windows: подписка тянется до подключения VPN, и зависеть
+# от системного хранилища сертификатов тут лишний риск
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["process", "time", "io-util"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

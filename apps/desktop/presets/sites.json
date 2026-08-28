@@ -1,0 +1,1304 @@
+{
+ "version": 1,
+ "kind": "sites",
+ "updated": "2026-08-19",
+ "note": "По умолчанию весь трафик идёт напрямую. Здесь перечислено только то, чему нужен VPN, и отдельно то, что обязано остаться напрямую.",
+ "items": [
+  {
+   "domain": "openai.com",
+   "name": "OpenAI",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "chatgpt.com",
+   "name": "ChatGPT",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "oaistatic.com",
+   "name": "OpenAI CDN",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "oaiusercontent.com",
+   "name": "OpenAI CDN",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "sora.com",
+   "name": "Sora",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "anthropic.com",
+   "name": "Anthropic",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "claude.ai",
+   "name": "Claude",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "claudeusercontent.com",
+   "name": "Claude CDN",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "gemini.google.com",
+   "name": "Gemini",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "aistudio.google.com",
+   "name": "Google AI Studio",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "generativelanguage.googleapis.com",
+   "name": "Gemini API",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "huggingface.co",
+   "name": "Hugging Face",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "hf.co",
+   "name": "Hugging Face",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "x.ai",
+   "name": "xAI",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "grok.com",
+   "name": "Grok",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "perplexity.ai",
+   "name": "Perplexity",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "openrouter.ai",
+   "name": "OpenRouter",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "replicate.com",
+   "name": "Replicate",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "cursor.com",
+   "name": "Cursor",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "github.com",
+   "name": "GitHub",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "githubusercontent.com",
+   "name": "GitHub CDN",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "githubcopilot.com",
+   "name": "GitHub Copilot",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "ghcr.io",
+   "name": "GitHub Registry",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "docker.com",
+   "name": "Docker",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "docker.io",
+   "name": "Docker Hub",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "npmjs.org",
+   "name": "npm",
+   "route": "vpn",
+   "group": "ИИ и разработка"
+  },
+  {
+   "domain": "discord.com",
+   "name": "Discord",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "discordapp.com",
+   "name": "Discord",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "discord.gg",
+   "name": "Discord",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "discordapp.net",
+   "name": "Discord CDN",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "discord.media",
+   "name": "Discord Voice",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "telegram.org",
+   "name": "Telegram",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "t.me",
+   "name": "Telegram",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "telegra.ph",
+   "name": "Telegraph",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "telesco.pe",
+   "name": "Telegram CDN",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "whatsapp.com",
+   "name": "WhatsApp",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "whatsapp.net",
+   "name": "WhatsApp",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "signal.org",
+   "name": "Signal",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "slack.com",
+   "name": "Slack",
+   "route": "vpn",
+   "group": "Общение"
+  },
+  {
+   "domain": "youtube.com",
+   "name": "YouTube",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "youtu.be",
+   "name": "YouTube",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "googlevideo.com",
+   "name": "YouTube CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "ytimg.com",
+   "name": "YouTube CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "ggpht.com",
+   "name": "YouTube CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "instagram.com",
+   "name": "Instagram",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "cdninstagram.com",
+   "name": "Instagram CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "facebook.com",
+   "name": "Facebook",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "fbcdn.net",
+   "name": "Facebook CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "x.com",
+   "name": "X",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "twitter.com",
+   "name": "X",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "twimg.com",
+   "name": "X CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "twitch.tv",
+   "name": "Twitch",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "ttvnw.net",
+   "name": "Twitch CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "netflix.com",
+   "name": "Netflix",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "nflxvideo.net",
+   "name": "Netflix CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "spotify.com",
+   "name": "Spotify",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "scdn.co",
+   "name": "Spotify CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "soundcloud.com",
+   "name": "SoundCloud",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "reddit.com",
+   "name": "Reddit",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "redd.it",
+   "name": "Reddit CDN",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "tiktok.com",
+   "name": "TikTok",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "medium.com",
+   "name": "Medium",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "patreon.com",
+   "name": "Patreon",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "pinterest.com",
+   "name": "Pinterest",
+   "route": "vpn",
+   "group": "Медиа и соцсети"
+  },
+  {
+   "domain": "notion.so",
+   "name": "Notion",
+   "route": "vpn",
+   "group": "Работа"
+  },
+  {
+   "domain": "figma.com",
+   "name": "Figma",
+   "route": "vpn",
+   "group": "Работа"
+  },
+  {
+   "domain": "linkedin.com",
+   "name": "LinkedIn",
+   "route": "vpn",
+   "group": "Работа"
+  },
+  {
+   "domain": "epicgames.com",
+   "name": "Epic Games",
+   "route": "vpn",
+   "group": "Работа"
+  },
+  {
+   "domain": "unrealengine.com",
+   "name": "Unreal Engine",
+   "route": "vpn",
+   "group": "Работа"
+  },
+  {
+   "domain": "epicgames.dev",
+   "name": "Epic Online",
+   "route": "vpn",
+   "group": "Работа"
+  },
+  {
+   "domain": "2gis.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "2gis.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ads.x5.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "aif.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "aeroflot.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "alfabank.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "aliexpress.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "aliexpress.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "api.oneme.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "avito.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "beeline.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "burgerkingrus.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "dellin.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "drive2.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "dzen.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "fd.oneme.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "flypobeda.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "forbes.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "gazeta.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "gazprombank.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "gismeteo.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "gosuslugi.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "hh.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "i.oneme.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "kontur.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "kontur.host",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "kp.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "kuper.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "lenta.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "mail.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "max.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "megamarket.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "megamarket.tech",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "megafon.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "miniapps.max.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "moex.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "motivtelecom.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ozon.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "pervye.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "psbank.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rambler.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rambler-co.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rbc.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "reg.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "reviews.2gis.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rg.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ria.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rustore.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rutube.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ruwiki.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rzd.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "sdk-api.apptracer.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "sirena-travel.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "sravni.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "st.max.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "t-j.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "t2.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "tank-online.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "taximaxim.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "tbank-online.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "tildaapi.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "tns-counter.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "tracker-api.vk-analytics.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "trvl.yandex.net",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "tutu.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "vk.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "vk.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "vkvideo.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "vtb.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "x5.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "xn--90acagbhgpca7c8c7f.xn--p1ai",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "xn--80ajghhoc2aj1c8b.xn--p1ai",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "xn--90aivcdt6dxbc.xn--p1ai",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "xn--b1aew.xn--p1ai",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ya.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "yandex.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "yandex.net",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "yandex.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "yandexcloud.net",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "yastatic.net",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "sberbank.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "sber.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "tinkoff.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "t-bank.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "wildberries.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "vtb24.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "nalog.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "nalog.gov.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "pochta.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "cdek.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ok.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "lamoda.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "samokat.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "vkusvill.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "lenta.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "magnit.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "kinopoisk.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ivi.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "start.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "kion.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "wink.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "litres.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "cian.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "dns-shop.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "mvideo.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "eldorado.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "citilink.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "detmir.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "sportmaster.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "leroymerlin.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "lemanapro.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "utair.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "s7.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "uralairlines.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rossiya-airlines.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "nordwindairlines.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "smartavia.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "azimuth.aero",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "flyredwings.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "azurair.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "gov.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "mos.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "mosreg.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "mosenergosbyt.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "pesc.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "consultant.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "russianpost.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "emex.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "reso.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "rzd-bonus.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "avtodor-tr.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "onelya.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "bkvet.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "dzvr.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "yadro.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "gorzdrav.spb.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "gu-st.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ozonusercontent.com",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "refocus.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ttk.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "bitrix.info",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "showip.net",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "xn--90aijkdmaud0d.xn--p1ai",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "1018213540.rsc.cdn77.org",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "go.yandex",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  },
+  {
+   "domain": "ru.ruwiki.ru",
+   "name": null,
+   "route": "direct",
+   "group": "Российские сервисы"
+  }
+ ]
+}

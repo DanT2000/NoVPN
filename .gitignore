@@ -93,3 +93,16 @@ v2rayTUN.webp
 release/
 *.novpn-keys
 novpn-backup-*.novpnbak
+
+# ── NoVPN Desktop (apps/desktop) — отдельный пакет, не npm-workspace ─────────
+# Rust-артефакты (десятки ГБ) и Vite-выход не версионируем.
+apps/desktop/src-tauri/target/
+apps/desktop/dist/
+apps/desktop/.tmp/
+apps/desktop/.installtest/
+# Движок и драйвер адаптера — бинарники из официальных релизов, качаются
+# скриптом apps/desktop/scripts/fetch-engine.ps1 (версии закреплены там).
+apps/desktop/src-tauri/bin/*.exe
+apps/desktop/src-tauri/bin/*.dll
+# Сгенерированные Tauri схемы ACL пересоздаются при сборке.
+apps/desktop/src-tauri/gen/

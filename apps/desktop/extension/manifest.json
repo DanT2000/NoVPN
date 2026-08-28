@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "NoVPN",
+  "version": "0.1.0",
+  "description": "Выбирайте прямо на сайте, идёт он через VPN или напрямую. Правило сразу попадает в приложение NoVPN.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtP6SaYLkeIazUXM4RmcEyfa09iNmA32JR/BU6o+xz4BkNJIaPiVrXvkW56A4+VasSPYFxBdTZjC7h1S2tQmP6bxiQLb4vXP2CJRh1H4vA3Hl348JtrRUXm4qt9Fq4S+v/tsPaPk6GBExDHUz4Zbn/H6U7eIQcFXbTRljnal4Ln+iN3jffMzMg9vmrBOULKLUsHaHK8uaT2yEX1JOzzn8OTJts1LWdFMWLoshg0YCblxQZcKBK/wZApoH21jSIPCpe9XPkZhOMUyxHWATtmTIlxGfV/sOlo0Wx4hN3YEdAcFyZNpJ8fXqrHUKGWJwFEh9UXN8TWcnqxTF4F43Ph1BwwIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "nativeMessaging",
+    "storage"
+  ],
+  "action": {
+    "default_title": "NoVPN",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}

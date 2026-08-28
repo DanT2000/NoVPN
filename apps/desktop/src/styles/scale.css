@@ -1,0 +1,93 @@
+/* Десктопная типографика.
+   Отдельный файл намеренно: components.css скопирован из веб-панели и должен
+   оставаться сверяемым с ней построчно. Всё, чем десктоп от панели отличается,
+   собрано здесь — это список осознанных отклонений, а не случайный дрейф.
+
+   Почему крупнее: панель — плотный административный интерфейс, её читают
+   вплотную к монитору и подолгу. Десктоп-приложение открывают мельком, часто
+   боковым зрением, и увеличить его нечем — масштаба браузера тут нет. */
+
+:root {
+  /* Масштаб интерфейса. Меняется в настройках — окно фиксированной ширины,
+     и это единственный доступный человеку способ «приблизить». */
+  --ui-zoom: 1;
+}
+
+#root {
+  zoom: var(--ui-zoom);
+  height: calc(100vh / var(--ui-zoom));
+}
+
+/* ─── Отклонения от панели ────────────────────────────────── */
+.btn {
+  font-size: 15.5px;
+  height: 46px;
+  border-radius: var(--r-card);
+}
+.btn-lg {
+  height: 54px;
+  font-size: 17px;
+}
+.btn-sm {
+  height: 40px;
+  font-size: 14.5px;
+  padding: 0 14px;
+}
+.input,
+.textarea,
+.select {
+  font-size: 16px;
+  padding: 13px 14px;
+}
+.field-label {
+  font-size: 12px;
+}
+.notice {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.eyebrow {
+  font-size: 12px;
+}
+.card {
+  padding: 18px;
+}
+.toggle {
+  width: 44px;
+  height: 25px;
+}
+.toggle::after {
+  width: 19px;
+  height: 19px;
+}
+.toggle.on::after {
+  left: 22px;
+}
+
+/* ─── Роли текста ─────────────────────────────────────────────
+   Раньше размеры жили инлайном по всем экранам, и поправить их разом было
+   нельзя. Теперь роль одна — место правки одно. */
+
+.t-name {
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.t-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.t-body {
+  font-size: 14px;
+  color: var(--text-body);
+  line-height: 1.5;
+}
+.t-note {
+  font-size: 12.5px;
+  color: var(--text-muted-2);
+  line-height: 1.45;
+}
+.t-strong {
+  font-size: 17px;
+  font-weight: 700;
+}

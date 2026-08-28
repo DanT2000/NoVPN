@@ -1,0 +1,157 @@
+/* Развилка маршрутов. Единственная анимация в приложении — точки, бегущие
+   по живому пути. Всё остальное статично намеренно. */
+
+.routes {
+  padding: 2px 0 0;
+}
+
+/* Источник трафика — тихая подпись, а не отдельный элемент со своим весом. */
+.routes-source {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--text-muted-2);
+  margin-bottom: 6px;
+}
+
+.routes-link {
+  display: block;
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto -1px;
+}
+.rl {
+  fill: none;
+  stroke-width: 1.6;
+  transition: stroke 0.35s;
+}
+.rl-direct {
+  stroke: var(--border-control);
+}
+.rl-vpn {
+  stroke: var(--text-fainter);
+}
+.rl-dot {
+  fill: var(--green-dot);
+}
+
+/* ─── Карточки путей ──────────────────────────────────────── */
+.routes-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.rcard {
+  border: 1px solid var(--border);
+  border-radius: var(--r-card-lg);
+  background: var(--surface);
+  padding: 13px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  transition: border-color 0.35s, background 0.35s, opacity 0.35s, box-shadow 0.35s;
+}
+.rcard-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  background: var(--surface-btn-2);
+  transition: color 0.35s, background 0.35s;
+}
+.rcard-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  transition: color 0.35s;
+}
+.rcard-note {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted-2);
+  text-align: center;
+  line-height: 1.35;
+}
+
+/* ─── Подключено ──────────────────────────────────────────── */
+.routes-on .rl-vpn {
+  stroke: var(--green-card-border);
+}
+.routes-on .rcard-vpn {
+  border-color: var(--green-card-border);
+  background: var(--green-card-bg);
+  box-shadow: 0 0 0 1px var(--green-card-bg), 0 6px 20px -12px var(--green-dot);
+}
+.routes-on .rcard-vpn .rcard-icon {
+  color: var(--green-fg);
+  background: var(--green-bg);
+}
+.routes-on .rcard-vpn .rcard-title {
+  color: var(--green-fg);
+}
+
+/* ─── Подключение ─────────────────────────────────────────── */
+.routes-wait .rl-vpn {
+  stroke: var(--amber-notice-border);
+}
+.routes-wait .rl-dot {
+  fill: var(--amber-fg);
+}
+.routes-wait .rcard-vpn {
+  border-color: var(--amber-notice-border);
+  background: var(--amber-notice-bg);
+}
+.routes-wait .rcard-vpn .rcard-icon {
+  color: var(--amber-fg);
+  background: var(--amber-bg);
+}
+.routes-wait .rcard-vpn .rcard-title {
+  color: var(--amber-fg);
+}
+
+/* ─── Ошибка ──────────────────────────────────────────────── */
+.routes-bad .rl-vpn {
+  stroke: var(--border-danger);
+  stroke-dasharray: 4 5;
+}
+.routes-bad .rcard-vpn {
+  border-color: var(--border-danger);
+  background: var(--red-box-bg);
+}
+.routes-bad .rcard-vpn .rcard-icon {
+  color: var(--red-fg);
+  background: var(--red-bg);
+}
+.routes-bad .rcard-vpn .rcard-title {
+  color: var(--red-fg);
+}
+
+/* ─── Отключено ───────────────────────────────────────────── */
+.routes-off .rl-vpn {
+  stroke-dasharray: 3 5;
+}
+.routes-off .rcard-vpn {
+  border-style: dashed;
+}
+
+/* ─── Умная маршрутизация выключена: прямого пути нет ─────── */
+.routes-nodirect .rl-direct {
+  stroke: var(--border-inner);
+  stroke-dasharray: 3 5;
+}
+.routes-nodirect .rcard-direct {
+  opacity: 0.4;
+  border-style: dashed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rl-dot {
+    display: none;
+  }
+}
