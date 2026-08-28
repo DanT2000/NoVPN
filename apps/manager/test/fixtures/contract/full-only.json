@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "panel": {
     "name": "NoVPN",
-    "origin": "http://127.0.0.1:55071"
+    "origin": "http://127.0.0.1:58705"
   },
   "routingResources": {
-    "manifest": "http://127.0.0.1:55071/routing/manifest.json",
-    "upstream": "http://127.0.0.1:55071/routing/upstream.json",
-    "apps": "http://127.0.0.1:55071/routing/apps.json",
-    "geosite": "http://127.0.0.1:55071/routing/autoroute/geosite.dat",
-    "geoip": "http://127.0.0.1:55071/routing/autoroute/geoip.dat"
+    "manifest": "http://127.0.0.1:58705/routing/manifest.json",
+    "upstream": "http://127.0.0.1:58705/routing/upstream.json",
+    "apps": "http://127.0.0.1:58705/routing/apps.json",
+    "geosite": "http://127.0.0.1:58705/routing/autoroute/geosite.dat",
+    "geoip": "http://127.0.0.1:58705/routing/autoroute/geoip.dat"
   },
   "profiles": [
     {
-      "profileId": "s_vw30m3wV:full",
-      "serverId": "s_vw30m3wV",
+      "profileId": "s_v1iRsqiw:full",
+      "serverId": "s_v1iRsqiw",
       "host": "home.example.test",
       "remark": "🇷🇺 Дом · Полный VPN",
       "recommended": false,
@@ -22,7 +22,7 @@
         "xray"
       ],
       "online": false,
-      "subLink": "http://127.0.0.1:55071/sub/MqxWUYe0sc0ZF8U6NWNcG4qb/server/s_vw30m3wV/full?profile=full",
+      "subLink": "http://127.0.0.1:58705/sub/RS5frSwrnGHTBrDAaoiWrVM2/server/s_v1iRsqiw/full?profile=full",
       "routing": {
         "mode": "full",
         "lanAccess": false,

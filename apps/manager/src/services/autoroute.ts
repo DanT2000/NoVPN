@@ -325,19 +325,28 @@ export function publishedRules(dataset = DATASET): StoredRule[] {
 // работают плохо. Публичный upstream.json и DAT отдаются БЕЗ потолка; в подписку идут
 // первые SUBSCRIPTION_CAP по приоритету источников. Факт обрезки виден в AutoRoute.
 export const SUBSCRIPTION_CAP = 30_000;
+// Потолок делится между доменами и подсетями: иначе 79k доменов Re:filter съедали весь
+// лимит, а IP-подсетям (DC Telegram, CDN без SNI) доставалось три штуки. Подсети
+// компактнее и их меньше — им отдельная квота.
+const SUBSCRIPTION_CAP_IPS = 6_000;
+const SUBSCRIPTION_CAP_DOMAINS = SUBSCRIPTION_CAP - SUBSCRIPTION_CAP_IPS;
 
 /** Правила для Xray-подписки: только с действием «в VPN», в формате префиксов Xray
- *  (domain:/full:/keyword:/regexp:) и отдельно CIDR. С потолком. */
+ *  (domain:/full:/keyword:/regexp:) и отдельно CIDR. Порядок = приоритет источников;
+ *  у доменов и подсетей свои потолки. */
 export function subscriptionRules(dataset = DATASET): { domains: string[]; ips: string[]; total: number; truncated: boolean } {
   const all = publishedRules(dataset).filter((r) => r.a === 'vpn');
-  const slice = all.slice(0, SUBSCRIPTION_CAP);
   const domains: string[] = [];
   const ips: string[] = [];
-  for (const r of slice) {
-    if (r.k === 'ip') ips.push(r.v);
+  let truncated = false;
+  for (const r of all) {
+    if (r.k === 'ip') {
+      if (ips.length >= SUBSCRIPTION_CAP_IPS) truncated = true;
+      else ips.push(r.v);
+    } else if (domains.length >= SUBSCRIPTION_CAP_DOMAINS) truncated = true;
     else domains.push(`${r.k}:${r.v}`);
   }
-  return { domains, ips, total: all.length, truncated: all.length > slice.length };
+  return { domains, ips, total: all.length, truncated };
 }
 
 /** Публичные DAT-файлы из опубликованной сборки (кеш по версии: байты детерминированы). */

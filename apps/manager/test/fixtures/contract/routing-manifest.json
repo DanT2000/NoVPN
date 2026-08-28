@@ -6,32 +6,32 @@
       "version": 2,
       "sha256": "d1444f998a9e3d4570dd340780b81f94bb0d8c9b7ef37c8b4a719a14e990961b",
       "bytes": 88,
-      "updatedAt": "2026-08-28T02:59:58.286Z",
-      "url": "http://127.0.0.1:55071/routing/upstream.json"
+      "updatedAt": "2026-08-28T03:08:42.360Z",
+      "url": "http://127.0.0.1:58705/routing/upstream.json"
     },
     {
       "name": "apps",
       "version": 1,
       "sha256": "3a42d346c00ddcf61ff8b82dfe2cd58419f7fdddc203eaec775dd5582468d937",
       "bytes": 17,
-      "updatedAt": "2026-08-28T02:59:58.258Z",
-      "url": "http://127.0.0.1:55071/routing/apps.json"
+      "updatedAt": "2026-08-28T03:08:42.315Z",
+      "url": "http://127.0.0.1:58705/routing/apps.json"
     },
     {
       "name": "geosite",
       "version": 1,
       "sha256": "ec3dacc38e451cbb3d656c009ec65d26a4b9e67deda91d69a90f1ce19df4de32",
       "bytes": 49,
-      "updatedAt": "2026-08-28T02:59:58.286Z",
-      "url": "http://127.0.0.1:55071/routing/autoroute/geosite.dat"
+      "updatedAt": "2026-08-28T03:08:42.359Z",
+      "url": "http://127.0.0.1:58705/routing/autoroute/geosite.dat"
     },
     {
       "name": "geoip",
       "version": 1,
       "sha256": "ab5988209c62648fb319b2f7c0354a3924d30052b488f7351779b65b9a35690d",
       "bytes": 19,
-      "updatedAt": "2026-08-28T02:59:58.286Z",
-      "url": "http://127.0.0.1:55071/routing/autoroute/geoip.dat"
+      "updatedAt": "2026-08-28T03:08:42.359Z",
+      "url": "http://127.0.0.1:58705/routing/autoroute/geoip.dat"
     }
   ]
 }

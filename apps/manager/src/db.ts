@@ -475,6 +475,12 @@ try {
   for (const id of ['rs_legacy_upstream', 'rs_itdog_inside', 'rs_refilter_domains', 'rs_refilter_ips']) {
     db.prepare("UPDATE routing_sources SET url = REPLACE(url, 'https://raw.githubusercontent.com/', 'https://ghfast.top/https://raw.githubusercontent.com/'), etag = NULL, last_modified = NULL, status = 'idle', status_reason = '' WHERE id = ? AND url LIKE 'https://raw.githubusercontent.com/%'").run(id);
   }
+  // После переписывания на зеркало унаследованный источник и сидированный itdoginfo
+  // стали одним и тем же URL — второй экземпляр убираем (кеш у обоих одинаковый).
+  db.prepare(
+    `DELETE FROM routing_sources WHERE id = 'rs_itdog_inside'
+       AND EXISTS (SELECT 1 FROM routing_sources l WHERE l.id = 'rs_legacy_upstream' AND l.url = routing_sources.url)`,
+  ).run();
   // Унаследованный источник дублирует itdoginfo по URL — под общим именем он понятнее.
   db.prepare("UPDATE routing_sources SET title = 'itdoginfo · заблокировано в России' WHERE id = 'rs_legacy_upstream' AND title = 'Прежний внешний источник'").run();
 } catch {

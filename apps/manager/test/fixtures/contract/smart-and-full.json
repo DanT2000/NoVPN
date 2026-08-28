@@ -2,37 +2,19 @@
   "schemaVersion": 1,
   "panel": {
     "name": "NoVPN",
-    "origin": "http://127.0.0.1:55071"
+    "origin": "http://127.0.0.1:58705"
   },
   "routingResources": {
-    "manifest": "http://127.0.0.1:55071/routing/manifest.json",
-    "upstream": "http://127.0.0.1:55071/routing/upstream.json",
-    "apps": "http://127.0.0.1:55071/routing/apps.json",
-    "geosite": "http://127.0.0.1:55071/routing/autoroute/geosite.dat",
-    "geoip": "http://127.0.0.1:55071/routing/autoroute/geoip.dat"
+    "manifest": "http://127.0.0.1:58705/routing/manifest.json",
+    "upstream": "http://127.0.0.1:58705/routing/upstream.json",
+    "apps": "http://127.0.0.1:58705/routing/apps.json",
+    "geosite": "http://127.0.0.1:58705/routing/autoroute/geosite.dat",
+    "geoip": "http://127.0.0.1:58705/routing/autoroute/geoip.dat"
   },
   "profiles": [
     {
-      "profileId": "s_vw30m3wV:full",
-      "serverId": "s_vw30m3wV",
-      "host": "home.example.test",
-      "remark": "🇷🇺 Дом · Полный VPN",
-      "recommended": false,
-      "protocols": [
-        "xray"
-      ],
-      "online": false,
-      "subLink": "http://127.0.0.1:55071/sub/MqxWUYe0sc0ZF8U6NWNcG4qb/server/s_vw30m3wV/full?profile=full",
-      "routing": {
-        "mode": "full",
-        "lanAccess": false,
-        "fallbackTypes": null,
-        "ownExceptions": 0
-      }
-    },
-    {
-      "profileId": "s_T-LmBHdB",
-      "serverId": "s_T-LmBHdB",
+      "profileId": "s_k9xxAQJH",
+      "serverId": "s_k9xxAQJH",
       "host": "fr.example.test",
       "remark": "🇫🇷 Франция",
       "recommended": true,
@@ -40,7 +22,7 @@
         "xray"
       ],
       "online": false,
-      "subLink": "http://127.0.0.1:55071/sub/MqxWUYe0sc0ZF8U6NWNcG4qb/server/s_T-LmBHdB/full",
+      "subLink": "http://127.0.0.1:58705/sub/RS5frSwrnGHTBrDAaoiWrVM2/server/s_k9xxAQJH/full",
       "routing": {
         "mode": "smart",
         "lanAccess": false,
@@ -49,8 +31,8 @@
       }
     },
     {
-      "profileId": "s_T-LmBHdB:full",
-      "serverId": "s_T-LmBHdB",
+      "profileId": "s_k9xxAQJH:full",
+      "serverId": "s_k9xxAQJH",
       "host": "fr.example.test",
       "remark": "🇫🇷 Франция · Полный VPN",
       "recommended": false,
@@ -58,7 +40,25 @@
         "xray"
       ],
       "online": false,
-      "subLink": "http://127.0.0.1:55071/sub/MqxWUYe0sc0ZF8U6NWNcG4qb/server/s_T-LmBHdB/full?profile=full",
+      "subLink": "http://127.0.0.1:58705/sub/RS5frSwrnGHTBrDAaoiWrVM2/server/s_k9xxAQJH/full?profile=full",
+      "routing": {
+        "mode": "full",
+        "lanAccess": false,
+        "fallbackTypes": null,
+        "ownExceptions": 0
+      }
+    },
+    {
+      "profileId": "s_v1iRsqiw:full",
+      "serverId": "s_v1iRsqiw",
+      "host": "home.example.test",
+      "remark": "🇷🇺 Дом · Полный VPN",
+      "recommended": false,
+      "protocols": [
+        "xray"
+      ],
+      "online": false,
+      "subLink": "http://127.0.0.1:58705/sub/RS5frSwrnGHTBrDAaoiWrVM2/server/s_v1iRsqiw/full?profile=full",
       "routing": {
         "mode": "full",
         "lanAccess": false,
