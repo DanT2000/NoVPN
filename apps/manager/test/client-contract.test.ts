@@ -240,12 +240,22 @@ test('Happ получает конфиг на тегах DAT + заголово�
   const r = await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'Happ/3.13.0' } });
   const sub = JSON.parse(await r.text()) as any[];
   const smart = sub.find((c) => c.meta.novpn.profileId === bothId);
-  const listRule = smart.routing.rules.find((r2: any) => r2.domain);
-  const ipRule = smart.routing.rules.find((r2: any) => r2.ip && !r2.ip.includes('127.0.0.0/8'));
+  const rules = smart.routing.rules as any[];
+  const listRule = rules.find((r2) => r2.domain && r2.outboundTag !== 'direct');
+  const ipRule = rules.find((r2) => r2.ip && r2.outboundTag !== 'direct');
   assert.ok(listRule.domain.includes('geosite:novpn'), 'домены — тегом, а не списком');
   assert.ok(listRule.domain.includes('domain:x.ru'), 'свои домены сервера остаются строками');
   assert.deepEqual(ipRule.ip, ['geoip:novpn']);
   assert.ok(!listRule.domain.includes('domain:blocked.example'), 'база в конфиг не копируется');
+
+  // Исключения «напрямую» — отдельной категорией и ОБЯЗАТЕЛЬНО раньше основного правила:
+  // в Xray выигрывает первое совпавшее, иначе исключение не сработало бы никогда.
+  const exDomain = rules.find((r2) => r2.domain && r2.outboundTag === 'direct');
+  const exIp = rules.find((r2) => r2.ip && r2.outboundTag === 'direct' && !r2.ip.includes('127.0.0.0/8'));
+  assert.ok(exDomain.domain.includes('geosite:novpn-direct'));
+  assert.ok(exIp.ip.includes('geoip:novpn-direct'));
+  assert.ok(rules.indexOf(exDomain) < rules.indexOf(listRule), 'исключения стоят перед списком');
+  assert.ok(rules.indexOf(exIp) < rules.indexOf(ipRule));
 
   const link = r.headers.get('routing') ?? '';
   assert.ok(link.startsWith('happ://routing/onadd/'), 'профиль маршрутизации отдан заголовком');
@@ -269,7 +279,9 @@ test('Happ получает конфиг на тегах DAT + заголово�
   // Ручное переопределение — чтобы владелец мог переключить формат, не меняя приложение.
   const forced = await fetch(`${base}/sub/${subToken}/full?rules=dat`, { headers: { 'user-agent': 'v2rayNG/1.9.0' } });
   const forcedSmart = (JSON.parse(await forced.text()) as any[]).find((c) => c.meta.novpn.profileId === bothId);
-  assert.ok(forcedSmart.routing.rules.find((r2: any) => r2.domain).domain.includes('geosite:novpn'));
+  assert.ok(
+    forcedSmart.routing.rules.find((r2: any) => r2.domain && r2.outboundTag !== 'direct').domain.includes('geosite:novpn'),
+  );
   const off = await fetch(`${base}/sub/${subToken}/full?rules=inline`, { headers: { 'user-agent': 'Happ/3.13.0' } });
   const offSmart = (JSON.parse(await off.text()) as any[]).find((c) => c.meta.novpn.profileId === bothId);
   assert.ok(offSmart.routing.rules.find((r2: any) => r2.domain).domain.includes('domain:blocked.example'));
@@ -362,8 +374,11 @@ test('geosite.dat / geoip.dat: настоящий V2Ray-формат, тег NOV
   const gs = Buffer.from(await (await fetch(`${base}/routing/autoroute/geosite.dat`)).arrayBuffer());
   const gi = Buffer.from(await (await fetch(`${base}/routing/autoroute/geoip.dat`)).arrayBuffer());
   const sites = decodeGeoSite(gs);
-  assert.equal(sites.length, 1);
-  assert.equal(sites[0]!.tag, 'NOVPN');
+  // Две категории: что уходит в VPN и что явно остаётся напрямую.
+  assert.deepEqual(
+    sites.map((s) => s.tag),
+    ['NOVPN', 'NOVPN-DIRECT'],
+  );
   const values = sites[0]!.domains.map((d) => d.value);
   // Датасет AutoRoute (свои домены серверов сюда не входят) + встроенные правила.
   assert.ok(values.includes('blocked.example') && values.includes('exact.example'));

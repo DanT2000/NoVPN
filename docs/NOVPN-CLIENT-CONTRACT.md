@@ -209,8 +209,14 @@ Xray-core незнакомые поля игнорирует; Happ читает 
 | Ресурс | Формат | Для кого |
 |---|---|---|
 | `upstream.json` | `{"items": [...]}` | NoVPN Desktop (MVP) |
-| `geosite.dat` | V2Ray/Xray protobuf, тег `NOVPN` (домены) | Xray, sing-box, mihomo geodata, чужие панели |
-| `geoip.dat` | V2Ray/Xray protobuf, тег `NOVPN` (подсети) | то же |
+| `geosite.dat` | V2Ray/Xray protobuf, категории `NOVPN` и `NOVPN-DIRECT` (домены) | Xray, sing-box, mihomo geodata, чужие панели |
+| `geoip.dat` | то же для подсетей | то же |
+
+**Две категории:** `novpn` — идёт через VPN; `novpn-direct` — исключения, остающиеся
+напрямую. Исключения ставятся в конфиге **перед** основным правилом (в Xray выигрывает
+первое совпавшее), поэтому ими можно отменить широкое правило: «весь сервис в VPN, но
+карты — мимо». Пустая категория недопустима — Xray на неё не стартует, — поэтому пустая
+категория всегда содержит безвредную заглушку (`*.invalid` / TEST-NET-1).
 
 ### Грамматика `upstream.items[]`
 

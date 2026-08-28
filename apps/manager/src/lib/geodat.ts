@@ -16,6 +16,18 @@
 import type { RoutingRuleKind } from '@novpn/shared';
 
 export const GEO_TAG = 'novpn';
+/** Вторая категория: «идёт напрямую, мимо VPN». Отдельный тег нужен, чтобы исключение
+ *  можно было выразить поверх широкого правила («весь сервис в VPN, но карты — напрямую»). */
+export const GEO_TAG_DIRECT = 'novpn-direct';
+
+// Xray отказывается стартовать, если правило ссылается на ПУСТУЮ категорию
+// («app/router: this rule has no effective fields»). Категория «напрямую» пустой бывает
+// штатно — пока владелец не завёл ни одного источника с таким действием. Поэтому в
+// пустую категорию кладём заведомо безвредную запись: домен в зарезервированной зоне
+// .invalid (RFC 2606, не резолвится никогда) и подсеть TEST-NET-1 (RFC 5737, не
+// маршрутизируется). Отправить их «напрямую» — операция без последствий.
+export const GEO_FILLER_DOMAIN = 'placeholder.novpn.invalid';
+export const GEO_FILLER_CIDR = '192.0.2.0/24';
 
 const DOMAIN_TYPE: Record<Exclude<RoutingRuleKind, 'ip'>, number> = { keyword: 0, regexp: 1, domain: 2, full: 3 };
 
@@ -42,16 +54,27 @@ export interface GeoDomain {
   value: string;
 }
 
-/** geosite.dat с одним тегом. Порядок доменов сохраняется — детерминированные байты. */
-export function encodeGeoSite(domains: GeoDomain[], tag = GEO_TAG): Buffer {
+/** Одна категория geosite. Порядок доменов сохраняется — детерминированные байты. */
+function geoSiteCategory(domains: GeoDomain[], tag: string): Buffer {
+  const list = domains.length ? domains : [{ kind: 'full' as const, value: GEO_FILLER_DOMAIN }];
   const parts: Buffer[] = [ld(1, Buffer.from(tag.toUpperCase(), 'utf8'))];
-  for (const d of domains) {
+  for (const d of list) {
     const type = DOMAIN_TYPE[d.kind];
     // type=0 (Plain) — protobuf default, поле опускается; кодируем явно только ненулевой.
     const msg = Buffer.concat([...(type ? [vi(1, type)] : []), ld(2, Buffer.from(d.value, 'utf8'))]);
     parts.push(ld(2, msg));
   }
   return ld(1, Buffer.concat(parts));
+}
+
+/** geosite.dat с одним тегом. */
+export function encodeGeoSite(domains: GeoDomain[], tag = GEO_TAG): Buffer {
+  return geoSiteCategory(domains, tag);
+}
+
+/** geosite.dat с несколькими категориями в одном файле (novpn + novpn-direct). */
+export function encodeGeoSiteCategories(cats: Array<{ tag: string; domains: GeoDomain[] }>): Buffer {
+  return Buffer.concat(cats.map((c) => geoSiteCategory(c.domains, c.tag)));
 }
 
 function parseIp(s: string): { ip: Buffer; prefix: number } | null {
@@ -89,15 +112,31 @@ function parseIpv6(s: string): Buffer | null {
   return out;
 }
 
-/** geoip.dat с одним тегом. Невалидные CIDR молча пропускаются (валидация — на входе). */
-export function encodeGeoIp(cidrs: string[], tag = GEO_TAG): Buffer {
+/** Одна категория geoip. Невалидные CIDR молча пропускаются (валидация — на входе). */
+function geoIpCategory(cidrs: string[], tag: string): Buffer {
   const parts: Buffer[] = [ld(1, Buffer.from(tag.toUpperCase(), 'utf8'))];
+  let n = 0;
   for (const c of cidrs) {
     const p = parseIp(c);
     if (!p) continue;
     parts.push(ld(2, Buffer.concat([ld(1, p.ip), vi(2, p.prefix)])));
+    n++;
+  }
+  if (n === 0) {
+    const f = parseIp(GEO_FILLER_CIDR)!;
+    parts.push(ld(2, Buffer.concat([ld(1, f.ip), vi(2, f.prefix)])));
   }
   return ld(1, Buffer.concat(parts));
+}
+
+/** geoip.dat с одним тегом. */
+export function encodeGeoIp(cidrs: string[], tag = GEO_TAG): Buffer {
+  return geoIpCategory(cidrs, tag);
+}
+
+/** geoip.dat с несколькими категориями в одном файле. */
+export function encodeGeoIpCategories(cats: Array<{ tag: string; cidrs: string[] }>): Buffer {
+  return Buffer.concat(cats.map((c) => geoIpCategory(c.cidrs, c.tag)));
 }
 
 // ── декодер (для тестов) ──────────────────────────────────────────────────────

@@ -376,12 +376,15 @@ function buildUserXrayFull(
   // заменяет его: в обоих направлениях у него то же действие, что и у списка.
   let domains: string[] = cfg.whitelistDomains ?? [];
   let ips: string[] = [];
+  let directRoutes: { domains?: string[]; ips?: string[] } | undefined;
   if (!disableWhitelist && cfg.smartDirection === 'match-vpn' && cfg.smartSource === 'autoroute') {
     // Ссылки на теги вместо списка: конфиг ужимается с ~700 КБ до пары килобайт, а база
     // приезжает целиком (без потолка в 30 000 правил) DAT-файлами.
     const sub = useGeoDat ? autoroute.geoTagRules() : autoroute.subscriptionRules();
     domains = [...sub.domains, ...(cfg.whitelistDomains ?? [])];
     ips = sub.ips;
+    // Исключения «напрямую» из AutoRoute — перед основным списком.
+    if (sub.directDomains.length || sub.directIps.length) directRoutes = { domains: sub.directDomains, ips: sub.directIps };
   }
   const novpn = {
     profileId: srv ? (profile === 'full' ? `${srv.id}:full` : srv.id) : null,
@@ -393,6 +396,7 @@ function buildUserXrayFull(
     buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, domains, cfg.lanAccess, disableWhitelist, {
       direction: cfg.smartDirection,
       ipRoutes: ips,
+      directRoutes,
       novpn,
       // Подписывается УМНЫЙ профиль: в приложении рядом два одинаковых имени, и человеку
       // нужно понимать, что первое — «умное». Полный VPN остаётся просто именем сервера.

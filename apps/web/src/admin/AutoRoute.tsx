@@ -184,8 +184,14 @@ export function AutoRoute() {
             <CopyLink label="upstream.json" url={state.publicUrl} />
           </div>
           <div className="small muted">
-            Три сериализации одного датасета. DAT — для Xray, sing-box и чужих панелей (тег <span className="mono">novpn</span>);
-            JSON — для NoVPN Desktop. Ссылки постоянные: при каждой сборке меняется содержимое, не адрес.
+            Три сериализации одного датасета. В DAT две категории: <span className="mono">novpn</span> — идёт через VPN,{' '}
+            <span className="mono">novpn-direct</span> — исключения, которые остаются напрямую (они проверяются первыми и
+            отменяют широкое правило). JSON — для NoVPN Desktop. Ссылки постоянные: при каждой сборке меняется содержимое, не адрес.
+          </div>
+          <div className="small muted" style={{ marginTop: 6 }}>
+            Happ получает эти файлы сам вместе с подпиской. В v2rayNG и v2rayN базу можно подключить вручную:
+            настройки → «Geo asset files» → добавить обе ссылки. Тогда в конфиг не придётся зашивать список, и потолок
+            подписки перестанет действовать.
           </div>
         </Panel>
 

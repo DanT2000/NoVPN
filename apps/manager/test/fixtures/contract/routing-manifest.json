@@ -20,16 +20,16 @@
     {
       "name": "geosite",
       "version": 1,
-      "sha256": "d793d90c28a806a7b0f2dfbbf1fd23c467592582a66521c7dd51b1768fa44c89",
-      "bytes": 279,
+      "sha256": "f4a7c90e2ba05c81b11c58deb38ac080d30a9a4ac1182e7328b0f1c3d9cd4ba7",
+      "bytes": 326,
       "updatedAt": "2026-08-28T00:00:00.000Z",
       "url": "https://panel.example/routing/autoroute/geosite.dat"
     },
     {
       "name": "geoip",
       "version": 1,
-      "sha256": "81b69c7af5ef28fff22ae43fa991ae692ed314fe6152fcf0891f774638265963",
-      "bytes": 220,
+      "sha256": "453cb96157979ed94ca3edc7e0aa6d79d9a3487f969450ff92ee301e11332db9",
+      "bytes": 246,
       "updatedAt": "2026-08-28T00:00:00.000Z",
       "url": "https://panel.example/routing/autoroute/geoip.dat"
     }

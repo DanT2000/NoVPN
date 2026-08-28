@@ -96,6 +96,10 @@ export interface XrayBuildOptions {
   direction?: 'match-direct' | 'match-vpn';
   /** CIDR-правила той же направленности, что и доменный список (из AutoRoute). */
   ipRoutes?: string[];
+  /** Исключения «напрямую» для режима match-vpn: ставятся ПЕРЕД основным списком и
+   *  отменяют его для конкретного домена/подсети («весь сервис в VPN, но карты — мимо»).
+   *  Порядок правил в Xray решает: первое совпавшее и выигрывает. */
+  directRoutes?: { domains?: string[]; ips?: string[] };
   /** Служебные метаданные для клиентского приложения (кладутся в `meta.novpn`).
    *  Xray-core незнакомые поля игнорирует, Happ читает `meta.serverDescription`. */
   novpn?: Record<string, unknown>;
@@ -159,7 +163,13 @@ export function buildWhitelistXrayConfig(
   // балансировщик lb0 (несколько серверов/тиров); терминальное правило тогда → direct.
   // При disableWhitelist (полный туннель) доменных правил нет вовсе.
   const listTarget = matchVpn ? (proxies.length || xray.length > 1 ? { balancerTag: 'lb0' } : { outboundTag: 'proxy-t0-0' }) : { outboundTag: 'direct' };
+  // Исключения — только для match-vpn и только ПЕРЕД основным списком: в match-direct
+  // база и так идёт напрямую, там такое правило было бы пустым звуком.
+  const exDomains = matchVpn && !disableWhitelist ? normalizeWhitelistRoutes(opts.directRoutes?.domains ?? []) : [];
+  const exIps = matchVpn && !disableWhitelist ? (opts.directRoutes?.ips ?? []).filter(Boolean) : [];
   const whitelistRules = [
+    ...(exDomains.length ? [{ type: 'field', outboundTag: 'direct', domain: exDomains }] : []),
+    ...(exIps.length ? [{ type: 'field', outboundTag: 'direct', ip: exIps }] : []),
     ...(disableWhitelist || !wlRoutes.length ? [] : [{ type: 'field', ...listTarget, domain: wlRoutes }]),
     ...(disableWhitelist || !ipRoutes.length ? [] : [{ type: 'field', ...listTarget, ip: ipRoutes }]),
     // Приватные/локальные адреса. По умолчанию (lanAccess=false) — напрямую (клиент

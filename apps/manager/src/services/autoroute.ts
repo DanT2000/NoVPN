@@ -25,7 +25,7 @@ import type {
   RoutingSourceStats,
 } from '@novpn/shared';
 import { convertList, detectSourceFormat } from '../lib/routingConvert.js';
-import { encodeGeoIp, encodeGeoSite, GEO_TAG } from '../lib/geodat.js';
+import { encodeGeoIpCategories, encodeGeoSiteCategories, GEO_TAG, GEO_TAG_DIRECT } from '../lib/geodat.js';
 import { parseSource, ruleKey, type ParsedRule } from '../lib/routingRules.js';
 import { BUILTIN_SOURCE_ID, BUILTIN_SOURCE_TITLE, builtinRules } from '../lib/builtinRoutes.js';
 import { decompileSrs, SingboxUnavailableError } from './singbox.js';
@@ -361,12 +361,32 @@ export const SUBSCRIPTION_CAP = 30_000;
 // компактнее и их меньше — им отдельная квота.
 const SUBSCRIPTION_CAP_IPS = 6_000;
 const SUBSCRIPTION_CAP_DOMAINS = SUBSCRIPTION_CAP - SUBSCRIPTION_CAP_IPS;
+/** Исключений «напрямую» по природе единицы-десятки; свой потолок, чтобы кривой источник
+ *  с сотней тысяч «direct» не выдавил основной список из конфига. */
+const SUBSCRIPTION_CAP_DIRECT = 2_000;
+
+/** Что зашивается в умный профиль: основной список (в VPN) и исключения (напрямую). */
+export interface SubscriptionRules {
+  domains: string[];
+  ips: string[];
+  directDomains: string[];
+  directIps: string[];
+  total: number;
+  truncated: boolean;
+}
 
 /** Правила для Xray-подписки: только с действием «в VPN», в формате префиксов Xray
  *  (domain:/full:/keyword:/regexp:) и отдельно CIDR. Порядок = приоритет источников;
  *  у доменов и подсетей свои потолки. */
-export function subscriptionRules(dataset = DATASET): { domains: string[]; ips: string[]; total: number; truncated: boolean } {
-  const all = publishedRules(dataset).filter((r) => r.a === 'vpn');
+export function subscriptionRules(dataset = DATASET): SubscriptionRules {
+  const published = publishedRules(dataset);
+  const all = published.filter((r) => r.a === 'vpn');
+  // Исключения («напрямую») — отдельным списком: они ставятся ПЕРЕД основным правилом и
+  // отменяют его для конкретного домена («весь сервис в VPN, но карты — мимо»).
+  // Их немного по природе, поэтому свой скромный потолок, не за счёт основного.
+  const direct = published.filter((r) => r.a === 'direct');
+  const directDomains = direct.filter((r) => r.k !== 'ip').slice(0, SUBSCRIPTION_CAP_DIRECT).map((r) => `${r.k}:${r.v}`);
+  const directIps = direct.filter((r) => r.k === 'ip').slice(0, SUBSCRIPTION_CAP_DIRECT).map((r) => r.v);
   const domains: string[] = [];
   const ips: string[] = [];
   let truncated = false;
@@ -380,13 +400,19 @@ export function subscriptionRules(dataset = DATASET): { domains: string[]; ips: 
     } else if (domains.length >= SUBSCRIPTION_CAP_DOMAINS) truncated = true;
     else domains.push(`${r.k}:${r.v}`);
   }
-  return { domains, ips, total: all.length, truncated };
+  return { domains, ips, directDomains, directIps, total: all.length, truncated };
 }
 
 /** Правила для DAT-конфига: сама база живёт в geosite/geoip, поэтому в конфиг попадают
- *  только ссылки на теги. Обязательные правила в DAT уже включены (см. datFiles). */
-export function geoTagRules(): { domains: string[]; ips: string[] } {
-  return { domains: [`geosite:${GEO_TAG}`], ips: [`geoip:${GEO_TAG}`] };
+ *  только ссылки на теги. Обе категории всегда непустые (см. geodat: заглушка), поэтому
+ *  ссылаться на них безопасно — Xray падает только на ПУСТОЙ категории. */
+export function geoTagRules(): Omit<SubscriptionRules, 'total' | 'truncated'> {
+  return {
+    domains: [`geosite:${GEO_TAG}`],
+    ips: [`geoip:${GEO_TAG}`],
+    directDomains: [`geosite:${GEO_TAG_DIRECT}`],
+    directIps: [`geoip:${GEO_TAG_DIRECT}`],
+  };
 }
 
 /** Публичные DAT-файлы из опубликованной сборки (кеш по версии: байты детерминированы). */
@@ -396,10 +422,19 @@ export function datFiles(dataset = DATASET): { version: number | null; geosite: 
   const c = datCache.get(dataset);
   if (version != null && c && c.version === version) return { version, geosite: c.geosite, geoip: c.geoip };
   // Встроенные правила уже внутри сборки (см. buildDataset) — отдельно их сюда не
-  // подмешиваем, иначе они задвоятся в DAT.
-  const rules = publishedRules(dataset).filter((r) => r.a === 'vpn');
-  const geosite = encodeGeoSite(rules.filter((r) => r.k !== 'ip').map((r) => ({ kind: r.k as Exclude<typeof r.k, 'ip'>, value: r.v })));
-  const geoip = encodeGeoIp(rules.filter((r) => r.k === 'ip').map((r) => r.v));
+  // подмешиваем, иначе они задвоятся в DAT. Две категории: «в VPN» и «напрямую».
+  const published = publishedRules(dataset);
+  const sites = (action: RoutingAction) =>
+    published.filter((r) => r.a === action && r.k !== 'ip').map((r) => ({ kind: r.k as Exclude<typeof r.k, 'ip'>, value: r.v }));
+  const cidrs = (action: RoutingAction) => published.filter((r) => r.a === action && r.k === 'ip').map((r) => r.v);
+  const geosite = encodeGeoSiteCategories([
+    { tag: GEO_TAG, domains: sites('vpn') },
+    { tag: GEO_TAG_DIRECT, domains: sites('direct') },
+  ]);
+  const geoip = encodeGeoIpCategories([
+    { tag: GEO_TAG, cidrs: cidrs('vpn') },
+    { tag: GEO_TAG_DIRECT, cidrs: cidrs('direct') },
+  ]);
   if (version != null) datCache.set(dataset, { version, geosite, geoip });
   return { version, geosite, geoip };
 }
