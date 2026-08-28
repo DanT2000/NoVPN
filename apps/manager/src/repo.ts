@@ -762,12 +762,15 @@ export interface EndpointConfig {
   smartSource: 'autoroute' | 'local';
   whitelistDomains: string[] | undefined;
   lanAccess: boolean;
+  /** Подмена DNS в умном профиле: домен восстанавливается даже когда его не видно
+   *  в трафике (ECH, не-HTTP протоколы). По умолчанию выключено. */
+  fakeDns: boolean;
   fallbackTypes: FallbackType[] | null; // null = все доступные
 }
 export function getEndpointConfig(rawHost: string): EndpointConfig {
   const host = domainKey(rawHost);
   const r = db.prepare(
-    'SELECT xray_whitelist, profiles, full_default, smart_direction, smart_source, whitelist_domains, lan_access, fallback_types FROM server_keys WHERE domain = ?',
+    'SELECT xray_whitelist, profiles, full_default, smart_direction, smart_source, whitelist_domains, lan_access, fake_dns, fallback_types FROM server_keys WHERE domain = ?',
   ).get(host) as any;
   const g = getSettings();
   // Профили: явное значение сервера, иначе выводим из старого флага (false → только полный).
@@ -792,6 +795,7 @@ export function getEndpointConfig(rawHost: string): EndpointConfig {
     // Битый JSON → наследуем ГЛОБАЛЬНЫЙ список (а не молча RU-дефолт билдера). #14
     whitelistDomains: r?.whitelist_domains != null ? (jsonArr(r.whitelist_domains) ?? g.whitelistDomains) : g.whitelistDomains,
     lanAccess: r?.lan_access == null ? g.lanAccess === true : r.lan_access === 1,
+    fakeDns: r?.fake_dns === 1,
     fallbackTypes: (jsonArr(r?.fallback_types) as FallbackType[] | undefined) ?? null,
   };
 }
@@ -804,6 +808,7 @@ export function setEndpointConfig(
     smartSource: 'autoroute' | 'local' | null;
     whitelistDomains: string[] | null;
     lanAccess: boolean | null;
+    fakeDns: boolean | null;
     fallbackTypes: FallbackType[] | null;
   }>,
 ): void {
@@ -826,6 +831,7 @@ export function setEndpointConfig(
   if ('smartDirection' in patch) { set.push('smart_direction = @sd'); vals.sd = patch.smartDirection ?? null; }
   if ('smartSource' in patch) { set.push('smart_source = @ss'); vals.ss = patch.smartSource ?? null; }
   if ('lanAccess' in patch) { set.push('lan_access = @la'); vals.la = patch.lanAccess == null ? null : patch.lanAccess ? 1 : 0; }
+  if ('fakeDns' in patch) { set.push('fake_dns = @fd'); vals.fd = patch.fakeDns == null ? null : patch.fakeDns ? 1 : 0; }
   if ('whitelistDomains' in patch) { set.push('whitelist_domains = @wd'); vals.wd = patch.whitelistDomains == null ? null : JSON.stringify(patch.whitelistDomains); }
   if ('fallbackTypes' in patch) { set.push('fallback_types = @ft'); vals.ft = patch.fallbackTypes == null ? null : JSON.stringify(patch.fallbackTypes); }
   if (set.length) db.prepare(`UPDATE server_keys SET ${set.join(', ')}, updated_at = @now WHERE domain = @host`).run({ ...vals, now: nowIso() });

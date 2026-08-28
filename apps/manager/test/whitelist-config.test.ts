@@ -218,6 +218,50 @@ test('приписку получает УМНЫЙ профиль; полный 
   assert.ok(!full.routing.rules.some((r: any) => r.domain));
 });
 
+// Подмена DNS: домен восстанавливается по выданному адресу там, где в трафике его не
+// видно (ECH, не-HTTP). Проверено живым Xray 26.3.27: запрос к голому 198.18.x.x
+// маршрутизировался как домен из списка, а прямой трафик не сломался.
+test('подмена DNS: секция dns и fakedns в сниффере — только в умном профиле', () => {
+  const smart = JSON.parse(
+    buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', ['blocked.example'], false, false, {
+      direction: 'match-vpn',
+      fakeDns: true,
+    }),
+  );
+  assert.deepEqual(smart.dns.servers, ['fakedns', 'localhost'], 'подменный первым, настоящий — системный');
+  // Зашитый чужой резолвер сделал бы разрешение имён зависимым от его доступности из
+  // сети человека; из России такие адреса регулярно недоступны — отвалился бы и прямой трафик.
+  assert.ok(
+    !JSON.stringify(smart.dns).match(/\d+\.\d+\.\d+\.\d+|https?:\/\//),
+    'никаких чужих резолверов внутри конфига',
+  );
+  assert.ok(smart.inbounds[0].sniffing.destOverride.includes('fakedns'), 'без этого секция dns не даёт ничего');
+
+  // Полный туннель: маршрутизировать нечего — подмена не нужна даже при включённом флаге.
+  const full = JSON.parse(
+    buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', [], false, true, { fakeDns: true, novpn: { mode: 'full' } }),
+  );
+  assert.equal(full.dns, undefined);
+  assert.ok(!full.inbounds[0].sniffing.destOverride.includes('fakedns'));
+
+  // Выключено по умолчанию — конфиг прежний.
+  const off = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', ['blocked.example'], false, false, { direction: 'match-vpn' }));
+  assert.equal(off.dns, undefined);
+  assert.deepEqual(off.inbounds[0].sniffing.destOverride, ['http', 'tls', 'quic']);
+});
+
+test('подмена DNS доезжает и до конфига с запасными каналами (многотирная ветка)', () => {
+  const proxies: ProxyFallback[] = [{ kind: 'https', host: 'p.example', port: 8443, user: 'u', pass: 'p' }];
+  const cfg = JSON.parse(
+    buildWhitelistXrayConfig([LINK], 'NoVPN', proxies, '🇫🇷 Франция', ['blocked.example'], false, false, {
+      direction: 'match-vpn',
+      fakeDns: true,
+    }),
+  );
+  assert.deepEqual(cfg.dns.servers, ['fakedns', 'localhost']);
+  assert.ok(cfg.inbounds[0].sniffing.destOverride.includes('fakedns'));
+});
+
 test('гео-теги проходят в конфиг как есть: geosite:novpn в domain, geoip:novpn в ip', () => {
   // Компактный конфиг для Happ: база уезжает в DAT, в JSON остаются только ссылки.
   const cfg = JSON.parse(

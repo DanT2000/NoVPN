@@ -313,6 +313,9 @@ export interface EndpointConfigView {
   smartSource: 'autoroute' | 'local';
   whitelistDomains: string[] | undefined;
   lanAccess: boolean;
+  /** Подмена DNS в умном профиле: домен восстанавливается даже когда его не видно
+   *  в трафике (ECH, не-HTTP протоколы). По умолчанию выключено. */
+  fakeDns: boolean;
   fallbackTypes: Array<'https' | 'http' | 'socks'> | null;
 }
 

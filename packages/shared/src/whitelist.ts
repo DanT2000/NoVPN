@@ -60,6 +60,16 @@ export interface ProxyFallback {
 
 const PRIVATE_IPS = ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '::1/128', 'fc00::/7', 'fe80::/10'];
 
+/** Подмена DNS: сначала выдаём адрес из служебного диапазона (по нему сниффер узнаёт
+ *  домен), а настоящий адрес спрашиваем у СИСТЕМНОГО резолвера устройства.
+ *
+ *  Именно системного, не своего: зашитый чужой резолвер (Google/Cloudflare) сделал бы
+ *  разрешение имён зависимым от того, доступен ли он из сети человека — а из России он
+ *  регулярно недоступен, и тогда бы отвалился весь трафик, включая прямой. `localhost`
+ *  здесь означает «DNS, который уже настроен на устройстве»: ничего нового не заводим и
+ *  ничего потом не чистим. Порядок важен: fakedns первым. */
+const FAKE_DNS = { servers: ['fakedns', 'localhost'] };
+
 /** Нормализация строки правила из редактируемого админкой списка: пустые/комментарии
  *  отбрасываем; строку без известного префикса считаем доменом (→ domain:X). */
 export function normalizeWhitelistRoutes(raw: string[]): string[] {
@@ -106,6 +116,11 @@ export interface XrayBuildOptions {
   /** Приписка к имени профиля: « · Умная маршрутизация» у умного. Полный VPN остаётся
    *  просто именем сервера — так в приложении видно, какой из двух профилей «умный». */
   remarkSuffix?: string;
+  /** Подмена DNS (FakeDNS) в умном профиле: на каждый запрос выдаётся адрес из 198.18/15,
+   *  и по нему восстанавливается домен. Нужна там, где домена в трафике НЕ видно —
+   *  TLS с зашифрованным SNI (ECH), не-HTTP протоколы: иначе такое соединение
+   *  маршрутизируется только по IP. Полному туннелю бессмысленна (там всё и так в VPN). */
+  fakeDns?: boolean;
 }
 
 export function buildWhitelistXrayConfig(
@@ -153,7 +168,15 @@ export function buildWhitelistXrayConfig(
   // (в TUN-режиме роутер видит только IP, а не домен → росс. сайты уходят через VPN
   // вместо direct). destOverride tls/http/quic извлекает домен из хендшейка;
   // routeOnly:true — используем его ТОЛЬКО для маршрутизации, соединяемся с оригиналом.
-  const sniffing = { enabled: true, destOverride: ['http', 'tls', 'quic'], routeOnly: true };
+  // Подмена DNS осмысленна только в умном профиле: в полном туннеле маршрутизировать
+  // нечего. `fakedns` в destOverride — то, чем сниффер узнаёт домен по выданному адресу;
+  // без него секция dns не даст ничего.
+  const fakeDns = !!opts.fakeDns && matchVpn && !disableWhitelist;
+  const sniffing = {
+    enabled: true,
+    destOverride: fakeDns ? ['http', 'tls', 'quic', 'fakedns'] : ['http', 'tls', 'quic'],
+    routeOnly: true,
+  };
   const inbounds: Array<Record<string, unknown>> = [
     { tag: 'socks', listen: '127.0.0.1', port: 10808, protocol: 'socks', settings: { auth: 'noauth', udp: true }, sniffing },
     { tag: 'http', listen: '127.0.0.1', port: 10809, protocol: 'http', settings: { allowTransparent: false }, sniffing },
@@ -204,6 +227,7 @@ export function buildWhitelistXrayConfig(
       remarks,
       meta,
       log: { loglevel: 'warning' },
+      ...(fakeDns ? { dns: FAKE_DNS } : {}),
       inbounds,
       outbounds,
       routing: { domainMatcher: 'hybrid', domainStrategy: 'AsIs', rules },
@@ -255,6 +279,7 @@ export function buildWhitelistXrayConfig(
   const cfg = {
     remarks,
     meta,
+    ...(fakeDns ? { dns: FAKE_DNS } : {}),
     log: { loglevel: 'warning' },
     inbounds,
     outbounds,

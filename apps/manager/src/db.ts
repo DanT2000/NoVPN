@@ -374,6 +374,10 @@ for (const stmt of [
   'ALTER TABLE server_keys ADD COLUMN smart_direction TEXT',
   // Источник списка умного профиля: 'autoroute' (сборка) или 'local' (свой список). NULL = autoroute.
   'ALTER TABLE server_keys ADD COLUMN smart_source TEXT',
+  // Подмена DNS (FakeDNS) в умном профиле. Нужна там, где домена в трафике не видно —
+  // TLS с зашифрованным SNI (ECH), не-HTTP протоколы: без неё такие соединения
+  // маршрутизируются только по IP. NULL/0 = выключено (поведение по умолчанию).
+  'ALTER TABLE server_keys ADD COLUMN fake_dns INTEGER',
   // Серверы, на которых пользователю разрешён профиль «Полный VPN» (JSON-массив id).
   'ALTER TABLE users ADD COLUMN full_servers TEXT',
   // Прокси-логин снят с сервера по квоте (обратимо, симметрично устройствам): при

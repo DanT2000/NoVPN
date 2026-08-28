@@ -76,7 +76,7 @@ function EndpointConfigPanel({ server }: { server: Server }) {
       if (!alive) return;
       setCfg(r.config);
       setWl((r.config.whitelistDomains ?? []).join('\n'));
-    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fallbackTypes: null }); });
+    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fakeDns: false, fallbackTypes: null }); });
     return () => { alive = false; };
   }, [server.host]);
 
@@ -148,7 +148,19 @@ function EndpointConfigPanel({ server }: { server: Server }) {
 
       <div className="chip-row" style={{ marginBottom: 6 }}>
         <Chip label={cfg.lanAccess ? 'Доступ в локалку: вкл' : 'Доступ в локалку: выкл'} active={cfg.lanAccess} disabled={busy} onClick={() => void save({ lanAccess: !cfg.lanAccess })} />
+        {cfg.profiles !== 'full' ? (
+          <Chip label={cfg.fakeDns ? 'Подмена DNS: вкл' : 'Подмена DNS: выкл'} active={cfg.fakeDns} disabled={busy} onClick={() => void save({ fakeDns: !cfg.fakeDns })} />
+        ) : null}
       </div>
+      {cfg.profiles !== 'full' ? (
+        <div className="body small muted" style={{ marginBottom: 10 }}>
+          По умолчанию выключена и в обычной ситуации не нужна. Нужна там, где домена в трафике не видно: TLS
+          с зашифрованным именем сайта (ECH) и не-HTTP протоколы — без неё такие соединения распределяются только
+          по IP. Имена продолжает разрешать DNS самого устройства, подменённые адреса живут 1 секунду и в кэшах
+          не оседают. Приложения со своим DNS-over-HTTPS подмену обходят. Полного VPN не касается: там весь трафик
+          и так в туннеле.
+        </div>
+      ) : null}
 
       <div className="body small muted" style={{ margin: '10px 0 4px' }}>Запасные каналы (если Xray заблокируют) — только то, что реально работает на этом сервере:</div>
       <div className="chip-row" style={{ marginBottom: 6 }}>

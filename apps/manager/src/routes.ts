@@ -347,6 +347,7 @@ function buildUserXrayFull(
         smartSource: 'autoroute',
         whitelistDomains: repo.getSettings().whitelistDomains,
         lanAccess: repo.getSettings().lanAccess === true,
+        fakeDns: false,
         fallbackTypes: null,
       };
   // Аварийный фоллбэк — ПЕР-СЕРВЕР: берём ТОЛЬКО прокси ЭТОГО сервера (srv.id), а не все
@@ -397,6 +398,7 @@ function buildUserXrayFull(
       direction: cfg.smartDirection,
       ipRoutes: ips,
       directRoutes,
+      fakeDns: cfg.fakeDns,
       novpn,
       // Подписывается УМНЫЙ профиль: в приложении рядом два одинаковых имени, и человеку
       // нужно понимать, что первое — «умное». Полный VPN остаётся просто именем сервера.
@@ -1557,6 +1559,7 @@ router.put('/api/admin/servers/:id/endpoint-config', requireAdmin, (req, res) =>
   const patch: Parameters<typeof repo.setEndpointConfig>[1] = {};
   if ('xrayWhitelist' in b) patch.xrayWhitelist = b.xrayWhitelist === null ? null : !!b.xrayWhitelist;
   if ('lanAccess' in b) patch.lanAccess = b.lanAccess === null ? null : !!b.lanAccess;
+  if ('fakeDns' in b) patch.fakeDns = b.fakeDns === null ? null : !!b.fakeDns;
   if ('whitelistDomains' in b) patch.whitelistDomains = b.whitelistDomains === null ? null : (Array.isArray(b.whitelistDomains) ? b.whitelistDomains.map((x: unknown) => String(x).trim()).filter(Boolean) : null);
   if ('fallbackTypes' in b) patch.fallbackTypes = b.fallbackTypes === null ? null : (Array.isArray(b.fallbackTypes) ? b.fallbackTypes.filter((x: unknown) => x === 'https' || x === 'http' || x === 'socks') : null);
   // Профили подписки и параметры умного профиля.
