@@ -402,10 +402,10 @@ fn xray_json_carries_novpn_profile() {
     // Панель кладёт в каждый конфиг meta.novpn: по profileId клиент сопоставляет
     // конфиг с meta.json. У умного и полного профиля одного сервера host общий.
     let json = format!(
-        r#"[{{"remarks":"🇫🇷 Франция","meta":{{"serverDescription":"🇫🇷 Франция","novpn":{{"profileId":"s_1","serverId":"s_1","host":"a.example","mode":"smart"}}}},
+        r#"[{{"remarks":"🇫🇷 Франция · Умная маршрутизация","meta":{{"serverDescription":"🇫🇷 Франция · Умная маршрутизация","novpn":{{"profileId":"s_1","serverId":"s_1","host":"a.example","mode":"smart"}}}},
              "outbounds":[{{"protocol":"vless","settings":{{"vnext":[{{"address":"a.example","port":443,"users":[{{"id":"{UUID}"}}]}}]}},
                "streamSettings":{{"network":"tcp","security":"reality","realitySettings":{{"serverName":"x","publicKey":"PK","shortId":"1"}}}}}}]}},
-           {{"remarks":"🇫🇷 Франция · Полный VPN","meta":{{"novpn":{{"profileId":"s_1:full","serverId":"s_1","host":"a.example","mode":"full"}}}},
+           {{"remarks":"🇫🇷 Франция","meta":{{"novpn":{{"profileId":"s_1:full","serverId":"s_1","host":"a.example","mode":"full"}}}},
              "outbounds":[{{"protocol":"vless","settings":{{"vnext":[{{"address":"a.example","port":443,"users":[{{"id":"{UUID}"}}]}}]}},
                "streamSettings":{{"network":"tcp","security":"reality","realitySettings":{{"serverName":"x","publicKey":"PK","shortId":"1"}}}}}}]}}]"#
     );
@@ -419,9 +419,10 @@ fn xray_json_carries_novpn_profile() {
     assert_eq!(full.profile_id, "s_1:full");
     assert_eq!(full.mode, "full");
     assert_eq!(smart.host, full.host, "host общий — поэтому ключ profileId, а не host");
-    // Имя второго профиля различимо: «·» сохраняется, эмодзи уходит.
-    assert_eq!(nodes[1].name, "Франция · Полный VPN");
+    // В десктопе режим виден по тумблеру, поэтому подпись профиля из имени убирается:
+    // в списке серверов остаётся просто «Франция», а второй профиль различается номером.
     assert_eq!(nodes[0].name, "Франция");
+    assert_eq!(nodes[1].name, "Франция #2");
 }
 
 #[test]

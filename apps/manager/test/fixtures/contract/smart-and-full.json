@@ -16,7 +16,7 @@
       "profileId": "s_fixture1",
       "serverId": "s_fixture1",
       "host": "fr.example.test",
-      "remark": "🇫🇷 Франция",
+      "remark": "🇫🇷 Франция · Умная маршрутизация",
       "recommended": true,
       "protocols": [
         "xray"
@@ -34,7 +34,7 @@
       "profileId": "s_fixture1:full",
       "serverId": "s_fixture1",
       "host": "fr.example.test",
-      "remark": "🇫🇷 Франция · Полный VPN",
+      "remark": "🇫🇷 Франция",
       "recommended": false,
       "protocols": [
         "xray"
@@ -52,7 +52,7 @@
       "profileId": "s_fixture2:full",
       "serverId": "s_fixture2",
       "host": "home.example.test",
-      "remark": "🇷🇺 Дом · Полный VPN",
+      "remark": "🇷🇺 Дом",
       "recommended": false,
       "protocols": [
         "xray"

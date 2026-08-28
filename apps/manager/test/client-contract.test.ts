@@ -154,7 +154,8 @@ test('meta.json: профили — умный первым (recommended), по�
   assert.equal(full.recommended, false);
   assert.equal(full.routing.ownExceptions, 0, 'в full доменные правила не применяются');
   assert.equal(full.host, smart.host, 'два профиля одного сервера делят host — поэтому ключ profileId');
-  assert.equal(full.remark, `${smart.remark} · Полный VPN`);
+  // Подписан УМНЫЙ профиль — человеку в приложении важно понять, какой из двух «умный».
+  assert.equal(smart.remark, `${full.remark} · Умная маршрутизация`);
   assert.ok(full.subLink.endsWith('?profile=full'));
   saveFixture('smart-only', { ...body, profiles: [smart] });
   saveFixture('full-only', { ...body, profiles: [body.profiles.find((p: any) => p.profileId === `${fullId}:full`)] });
@@ -216,6 +217,62 @@ test('подписка: умный профиль = список AutoRoute + с�
   assert.equal(lastFull.outboundTag, 'proxy-t0-0');
   // QUIC-блок в обоих
   for (const cfg of [smart, full]) assert.ok(cfg.routing.rules.some((r: any) => r.network === 'udp' && r.port === 443 && r.outboundTag === 'block'));
+});
+
+// Инцидент 28.08.2026: у владельца в Happ умный конфиг Франции весил 1 МБ (24 000 доменов
+// + 6 000 подсетей строками) — приложение зависало при попытке его ОТКРЫТЬ, а Telegram
+// вообще не заворачивался в туннель: его подсети оказывались за потолком в 6 000 IP.
+test('Telegram: обязательные подсети и домены в умном профиле, потолок их не режет', async () => {
+  const sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
+  const smart = sub.find((c) => c.meta.novpn.profileId === bothId);
+  const listRule = smart.routing.rules.find((r: any) => r.domain);
+  const ipRule = smart.routing.rules.find((r: any) => r.ip && !r.ip.includes('127.0.0.0/8'));
+  // Мессенджер ходит в дата-центры по голым IP, без DNS и SNI: доменные правила его не ловят.
+  for (const cidr of ['149.154.160.0/20', '91.108.4.0/22', '91.108.56.0/22'])
+    assert.ok(ipRule.ip.includes(cidr), `подсеть Telegram ${cidr} обязана быть в правилах`);
+  assert.ok(listRule.domain.includes('domain:t.me') && listRule.domain.includes('domain:telegram.org'));
+  assert.equal(ipRule.outboundTag, 'proxy-t0-0', 'Telegram уходит именно в туннель');
+});
+
+test('Happ получает конфиг на тегах DAT + заголовок routing; остальным — встроенный список', async () => {
+  // У Happ база приезжает файлами geosite.dat/geoip.dat, поэтому в конфиге остаются
+  // только ссылки на теги: килобайты вместо мегабайта и вся база без потолка.
+  const r = await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'Happ/3.13.0' } });
+  const sub = JSON.parse(await r.text()) as any[];
+  const smart = sub.find((c) => c.meta.novpn.profileId === bothId);
+  const listRule = smart.routing.rules.find((r2: any) => r2.domain);
+  const ipRule = smart.routing.rules.find((r2: any) => r2.ip && !r2.ip.includes('127.0.0.0/8'));
+  assert.ok(listRule.domain.includes('geosite:novpn'), 'домены — тегом, а не списком');
+  assert.ok(listRule.domain.includes('domain:x.ru'), 'свои домены сервера остаются строками');
+  assert.deepEqual(ipRule.ip, ['geoip:novpn']);
+  assert.ok(!listRule.domain.includes('domain:blocked.example'), 'база в конфиг не копируется');
+
+  const link = r.headers.get('routing') ?? '';
+  assert.ok(link.startsWith('happ://routing/onadd/'), 'профиль маршрутизации отдан заголовком');
+  const profile = JSON.parse(Buffer.from(link.split('/onadd/')[1]!, 'base64').toString('utf8'));
+  assert.ok(profile.Geositeurl.endsWith('/routing/autoroute/geosite.dat'));
+  assert.ok(profile.Geoipurl.endsWith('/routing/autoroute/geoip.dat'));
+  // Свои правила в профиль не кладём: их место — в конфиге, иначе они задвоятся.
+  for (const k of ['DirectSites', 'DirectIp', 'ProxySites', 'ProxyIp', 'BlockSites', 'BlockIp'])
+    assert.deepEqual(profile[k], [], `${k} обязан быть пустым`);
+  assert.equal(r.headers.get('routing-enable'), 'true');
+
+  // Обычный клиент (v2rayNG и т.п.) взять DAT неоткуда — незнакомый тег для Xray это
+  // отказ старта, поэтому ему по-прежнему уходит встроенный список и никаких заголовков.
+  const plain = await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'v2rayNG/1.9.0' } });
+  const plainSmart = (JSON.parse(await plain.text()) as any[]).find((c) => c.meta.novpn.profileId === bothId);
+  const plainRule = plainSmart.routing.rules.find((r2: any) => r2.domain);
+  assert.ok(plainRule.domain.includes('domain:blocked.example'), 'список на месте');
+  assert.ok(!plainRule.domain.includes('geosite:novpn'));
+  assert.equal(plain.headers.get('routing'), null, 'чужим клиентам заголовок не шлём');
+
+  // Ручное переопределение — чтобы владелец мог переключить формат, не меняя приложение.
+  const forced = await fetch(`${base}/sub/${subToken}/full?rules=dat`, { headers: { 'user-agent': 'v2rayNG/1.9.0' } });
+  const forcedSmart = (JSON.parse(await forced.text()) as any[]).find((c) => c.meta.novpn.profileId === bothId);
+  assert.ok(forcedSmart.routing.rules.find((r2: any) => r2.domain).domain.includes('geosite:novpn'));
+  const off = await fetch(`${base}/sub/${subToken}/full?rules=inline`, { headers: { 'user-agent': 'Happ/3.13.0' } });
+  const offSmart = (JSON.parse(await off.text()) as any[]).find((c) => c.meta.novpn.profileId === bothId);
+  assert.ok(offSmart.routing.rules.find((r2: any) => r2.domain).domain.includes('domain:blocked.example'));
 });
 
 test('умная маршрутизация выключена на сервере → только полный профиль; включена → оба у любого пользователя', async () => {
@@ -307,15 +364,18 @@ test('geosite.dat / geoip.dat: настоящий V2Ray-формат, тег NOV
   const sites = decodeGeoSite(gs);
   assert.equal(sites.length, 1);
   assert.equal(sites[0]!.tag, 'NOVPN');
-  const values = sites[0]!.domains.map((d) => d.value).sort();
-  assert.deepEqual(values, ['blocked.example', 'exact.example', 'x.ru', 'y.ru', 'z.ru'].filter((v) => !/^[xyz]\.ru$/.test(v)).sort(), 'в DAT — датасет AutoRoute (свои домены серверов туда не входят)');
+  const values = sites[0]!.domains.map((d) => d.value);
+  // Датасет AutoRoute (свои домены серверов сюда не входят) + встроенные правила.
+  assert.ok(values.includes('blocked.example') && values.includes('exact.example'));
+  for (const own of ['x.ru', 'y.ru', 'z.ru']) assert.ok(!values.includes(own), `свой домен сервера ${own} в DAT не попадает`);
+  assert.ok(values.includes('t.me'), 'встроенные домены Telegram — часть базы');
   assert.equal(sites[0]!.domains.find((d) => d.value === 'exact.example')!.type, 3, 'full → Type.Full=3');
   assert.equal(sites[0]!.domains.find((d) => d.value === 'blocked.example')!.type, 2, 'domain → Type.Domain=2');
   const ips = decodeGeoIp(gi);
   assert.equal(ips[0]!.tag, 'NOVPN');
-  assert.equal(ips[0]!.cidrs.length, 1);
-  assert.deepEqual([...ips[0]!.cidrs[0]!.ip], [10, 10, 0, 0]);
-  assert.equal(ips[0]!.cidrs[0]!.prefix, 16);
+  const cidrs = ips[0]!.cidrs.map((c) => `${[...c.ip].length === 4 ? [...c.ip].join('.') : 'v6'}/${c.prefix}`);
+  assert.ok(cidrs.includes('10.10.0.0/16'), 'подсеть из источника');
+  assert.ok(cidrs.includes('149.154.160.0/20'), 'встроенная подсеть Telegram');
 });
 
 test('manifest.json: перечисляет json и dat, sha256 совпадает с реальным содержимым', async () => {

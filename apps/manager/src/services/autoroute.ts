@@ -25,8 +25,9 @@ import type {
   RoutingSourceStats,
 } from '@novpn/shared';
 import { convertList, detectSourceFormat } from '../lib/routingConvert.js';
-import { encodeGeoIp, encodeGeoSite } from '../lib/geodat.js';
+import { encodeGeoIp, encodeGeoSite, GEO_TAG } from '../lib/geodat.js';
 import { parseSource, ruleKey, type ParsedRule } from '../lib/routingRules.js';
+import { BUILTIN_SOURCE_ID, BUILTIN_SOURCE_TITLE, builtinRules } from '../lib/builtinRoutes.js';
 import { decompileSrs, SingboxUnavailableError } from './singbox.js';
 import { fetchSource, ROUTING_MAX_BYTES } from './routingSync.js';
 
@@ -177,6 +178,19 @@ export function buildDataset(dataset = DATASET): AutoRouteBuildResult {
   const perSource = new Map<string, AutoRouteBuildSource>();
   let truncated = false;
 
+  // Встроенные правила — вне БД, с наивысшим приоритетом: побеждают в конфликтах и в
+  // подписку попадают первыми (потолок их не срезает). В статистике сборки — отдельный
+  // «источник», чтобы в AutoRoute было видно, откуда правило.
+  const builtin = builtinRules();
+  const builtinEntry: AutoRouteBuildSource = { sourceId: BUILTIN_SOURCE_ID, title: BUILTIN_SOURCE_TITLE, rules: builtin.length, won: 0, conflicts: 0 };
+  perSource.set(BUILTIN_SOURCE_ID, builtinEntry);
+  for (const r of builtin) {
+    const key = ruleKey(r);
+    if (winners.has(key)) continue;
+    winners.set(key, { k: r.kind, v: r.value, a: 'vpn', s: BUILTIN_SOURCE_ID });
+    builtinEntry.won++;
+  }
+
   for (const s of sources) {
     const row = repo.getAutoRouteSourceRow(s.id);
     const rules = cachedRules(row);
@@ -236,8 +250,8 @@ export function buildDataset(dataset = DATASET): AutoRouteBuildResult {
   // похудевшая относительно опубликованной — НЕ публикуется: умный профиль с пустым
   // списком превращает VPN в «всё напрямую» у всех пользователей разом. Прод это
   // словил на первом же запуске: 4 источника, ни один не скачался, опубликовано 0.
-  if (merged.length === 0) {
-    const reason = 'Ни один источник не дал правил — сборка не опубликована, прежняя версия остаётся.';
+  if (merged.length <= builtin.length) {
+    const reason = 'Ни один источник не дал правил (только встроенные) — сборка не опубликована, прежняя версия остаётся.';
     repo.addJobError('Маршрутизация', `AutoRoute: ${reason}`, 'warn');
     return { ok: false, reason, build: null, conflicts: [] };
   }
@@ -320,10 +334,20 @@ export function publishedRules(dataset = DATASET): StoredRule[] {
   return rules;
 }
 
-// Потолок правил, которые зашиваются в телефонный Xray-конфиг. Полная сборка (Re:filter
-// и т.п.) — это сотни тысяч записей и мегабайты JSON, Happ/v2rayNG на таком конфиге
-// работают плохо. Публичный upstream.json и DAT отдаются БЕЗ потолка; в подписку идут
-// первые SUBSCRIPTION_CAP по приоритету источников. Факт обрезки виден в AutoRoute.
+// Потолок правил, ЗАШИВАЕМЫХ ВНУТРЬ Xray-конфига (routing.rules[].domain/ip). Он про
+// клиентское приложение, а не про движок: замеры 28.08.2026 на Xray 26.3.27 —
+//   inline  30k доменов → конфиг 0,85 МБ, старт 0,32 с, 26 МБ ОЗУ
+//   inline 100k доменов → конфиг 2,87 МБ, старт 0,67 с, 31 МБ ОЗУ
+// то есть сам Xray тянет и больше, а виснет Happ, когда пытается ОТКРЫТЬ мегабайтный
+// JSON в интерфейсе. Поэтому потолок остаётся только здесь.
+//
+// К DAT он НЕ относится и относиться не должен (те же замеры, geosite.dat):
+//    30k → 0,55 МБ, старт 0,36 с, 26 МБ      100k → 1,87 МБ, старт 0,36 с, 33 МБ
+//   300k → 5,72 МБ, старт 6,3 с,  53 МБ        1M → 19,2 МБ, старт 9,4 с, 109 МБ
+// Маршрутизация во всех случаях сработала верно, включая Telegram по голому IP.
+// Публичный upstream.json и DAT отдаются БЕЗ потолка; клиент, умеющий DAT (Happ),
+// получает конфиг на тегах geosite:novpn/geoip:novpn и всю базу целиком.
+// Факт обрезки inline-списка виден в AutoRoute.
 export const SUBSCRIPTION_CAP = 30_000;
 // Потолок делится между доменами и подсетями: иначе 79k доменов Re:filter съедали весь
 // лимит, а IP-подсетям (DC Telegram, CDN без SNI) доставалось три штуки. Подсети
@@ -339,6 +363,9 @@ export function subscriptionRules(dataset = DATASET): { domains: string[]; ips: 
   const domains: string[] = [];
   const ips: string[] = [];
   let truncated = false;
+  // Порядок = приоритет источников, а встроенные правила (Telegram) идут первыми в
+  // сборке — значит потолок их не срезает. Это и был корень «Telegram не работает через
+  // умную»: его подсети лежали в базе ЗА границей 6000 IP и в телефонный конфиг не попадали.
   for (const r of all) {
     if (r.k === 'ip') {
       if (ips.length >= SUBSCRIPTION_CAP_IPS) truncated = true;
@@ -349,12 +376,20 @@ export function subscriptionRules(dataset = DATASET): { domains: string[]; ips: 
   return { domains, ips, total: all.length, truncated };
 }
 
+/** Правила для DAT-конфига: сама база живёт в geosite/geoip, поэтому в конфиг попадают
+ *  только ссылки на теги. Обязательные правила в DAT уже включены (см. datFiles). */
+export function geoTagRules(): { domains: string[]; ips: string[] } {
+  return { domains: [`geosite:${GEO_TAG}`], ips: [`geoip:${GEO_TAG}`] };
+}
+
 /** Публичные DAT-файлы из опубликованной сборки (кеш по версии: байты детерминированы). */
 const datCache = new Map<string, { version: number; geosite: Buffer; geoip: Buffer }>();
 export function datFiles(dataset = DATASET): { version: number | null; geosite: Buffer; geoip: Buffer } {
   const version = repo.getPublishedAutoRouteVersion(dataset);
   const c = datCache.get(dataset);
   if (version != null && c && c.version === version) return { version, geosite: c.geosite, geoip: c.geoip };
+  // Встроенные правила уже внутри сборки (см. buildDataset) — отдельно их сюда не
+  // подмешиваем, иначе они задвоятся в DAT.
   const rules = publishedRules(dataset).filter((r) => r.a === 'vpn');
   const geosite = encodeGeoSite(rules.filter((r) => r.k !== 'ip').map((r) => ({ kind: r.k as Exclude<typeof r.k, 'ip'>, value: r.v })));
   const geoip = encodeGeoIp(rules.filter((r) => r.k === 'ip').map((r) => r.v));

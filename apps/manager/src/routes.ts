@@ -275,12 +275,58 @@ function profilesFor(_u: NonNullable<ReturnType<typeof repo.getUser>>, srv: NonN
   return repo.getEndpointConfig(srv.host).profiles === 'full' ? ['full'] : ['smart', 'full'];
 }
 
+/** Клиент, который умеет забирать базу маршрутизации DAT-файлами (Happ), получает
+ *  КОМПАКТНЫЙ конфиг: вместо 30 000 строк — ссылки `geosite:novpn`/`geoip:novpn`, а сами
+ *  базы приезжают по ссылкам из заголовка `routing`. Иначе конфиг весит под мегабайт, и
+ *  приложение виснет, когда его пытаешься открыть. Остальным клиентам (v2rayNG, NekoBox,
+ *  Streisand) DAT взять неоткуда: незнакомый тег для Xray — ошибка запуска, поэтому им
+ *  по-прежнему уходит встроенный список. `?rules=dat|inline` — ручное переопределение. */
+function wantsGeoDat(req: { query: Record<string, unknown>; headers: Record<string, unknown> }): boolean {
+  const forced = String(req.query.rules ?? '').toLowerCase();
+  if (forced === 'dat') return true;
+  if (forced === 'inline') return false;
+  return /happ/i.test(String(req.headers['user-agent'] ?? ''));
+}
+
+/** Профиль маршрутизации Happ: только DNS и ссылки на НАШИ гео-базы, без собственных
+ *  правил — правила лежат в самом конфиге (`geosite:novpn`). Формат и доставка заголовком
+ *  `routing: happ://routing/onadd/<base64>` — по документации Happ. `LastUpdated` меняется
+ *  вместе со сборкой AutoRoute, иначе приложение не перекачает базы. */
+function happRoutingLink(origin: string): string {
+  const published = repo.listAutoRouteBuilds().find((b) => b.published);
+  const stamp = published?.builtAt ? Math.floor(new Date(published.builtAt).getTime() / 1000) : 0;
+  const profile = {
+    Name: repo.brandName(),
+    GlobalProxy: 'true',
+    RemoteDNSType: 'DoH',
+    RemoteDNSDomain: 'https://dns.google/dns-query',
+    RemoteDNSIP: '8.8.8.8',
+    DomesticDNSType: 'DoH',
+    DomesticDNSDomain: 'https://common.dot.dns.yandex.net/dns-query',
+    DomesticDNSIP: '77.88.8.8',
+    Geoipurl: `${origin}/routing/autoroute/geoip.dat`,
+    Geositeurl: `${origin}/routing/autoroute/geosite.dat`,
+    LastUpdated: String(stamp),
+    DnsHosts: {},
+    DirectSites: [],
+    DirectIp: [],
+    ProxySites: [],
+    ProxyIp: [],
+    BlockSites: [],
+    BlockIp: [],
+    DomainStrategy: 'AsIs',
+    FakeDNS: 'false',
+  };
+  return `happ://routing/onadd/${Buffer.from(JSON.stringify(profile), 'utf8').toString('base64')}`;
+}
+
 function buildUserXrayFull(
   u: NonNullable<ReturnType<typeof repo.getUser>>,
   links: string[],
   srv: ReturnType<typeof repo.getServer>,
   overQuota: boolean,
   profile: 'smart' | 'full' = 'smart',
+  useGeoDat = false,
 ): string | null {
   if (links.length === 0) return null;
   // Значок сервера И флаг страны показываем ВМЕСТЕ, но ФЛАГ СТРАНЫ — ПЕРВЫМ: Happ рисует
@@ -331,7 +377,9 @@ function buildUserXrayFull(
   let domains: string[] = cfg.whitelistDomains ?? [];
   let ips: string[] = [];
   if (!disableWhitelist && cfg.smartDirection === 'match-vpn' && cfg.smartSource === 'autoroute') {
-    const sub = autoroute.subscriptionRules();
+    // Ссылки на теги вместо списка: конфиг ужимается с ~700 КБ до пары килобайт, а база
+    // приезжает целиком (без потолка в 30 000 правил) DAT-файлами.
+    const sub = useGeoDat ? autoroute.geoTagRules() : autoroute.subscriptionRules();
     domains = [...sub.domains, ...(cfg.whitelistDomains ?? [])];
     ips = sub.ips;
   }
@@ -346,14 +394,28 @@ function buildUserXrayFull(
       direction: cfg.smartDirection,
       ipRoutes: ips,
       novpn,
-      remarkSuffix: profile === 'full' ? ' · Полный VPN' : '',
+      // Подписывается УМНЫЙ профиль: в приложении рядом два одинаковых имени, и человеку
+      // нужно понимать, что первое — «умное». Полный VPN остаётся просто именем сервера.
+      remarkSuffix: profile === 'smart' ? ' · Умная маршрутизация' : '',
     }) || null
   );
 }
 
 // Заголовки+тело полного конфига (одинаковы для агрегированной и пер-серверной подписки).
-function sendUserXrayFull(res: import('express').Response, u: NonNullable<ReturnType<typeof repo.getUser>>, json: string): void {
+function sendUserXrayFull(
+  res: import('express').Response,
+  u: NonNullable<ReturnType<typeof repo.getUser>>,
+  json: string,
+  routingLink?: string,
+): void {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  if (routingLink) {
+    // Профиль маршрутизации Happ: откуда брать наши гео-базы. Конфиг ссылается на
+    // `geosite:novpn`, и без этих файлов Xray не стартует, поэтому маршрутизацию в
+    // приложении включаем принудительно. Другие клиенты незнакомые заголовки игнорируют.
+    res.setHeader('routing', routingLink);
+    res.setHeader('routing-enable', 'true');
+  }
   res.setHeader('Cache-Control', 'no-store, private'); // полный конфиг с ключами, не кэшировать
   res.setHeader('Profile-Title', `base64:${Buffer.from(repo.brandName(), 'utf8').toString('base64')}`);
   res.setHeader('Profile-Update-Interval', '12');
@@ -379,18 +441,24 @@ router.get('/sub/:token/full', (req, res) => {
   // Старейший конфиг первым: у уже подключённых людей первый профиль в приложении
   // остаётся их исходным сервером (entries идут новые-первыми — разворачиваем).
   const entries = (overQuota ? [] : repo.subscriptionXrayEntries(u.id)).reverse();
+  const geoDat = wantsGeoDat(req as never);
   const parts: string[] = [];
   for (const e of entries) {
     const srv = repo.getServer(e.serverId);
     // Один конфиг на ПРОФИЛЬ: сервер с обоими режимами даёт два — умный первым,
     // «Полный VPN» вторым (если разрешён пользователю). Порядок 1:1 с meta.profiles[].
     for (const profile of srv ? profilesFor(u, srv) : (['smart'] as const)) {
-      const json = buildUserXrayFull(u, [e.link], srv, overQuota, profile);
+      const json = buildUserXrayFull(u, [e.link], srv, overQuota, profile, geoDat);
       if (json) parts.push(json);
     }
   }
   if (parts.length === 0) return res.status(404).send(''); // пусто/битое → не отдаём all-direct утечку
-  sendUserXrayFull(res, u, parts.length === 1 ? parts[0]! : `[\n${parts.join(',\n')}\n]`);
+  sendUserXrayFull(
+    res,
+    u,
+    parts.length === 1 ? parts[0]! : `[\n${parts.join(',\n')}\n]`,
+    geoDat ? happRoutingLink(reqOrigin(req as never)) : undefined,
+  );
 });
 
 /**
@@ -443,7 +511,7 @@ router.get('/sub/:token/meta.json', (req, res) => {
         profileId: mode === 'full' ? `${srv.id}:full` : srv.id,
         serverId: srv.id,
         host: srv.host,
-        remark: mode === 'full' ? `${baseRemark} · Полный VPN` : baseRemark,
+        remark: mode === 'smart' ? `${baseRemark} · Умная маршрутизация` : baseRemark,
         // Умный профиль — рекомендуемый; полный — по явному желанию человека.
         recommended: mode === 'smart',
         protocols: srv.protocols,
@@ -496,9 +564,10 @@ router.get('/sub/:token/server/:id/full', (req, res) => {
   const wanted = String(req.query.profile ?? '') === 'full' ? 'full' : 'smart';
   const allowed = profilesFor(u, srv);
   const profile = allowed.includes(wanted) ? wanted : allowed[0]!;
-  const json = buildUserXrayFull(u, links, srv, overQuota, profile);
+  const geoDat = wantsGeoDat(req as never);
+  const json = buildUserXrayFull(u, links, srv, overQuota, profile, geoDat);
   if (!json) return res.status(404).send('');
-  sendUserXrayFull(res, u, json);
+  sendUserXrayFull(res, u, json, geoDat ? happRoutingLink(reqOrigin(req as never)) : undefined);
 });
 
 // ── bootstrap ──

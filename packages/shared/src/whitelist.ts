@@ -99,7 +99,8 @@ export interface XrayBuildOptions {
   /** Служебные метаданные для клиентского приложения (кладутся в `meta.novpn`).
    *  Xray-core незнакомые поля игнорирует, Happ читает `meta.serverDescription`. */
   novpn?: Record<string, unknown>;
-  /** Приписка к имени профиля, например « · Полный VPN» у второго профиля сервера. */
+  /** Приписка к имени профиля: « · Умная маршрутизация» у умного. Полный VPN остаётся
+   *  просто именем сервера — так в приложении видно, какой из двух профилей «умный». */
   remarkSuffix?: string;
 }
 
@@ -114,8 +115,8 @@ export function buildWhitelistXrayConfig(
   opts: XrayBuildOptions = {},
 ): string {
   // Имя профиля (remarks) = имя сервера с флагом, ровно как в панели («🇫🇷 Франция»).
-  // Режим в название НЕ добавляем — кроме явной приписки второго профиля (« · Полный VPN»),
-  // иначе в приложении два профиля одного сервера были бы неотличимы.
+  // Режим в название НЕ добавляем — кроме явной приписки умного профиля
+  // (« · Умная маршрутизация»), иначе два профиля одного сервера были бы неотличимы.
   const remarks = (title || appName) + (opts.remarkSuffix ?? '');
   const matchVpn = opts.direction === 'match-vpn';
   // Список доменов может приходить из редактируемой настройки админки; нормализуем.
@@ -239,9 +240,11 @@ export function buildWhitelistXrayConfig(
       strategy: { type: 'leastPing' },
     });
   }
+  // Тот же meta, что и в однотирной ветке: без novpn десктоп не отличал умный профиль
+  // от полного у сервера с резервными прокси (у обоих один host).
   const cfg = {
     remarks,
-    meta: { serverDescription: remarks },
+    meta,
     log: { loglevel: 'warning' },
     inbounds,
     outbounds,

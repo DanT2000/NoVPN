@@ -15,6 +15,7 @@ process.env.SESSION_SECRET = 'test';
 process.env.SINGBOX_BIN = path.join(tmp, 'no-such-sing-box');
 
 const { parseRuleLine, parseSource } = await import('../src/lib/routingRules.js');
+const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, BUILTIN_SOURCE_ID } = await import('../src/lib/builtinRoutes.js');
 const repo = await import('../src/repo.js');
 const { seedIfEmpty } = await import('../src/seed.js');
 const autoroute = await import('../src/services/autoroute.js');
@@ -99,9 +100,10 @@ test('сборка: верхний источник побеждает в кон
   assert.equal(res.conflicts[0]!.winner.action, 'direct', 'победил верхний источник');
   assert.equal(res.conflicts[0]!.losers.length, 1, 'источник с ТЕМ ЖЕ действием в проигравшие не попал');
 
-  // опубликованное содержимое = объединение без дублей
+  // опубликованное содержимое = объединение без дублей (плюс встроенные правила)
+  const builtin = new Set<string>([...TELEGRAM_CIDRS, ...TELEGRAM_DOMAINS]);
   const published = JSON.parse(repo.getRoutingContent('upstream') ?? '{}') as { items: string[] };
-  assert.deepEqual(published.items.sort(), ['only-mid.ru', 'only-top.ru', 'shared.ru']);
+  assert.deepEqual(published.items.filter((i) => !builtin.has(i)).sort(), ['only-mid.ru', 'only-top.ru', 'shared.ru']);
 });
 
 test('приоритет меняется перестановкой — победитель конфликта меняется без повторного скачивания', () => {
@@ -226,13 +228,23 @@ test('subscriptionRules: только action=vpn, префиксы Xray, CIDR о
   await autoroute.refreshSource(direct.id);
   autoroute.buildDataset();
   const sub = autoroute.subscriptionRules();
-  assert.deepEqual(sub.domains.sort(), ['domain:blocked.ru', 'full:exact.ru']);
-  assert.deepEqual(sub.ips, ['10.0.0.0/8']);
+  const fromSources = sub.domains.filter((d) => !TELEGRAM_DOMAINS.includes(d.replace(/^\w+:/, '')));
+  assert.deepEqual(fromSources.sort(), ['domain:blocked.ru', 'full:exact.ru']);
+  assert.deepEqual(
+    sub.ips.filter((i) => !TELEGRAM_CIDRS.includes(i)),
+    ['10.0.0.0/8'],
+  );
   assert.equal(sub.truncated, false);
-  assert.equal(sub.total, 3, 'direct-правила в подписку не идут');
+  assert.equal(sub.total, 3 + TELEGRAM_CIDRS.length + TELEGRAM_DOMAINS.length, 'direct-правила в подписку не идут');
   assert.ok(autoroute.SUBSCRIPTION_CAP >= 10_000);
   repo.deleteAutoRouteSource(vpn.id);
   repo.deleteAutoRouteSource(direct.id);
+});
+
+test('geoTagRules: конфиг для клиента с DAT — только ссылки на теги, без базы', () => {
+  const g = autoroute.geoTagRules();
+  assert.deepEqual(g.domains, ['geosite:novpn']);
+  assert.deepEqual(g.ips, ['geoip:novpn']);
 });
 
 test('searchRules: точное, родительский домен и частичное совпадение, с источником и приоритетом', async () => {
@@ -299,4 +311,33 @@ test('защита публикации: пустая сборка и резко
   assert.equal(autoroute.buildDataset().ok, true);
   repo.deleteAutoRouteSource(big.id);
   repo.deleteAutoRouteSource(tiny.id);
+});
+
+// Корень инцидента «Telegram не работает через умную маршрутизацию»: подсети мессенджера
+// были в базе, но лежали ЗА потолком в 6000 IP и в телефонный конфиг не попадали.
+// Встроенные правила идут первыми в сборке — значит потолок их не срезает НИКОГДА.
+// Тест последний в файле: он публикует заведомо огромную сборку, после которой защита
+// от похудения не дала бы опубликоваться следующим (это её работа, а не поломка).
+test('встроенные правила Telegram: первые в сборке и переживают потолок подписки', async () => {
+  for (const s of repo.listAutoRouteSources()) repo.deleteAutoRouteSource(s.id);
+  const huge = repo.addAutoRouteSource({ title: 'Огромный', url: 'https://src/huge.lst', action: 'vpn' });
+  // Источник заведомо больше потолка по подсетям — раньше он вытеснял Telegram целиком.
+  const lines: string[] = [];
+  for (let i = 0; i < 7000; i++) lines.push(`10.${(i >> 8) & 255}.${i & 255}.0/24`);
+  stubFetch(lines.join('\n'));
+  await autoroute.refreshSource(huge.id);
+  const res = autoroute.buildDataset();
+  assert.equal(res.ok, true, res.reason);
+  const stats = res.build!.sources.find((s: { sourceId: string }) => s.sourceId === BUILTIN_SOURCE_ID);
+  assert.ok(stats && stats.won === TELEGRAM_CIDRS.length + TELEGRAM_DOMAINS.length, 'встроенные видны отдельным источником в статистике сборки');
+
+  const sub = autoroute.subscriptionRules();
+  assert.equal(sub.truncated, true, 'потолок реально сработал');
+  for (const cidr of TELEGRAM_CIDRS) assert.ok(sub.ips.includes(cidr), `подсеть ${cidr} обязана пережить потолок`);
+  for (const d of TELEGRAM_DOMAINS) assert.ok(sub.domains.includes(`domain:${d}`), `домен ${d} обязан пережить потолок`);
+  assert.equal(sub.ips[0], TELEGRAM_CIDRS[0], 'встроенные идут первыми');
+  // А в DAT потолка нет вовсе: там вся база (замеры на Xray — до 1 млн правил).
+  const dat = autoroute.datFiles();
+  assert.ok(dat.geoip.length > 0 && dat.geosite.length > 0);
+  repo.deleteAutoRouteSource(huge.id);
 });

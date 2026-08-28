@@ -30,7 +30,9 @@ fn smart_and_full_share_host_but_differ_by_profile_id() {
     assert_eq!(smart.host, full.host, "host общий");
     assert_ne!(smart.profile_id, full.profile_id, "profileId различает");
     assert!(full.profile_id.ends_with(":full"));
-    assert!(full.remark.ends_with("· Полный VPN"));
+    // Подписан УМНЫЙ профиль: в телефонных приложениях рядом два одинаковых имени, и
+    // человеку нужно видеть, какой из них «умный». Полный VPN — просто имя сервера.
+    assert_eq!(smart.remark, format!("{} · Умная маршрутизация", full.remark));
     assert_eq!(full.routing.own_exceptions, 0, "в full доменных исключений нет");
     assert_eq!(m.smart_of_server(&smart.server_id).map(|p| p.profile_id.as_str()), Some(smart.profile_id.as_str()));
 }

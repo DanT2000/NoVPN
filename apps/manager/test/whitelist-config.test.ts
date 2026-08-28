@@ -201,9 +201,34 @@ test('match-vpn + прокси-тиры: список → балансировщ
   assert.ok(direct, 'терминальное direct-правило');
 });
 
-test('полный туннель с приставкой профиля: remarks получает « · Полный VPN»', () => {
-  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', [], false, true, { remarkSuffix: ' · Полный VPN', novpn: { mode: 'full' } }));
-  assert.equal(cfg.remarks, '🇫🇷 Франция · Полный VPN');
-  assert.equal(cfg.meta.serverDescription, '🇫🇷 Франция · Полный VPN');
-  assert.ok(!cfg.routing.rules.some((r: any) => r.domain));
+test('приписку получает УМНЫЙ профиль; полный туннель остаётся именем сервера', () => {
+  const smart = JSON.parse(
+    buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', ['blocked.example'], false, false, {
+      direction: 'match-vpn',
+      remarkSuffix: ' · Умная маршрутизация',
+      novpn: { mode: 'smart' },
+    }),
+  );
+  assert.equal(smart.remarks, '🇫🇷 Франция · Умная маршрутизация');
+  assert.equal(smart.meta.serverDescription, '🇫🇷 Франция · Умная маршрутизация');
+
+  const full = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', [], false, true, { novpn: { mode: 'full' } }));
+  assert.equal(full.remarks, '🇫🇷 Франция', 'у полного VPN — просто имя сервера');
+  assert.equal(full.meta.serverDescription, '🇫🇷 Франция');
+  assert.ok(!full.routing.rules.some((r: any) => r.domain));
+});
+
+test('гео-теги проходят в конфиг как есть: geosite:novpn в domain, geoip:novpn в ip', () => {
+  // Компактный конфиг для Happ: база уезжает в DAT, в JSON остаются только ссылки.
+  const cfg = JSON.parse(
+    buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', ['geosite:novpn'], false, false, {
+      direction: 'match-vpn',
+      ipRoutes: ['geoip:novpn'],
+    }),
+  );
+  const domRule = cfg.routing.rules.find((r: any) => r.domain);
+  const ipRule = cfg.routing.rules.find((r: any) => r.ip && r.outboundTag !== 'direct');
+  assert.deepEqual(domRule.domain, ['geosite:novpn'], 'тег не превратился в domain:geosite:novpn');
+  assert.deepEqual(ipRule.ip, ['geoip:novpn']);
+  assert.ok(JSON.stringify(cfg).length < 4000, 'конфиг на тегах — килобайты, а не мегабайт');
 });

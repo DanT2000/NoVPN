@@ -486,7 +486,26 @@ fn from_xray_json(v: &serde_json::Value) -> Vec<Node> {
                 continue;
             }
 
-            let name = clean_name(&remark);
+            // Служебные поля панели NoVPN: по profileId клиент сопоставляет конфиг с
+            // meta.json (у умного и полного профиля одного сервера host общий, так
+            // что host — только запасной ключ). Xray-core незнакомые поля игнорирует.
+            let profile = cfg.pointer("/meta/novpn").and_then(|nv| {
+                let g = |k: &str| nv.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let profile_id = g("profileId");
+                if profile_id.is_empty() {
+                    return None;
+                }
+                let mode = if g("mode") == "full" { "full" } else { "smart" };
+                Some(NodeProfile { profile_id, server_id: g("serverId"), host: g("host"), mode: mode.into() })
+            });
+            // Панель подписывает профиль («Франция · Умная маршрутизация») для телефонных
+            // приложений; здесь режим виден по тумблеру, поэтому у конфигов панели хвост
+            // после «·» отбрасываем — в списке серверов остаётся просто «Франция».
+            let name = if profile.is_some() {
+                strip_profile_suffix(&clean_name(&remark))
+            } else {
+                clean_name(&remark)
+            };
             let mut m = Mapping::new();
             put_str(&mut m, "name", &name);
             put_str(&mut m, "type", "vless");
@@ -532,23 +551,16 @@ fn from_xray_json(v: &serde_json::Value) -> Vec<Node> {
                     put_str(&mut m, "servername", sni);
                 }
             }
-            // Служебные поля панели NoVPN: по profileId клиент сопоставляет конфиг с
-            // meta.json (у умного и полного профиля одного сервера host общий, так
-            // что host — только запасной ключ). Xray-core незнакомые поля игнорирует.
-            let profile = cfg.pointer("/meta/novpn").and_then(|nv| {
-                let g = |k: &str| nv.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-                let profile_id = g("profileId");
-                if profile_id.is_empty() {
-                    return None;
-                }
-                let mode = if g("mode") == "full" { "full" } else { "smart" };
-                Some(NodeProfile { profile_id, server_id: g("serverId"), host: g("host"), mode: mode.into() })
-            });
             out.push(Node { name, map: m, profile });
             break; // из профиля берём только основной канал
         }
     }
     dedupe_names(out)
+}
+
+/// Приписка профиля панели («… · Умная маршрутизация») — не часть имени сервера.
+fn strip_profile_suffix(name: &str) -> String {
+    name.split(" · ").next().unwrap_or(name).trim().to_string()
 }
 
 /// Имена в подписках украшены эмодзи и хвостами вроде «| Обход белых списков».

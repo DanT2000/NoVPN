@@ -16,7 +16,7 @@
       "profileId": "s_fixture1:full",
       "serverId": "s_fixture1",
       "host": "home.example.test",
-      "remark": "🇷🇺 Дом · Полный VPN",
+      "remark": "🇷🇺 Дом",
       "recommended": false,
       "protocols": [
         "xray"

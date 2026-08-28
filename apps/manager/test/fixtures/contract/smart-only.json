@@ -16,7 +16,7 @@
       "profileId": "s_fixture1",
       "serverId": "s_fixture1",
       "host": "fr.example.test",
-      "remark": "🇫🇷 Франция",
+      "remark": "🇫🇷 Франция · Умная маршрутизация",
       "recommended": true,
       "protocols": [
         "xray"
