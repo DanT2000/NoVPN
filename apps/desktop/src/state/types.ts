@@ -34,6 +34,31 @@ export interface Server {
   kind: string;
   /** Задержка. Появляется после замера, до него неизвестна. */
   ping?: number;
+  /** Профиль панели NoVPN (контракт): у одного сервера может быть два — умный и
+      «Полный VPN» — с общим host. Чужие подписки этих полей не имеют. */
+  profileId?: string | null;
+  serverId?: string | null;
+  mode?: 'smart' | 'full';
+}
+
+/** Что панель сказала о подписке: профили, их режимы, отказ. */
+export interface MetaState {
+  /** network — свежий ответ; cache — панель не ответила, взяли последнюю копию;
+      none — meta нет (старая панель или чужой провайдер) → всё smart. */
+  source: 'network' | 'cache' | 'none';
+  profiles: {
+    profileId: string;
+    serverId: string;
+    host: string;
+    remark: string;
+    recommended: boolean;
+    mode: 'smart' | 'full';
+    lanAccess: boolean;
+  }[];
+  /** Отказ панели (4xx) — авторитетный: подключение заблокировано до валидного 200. */
+  denied: { kind: string; message: string } | null;
+  /** Контракт панели новее нашего — работаем как smart и просим обновиться. */
+  unsupported: boolean;
 }
 
 export interface AppRule {
@@ -112,4 +137,6 @@ export interface State {
   lists: RuleList[];
   syncedAgo: string;
   settings: Settings;
+  /** Ответ панели по контракту. Отсутствует до первого запроса. */
+  meta?: MetaState;
 }

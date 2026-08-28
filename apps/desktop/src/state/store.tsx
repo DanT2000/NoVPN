@@ -16,6 +16,7 @@ import {
   inTauri,
   listsLoad,
   listsSync,
+  metaFetch,
   stateLoad,
   stateSave,
   subCached,
@@ -25,9 +26,10 @@ import {
   vpnDisconnect,
   vpnReload,
 } from '../lib/tauri';
-import type { ServerLists } from '../lib/tauri';
+import type { MetaResult, ServerLists } from '../lib/tauri';
 import type {
   ConnState,
+  MetaState,
   Mode,
   Route,
   RoutingTab,
@@ -37,6 +39,79 @@ import type {
   State,
   Tab,
 } from './types';
+
+/* ── Профили по контракту панели ─────────────────────────────
+   Сервер в подписке NoVPN приходит одним или двумя профилями: умный и «Полный
+   VPN», с общим serverId. В интерфейсе показываем ОДИН сервер, а тумблер «Умная
+   маршрутизация» выбирает, каким профилем подключаться. Выключить умную можно
+   только если сервер выдал полный профиль (контракт, раздел 1). Чужие подписки
+   (без meta.novpn) — один профиль, всегда smart. */
+
+/** Ключ группировки: серверы панели — по serverId, чужие — по имени. */
+export function serverKey(v: Server): string {
+  return v.serverId ?? v.id;
+}
+
+/** Все профили выбранного сервера. */
+function groupOf(s: State): Server[] {
+  const cur = s.servers.find((v) => v.id === s.serverId);
+  if (!cur) return [];
+  const key = serverKey(cur);
+  return s.servers.filter((v) => serverKey(v) === key);
+}
+
+/** Есть ли у выбранного сервера профиль «Полный VPN». */
+export function fullAvailableFor(s: State): boolean {
+  return groupOf(s).some((v) => v.mode === 'full');
+}
+
+/** Реальный режим подключения: выключенная умная действует только при наличии
+    полного профиля — иначе тихо остаёмся в smart, чтобы не подменять поведение. */
+export function effectiveSmart(s: State): boolean {
+  return s.smartRouting || !fullAvailableFor(s);
+}
+
+/** Профиль, которым подключаемся: полный при выключенной умной, иначе умный. */
+export function nodeFor(s: State): Server | null {
+  const group = groupOf(s);
+  if (group.length === 0) return null;
+  const smart = !effectiveSmart(s) ? group.find((v) => v.mode === 'full') : undefined;
+  return smart ?? group.find((v) => v.mode !== 'full') ?? group[0]!;
+}
+
+/** Серверная политика LAN для выбранного профиля (meta.routing.lanAccess). */
+function lanAccessFor(s: State, node: Server | null): boolean {
+  if (!node?.profileId || !s.meta) return false;
+  return s.meta.profiles.find((p) => p.profileId === node.profileId)?.lanAccess ?? false;
+}
+
+/** Представитель группы для списка серверов: умный профиль (он рекомендуемый). */
+export function representatives(servers: Server[]): Server[] {
+  const seen = new Map<string, Server>();
+  for (const v of servers) {
+    const k = serverKey(v);
+    const prev = seen.get(k);
+    if (!prev || (prev.mode === 'full' && v.mode !== 'full')) seen.set(k, v);
+  }
+  return [...seen.values()];
+}
+
+function toMetaState(r: MetaResult): MetaState {
+  return {
+    source: r.source,
+    profiles: (r.meta?.profiles ?? []).map((p) => ({
+      profileId: p.profileId,
+      serverId: p.serverId,
+      host: p.host,
+      remark: p.remark,
+      recommended: !!p.recommended,
+      mode: p.routing?.mode === 'full' ? 'full' : 'smart',
+      lanAccess: !!p.routing?.lanAccess,
+    })),
+    denied: r.denied ? { kind: r.denied.kind, message: r.denied.message } : null,
+    unsupported: !!r.unsupported,
+  };
+}
 
 interface OnboardingPrefs {
   autostart?: boolean;
@@ -136,6 +211,10 @@ interface Ctx {
   error: string | null;
   /** Идёт автоматическое переподключение после обрыва. */
   reconnecting: boolean;
+  /** У выбранного сервера есть профиль «Полный VPN» — тумблер умной можно выключить. */
+  fullAvailable: boolean;
+  /** Профиль, которым реально подключаемся (умный или полный). */
+  selectedNode: Server | null;
 }
 
 const C = createContext<Ctx | null>(null);
@@ -183,8 +262,12 @@ function rulesOf(s: State, srv: ServerLists | null) {
     ? [...DIRECT_DOMAINS, ...srv.directDomains]
     : [...DIRECT_DOMAINS, ...list.filter((v) => v.route === 'direct').map((v) => v.domain)];
 
+  const node = nodeFor(s);
+  const useLists = listsOn('sites');
   return {
-    smart: s.smartRouting,
+    // Полный профиль — только когда сервер его выдал; иначе остаёмся умными.
+    smart: effectiveSmart(s),
+    lanAccess: lanAccessFor(s, node),
     tunnel: s.settings.tunnel,
     bypassLocal: s.settings.bypassLocal,
     customLocal: s.settings.customLocalDomains,
@@ -194,7 +277,12 @@ function rulesOf(s: State, srv: ServerLists | null) {
         ? s.settings.customDns.trim() || 'cloudflare'
         : s.settings.dnsProvider,
     userDomains,
-    listVpnDomains: listsOn('sites') ? vpnFromLists.filter((d) => !seen.has(d)) : [],
+    listVpnDomains: useLists ? vpnFromLists.filter((d) => !seen.has(d)) : [],
+    // Остальные виды из грамматики upstream (контракт, раздел 7) — только с сервера.
+    listVpnFull: useLists ? (srv?.vpnFull ?? []) : [],
+    listVpnKeywords: useLists ? (srv?.vpnKeywords ?? []) : [],
+    listVpnRegex: useLists ? (srv?.vpnRegex ?? []) : [],
+    listVpnIps: useLists ? (srv?.vpnIps ?? []) : [],
     listDirectDomains: listsOn('direct') ? directFromLists.filter((d) => !seen.has(d)) : [],
     vpnProcesses: on.filter((a) => a.route === 'vpn').flatMap((a) => a.processes),
     directProcesses: on.filter((a) => a.route === 'direct').flatMap((a) => a.processes),
@@ -230,12 +318,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ...x,
       lists: x.lists.map((l) => {
         let n: number | undefined;
-        if (l.id === 'sites') n = sl.vpnDomains.length; // все домены «через VPN» из списков
+        // «Недоступные ресурсы» = вся база AutoRoute: домены всех видов и подсети.
+        if (l.id === 'sites')
+          n = sl.vpnDomains.length + (sl.vpnFull?.length ?? 0) + (sl.vpnKeywords?.length ?? 0) + (sl.vpnRegex?.length ?? 0) + (sl.vpnIps?.length ?? 0);
         else if (l.id === 'apps') n = byFile.get('apps') ?? sl.apps.length;
         else if (l.id === 'direct') n = DIRECT_DOMAINS.length + sl.directDomains.length;
-        return n != null && n > 0 ? { ...l, rules: n } : l;
+        const updated = l.id === 'sites' && sl.version != null ? `v${sl.version}` : l.updated;
+        return n != null && n > 0 ? { ...l, rules: n, updated } : { ...l, updated };
       }),
     }));
+  }, []);
+
+  /* Ответ панели по контракту. Отказ (4xx) авторитетен: подключение блокируем,
+     активную сессию гасим, причину показываем. «Не ответила» — не сигнал: живём
+     по последней копии. */
+  const applyMeta = useCallback((m: MetaResult) => {
+    const meta = toMetaState(m);
+    setS((x) => {
+      const live = x.conn === 'on' || x.conn === 'config-updating' || x.conn === 'config-updated' || x.conn === 'connecting';
+      if (meta.denied) {
+        if (live && inTauri) void vpnDisconnect().catch(() => null);
+        return { ...x, meta, conn: 'sub-invalid' };
+      }
+      // Доступ вернули — снимаем блок.
+      const conn = x.conn === 'sub-invalid' ? 'off' : x.conn;
+      return { ...x, meta, conn };
+    });
+    if (meta.denied) setError(meta.denied.message);
   }, []);
 
   /* ── Чтение с диска при запуске ─────────────────────────── */
@@ -281,11 +390,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Серверы восстанавливаем из сохранённой подписки — без обращения к сети.
         const cached = await subCached().catch(() => null);
         if (cached?.servers?.length) {
-          setS((x) => ({
-            ...x,
-            servers: cached.servers.map(toServer),
-            subscription: { ...x.subscription, status: 'active', servers: cached.servers.length },
-          }));
+          setS((x) => {
+            const servers = cached.servers.map(toServer);
+            const reps = representatives(servers);
+            // Сохранённый выбор мог указывать на полный профиль — переводим на
+            // представителя того же сервера, режим задаёт тумблер.
+            const saved = servers.find((v) => v.id === x.serverId);
+            const serverId = saved ? (reps.find((r) => serverKey(r) === serverKey(saved))?.id ?? saved.id) : reps[0]?.id ?? null;
+            return {
+              ...x,
+              servers,
+              serverId,
+              subscription: { ...x.subscription, status: 'active', servers: reps.length },
+            };
+          });
+          // Профили и режимы — с панели (или из кэша, если она не ответила).
+          const m = await metaFetch().catch(() => null);
+          if (m) applyMeta(m);
         }
         // Автообновление списков: тихо тянем свежие с сервера в фоне, чтобы
         // «Недоступные ресурсы» и прочие всегда отражали актуальные данные, а не
@@ -397,7 +518,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setReconnecting(true);
       try {
         const { s: cur, srv: sv } = liveDeps.current;
-        await vpnConnect(cur.serverId, rulesOf(cur, sv));
+        await vpnConnect(nodeFor(cur)?.id ?? cur.serverId, rulesOf(cur, sv));
         // Пока мы поднимались, человек мог нажать «Отключить». Тогда движок
         // сейчас снова живой, а интерфейс показывает «Отключено» — гасим его,
         // иначе VPN тихо работал бы вопреки выбору пользователя.
@@ -433,7 +554,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Полный реконнект: vpnConnect сам проверит права и переставит прокси.
       setError(null);
       setS((x) => ({ ...x, conn: 'connecting' }));
-      void vpnConnect(s.serverId, rulesOf(s, srv))
+      void vpnConnect(nodeFor(s)?.id ?? s.serverId, rulesOf(s, srv))
         .then(() => setS((x) => (x.conn === 'connecting' ? { ...x, conn: 'on' } : x)))
         .catch((e: unknown) => {
           setError(String(e));
@@ -451,7 +572,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!inTauri || !loaded.current || !live) return;
     const id = window.setTimeout(() => {
-      void vpnReload(s.serverId, rulesOf(s, srv)).catch((e: unknown) => setError(String(e)));
+      void vpnReload(nodeFor(s)?.id ?? s.serverId, rulesOf(s, srv)).catch((e: unknown) => setError(String(e)));
     }, 500);
     return () => window.clearTimeout(id);
   }, [
@@ -461,6 +582,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     s.lists,
     s.serverId,
     s.smartRouting,
+    s.meta,
     s.settings.bypassLocal,
     s.settings.dnsProvider,
     s.settings.customLocalDomains,
@@ -478,7 +600,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         later(() => patch({ conn: 'on' }), 1500);
         return;
       }
-      void vpnConnect(s.serverId, rulesOf(s, srv))
+      // Отказ панели авторитетен: до валидного ответа не подключаемся вовсе.
+      if (s.meta?.denied) {
+        setError(s.meta.denied.message);
+        patch({ conn: 'sub-invalid' });
+        return;
+      }
+      void vpnConnect(nodeFor(s)?.id ?? s.serverId, rulesOf(s, srv))
         .then(() => patch({ conn: 'on' }))
         .catch((e: unknown) => {
           setError(String(e));
@@ -501,6 +629,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       nav,
       error,
       reconnecting,
+      fullAvailable: fullAvailableFor(s),
+      selectedNode: nodeFor(s),
       go: (tab) => setNav((n) => ({ ...n, tab })),
       goRouting: (routingTab) => setNav((n) => ({ ...n, routingTab })),
       setOnboardingStep: (onboardingStep) => setNav((n) => ({ ...n, onboardingStep })),
@@ -530,14 +660,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return;
         }
         void subFetch(url)
-          .then((r) => {
+          .then(async (r) => {
             const servers = r.servers.map(toServer);
+            const reps = representatives(servers);
             setS((x) => ({
               ...x,
               servers,
-              serverId: x.serverId && servers.some((v) => v.id === x.serverId) ? x.serverId : servers[0]?.id ?? null,
-              subscription: { url, status: 'active', servers: servers.length },
+              serverId: x.serverId && reps.some((v) => v.id === x.serverId) ? x.serverId : reps[0]?.id ?? null,
+              subscription: { url, status: 'active', servers: reps.length },
             }));
+            // Профили и режимы — тем же токеном, что и подписка.
+            const m = await metaFetch(url).catch(() => null);
+            if (m) applyMeta(m);
           })
           .catch((e: unknown) => {
             setError(String(e));
@@ -682,6 +816,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           later(() => done(true), 1200);
           return;
         }
+        // Заодно перечитываем профили: полный могли выдать или отозвать.
+        void metaFetch()
+          .then((m) => applyMeta(m))
+          .catch(() => null);
         void listsSync()
           .then((r) => {
             setSrv(r);
@@ -694,13 +832,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
       },
     };
-  }, [s, nav, error, reconnecting, srv, later, clearTimers]);
+  }, [s, nav, error, reconnecting, srv, later, clearTimers, applyMeta]);
 
   return <C.Provider value={api}>{children}</C.Provider>;
 }
 
-function toServer(r: { name: string; server: string; port: number; kind: string }): Server {
-  return { id: r.name, name: r.name, host: r.server, port: r.port, kind: r.kind };
+function toServer(r: {
+  name: string;
+  server: string;
+  port: number;
+  kind: string;
+  profileId?: string | null;
+  serverId?: string | null;
+  mode?: 'smart' | 'full';
+}): Server {
+  return {
+    id: r.name,
+    name: r.name,
+    host: r.server,
+    port: r.port,
+    kind: r.kind,
+    profileId: r.profileId ?? null,
+    serverId: r.serverId ?? null,
+    mode: r.mode === 'full' ? 'full' : 'smart',
+  };
 }
 
 export function useStore(): Ctx {

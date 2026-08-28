@@ -17,7 +17,8 @@ const BTN: Record<string, string> = {
 };
 
 export function Home() {
-  const { s, go, goRouting, connect, disconnect, setSmartRouting, setSetting, error, reconnecting } = useStore();
+  const { s, go, goRouting, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, fullAvailable, selectedNode } = useStore();
+  const [fullHint, setFullHint] = useState(false);
   const [admin, setAdmin] = useState(true);
   useEffect(() => {
     if (inTauri) void isElevated().then(setAdmin);
@@ -46,8 +47,8 @@ export function Home() {
 
       <RouteFork
         conn={s.conn}
-        smart={s.smartRouting}
-        vpnLabel={s.smartRouting ? count(totalSites, 'правило', 'правила', 'правил') : 'весь трафик'}
+        smart={s.smartRouting || !fullAvailable}
+        vpnLabel={s.smartRouting || !fullAvailable ? count(totalSites, 'правило', 'правила', 'правил') : 'весь трафик'}
         directLabel="всё остальное"
       />
 
@@ -69,21 +70,46 @@ export function Home() {
           {reconnecting
             ? 'Переподключение…'
             : live && server
-              ? `${server.name} · ${server.ping} ms`
+              ? `${(selectedNode ?? server).name}${server.ping != null ? ` · ${server.ping} ms` : ''}`
               : info.note || '—'}
         </div>
       </div>
 
+      {/* Тумблер один и всегда на месте (контракт, раздел 1): ВКЛ — умная, ВЫКЛ — «Полный
+          VPN». Выключить можно ТОЛЬКО если сервер выдал полный профиль; иначе тумблер
+          заперт, а вместо него — ссылка с объяснением. Свободно «гнать всё в туннель»
+          из умных данных клиент не имеет права. */}
       <div className="card" style={{ marginTop: 20, padding: '15px 16px' }}>
         <div className="row-between">
           <div>
             <div className="t-name">Умная маршрутизация</div>
             <div className="t-note" style={{ marginTop: 3 }}>
-              {s.smartRouting ? 'Через VPN идёт только нужное' : 'Весь трафик идёт через VPN'}
+              {!fullAvailable
+                ? 'Через VPN идёт только нужное'
+                : s.smartRouting
+                  ? 'Через VPN идёт только нужное · рекомендуется'
+                  : 'Полный VPN: весь трафик идёт через туннель'}
             </div>
           </div>
-          <Toggle on={s.smartRouting} onChange={setSmartRouting} ariaLabel="Умная маршрутизация" />
+          {fullAvailable ? (
+            <Toggle on={s.smartRouting} onChange={setSmartRouting} ariaLabel="Умная маршрутизация" />
+          ) : (
+            <button className="link-btn" onClick={() => setFullHint((v) => !v)}>
+              Нужен полный VPN?
+            </button>
+          )}
         </div>
+        {!fullAvailable && fullHint ? (
+          <div className="t-note" style={{ marginTop: 10 }}>
+            Полный VPN появляется, только если его выдал ваш провайдер — тогда здесь будет переключатель.
+            Для постоянного полного туннеля без умной маршрутизации есть AmneziaWG.
+          </div>
+        ) : null}
+        {fullAvailable && !s.smartRouting ? (
+          <div className="t-note" style={{ marginTop: 10, color: 'var(--amber-fg)' }}>
+            Без умной маршрутизации российские сайты тоже пойдут через VPN, а трафик расходуется быстрее.
+          </div>
+        ) : null}
       </div>
 
       {/* Режим адаптера — сегментами, как в Hub: ежедневный выбор одним касанием,

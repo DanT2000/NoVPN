@@ -53,9 +53,15 @@ pub struct DomainRule {
 
 #[derive(Debug, Clone)]
 pub struct Rules {
-    /// Выключенная умная маршрутизация означает «весь трафик в туннель»:
-    /// тогда перечисленные правила не нужны вовсе.
+    /// Выключенная умная маршрутизация означает профиль «Полный VPN»: весь трафик в
+    /// туннель, никаких доменных исключений, fail-close. Перечисленные ниже правила
+    /// тогда не нужны вовсе. Выключить можно только если сервер выдал полный профиль —
+    /// это решает интерфейс по meta.json (контракт, раздел 4).
     pub smart: bool,
+    /// Серверная политика приватных подсетей (meta.routing.lanAccess). false (по
+    /// умолчанию) — LAN напрямую; true — LAN В туннель (самохостер добирается до
+    /// локалки своего сервера). Действует в обоих режимах. Легко перепутать.
+    pub lan_access: bool,
     /// Режим сетевого адаптера. Без него правила по приложениям не работают:
     /// Discord и Telegram системный прокси попросту игнорируют.
     pub tunnel: bool,
@@ -74,8 +80,14 @@ pub struct Rules {
     pub user_domains: Vec<DomainRule>,
     /// Домены из подгруженных списков, обязанные идти напрямую.
     pub list_direct_domains: Vec<String>,
-    /// Домены из подгруженных списков, которым нужен VPN.
+    /// Домены из подгруженных списков, которым нужен VPN (домен + поддомены).
     pub list_vpn_domains: Vec<String>,
+    /// Остальные виды из грамматики upstream (контракт, раздел 7): точные домены,
+    /// подстроки, регэкспы, подсети. Всё — через VPN.
+    pub list_vpn_full: Vec<String>,
+    pub list_vpn_keywords: Vec<String>,
+    pub list_vpn_regex: Vec<String>,
+    pub list_vpn_ips: Vec<String>,
     /// Имена процессов, которым нужен VPN.
     pub vpn_processes: Vec<String>,
     /// Имена процессов, явно оставленных напрямую (торренты, российские игры).
@@ -86,6 +98,7 @@ impl Default for Rules {
     fn default() -> Self {
         Self {
             smart: true,
+            lan_access: false,
             tunnel: false,
             bypass_local: false,
             custom_local: Vec::new(),
@@ -93,6 +106,10 @@ impl Default for Rules {
             user_domains: Vec::new(),
             list_direct_domains: Vec::new(),
             list_vpn_domains: Vec::new(),
+            list_vpn_full: Vec::new(),
+            list_vpn_keywords: Vec::new(),
+            list_vpn_regex: Vec::new(),
+            list_vpn_ips: Vec::new(),
             vpn_processes: Vec::new(),
             direct_processes: Vec::new(),
         }
@@ -291,7 +308,20 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
     }
     root.insert(s("proxy-groups"), Value::Sequence(groups));
 
-    root.insert(s("rules"), Value::Sequence(build_rules(rules)));
+    // Адреса самих VPN-серверов — для анти-петли: трафик к серверу никогда не
+    // должен заворачиваться в туннель к нему же.
+    let hosts: Vec<String> = match parsed {
+        Parsed::Nodes(nodes) => nodes
+            .iter()
+            .filter_map(|n| n.map.get(s("server")).and_then(|v| v.as_str()).map(String::from))
+            .collect(),
+        Parsed::Clash(v) => v
+            .get("proxies")
+            .and_then(|p| p.as_sequence())
+            .map(|seq| seq.iter().filter_map(|p| p.get("server").and_then(|x| x.as_str()).map(String::from)).collect())
+            .unwrap_or_default(),
+    };
+    root.insert(s("rules"), Value::Sequence(build_rules(rules, &hosts)));
 
     let body = serde_yaml::to_string(&Value::Mapping(root))
         .unwrap_or_else(|e| format!("# не удалось собрать конфиг: {e}\n"));
@@ -362,15 +392,45 @@ fn push_local_bypass(out: &mut Vec<Value>, r: &Rules) {
     }
 }
 
-fn build_rules(r: &Rules) -> Vec<Value> {
+/// Хост сервера — адрес или домен? Для адреса нужен IP-CIDR, для домена — DOMAIN.
+fn is_ip_literal(h: &str) -> bool {
+    h.parse::<std::net::IpAddr>().is_ok()
+}
+
+fn build_rules(r: &Rules, server_hosts: &[String]) -> Vec<Value> {
     let mut out = Vec::new();
 
-    // Локальные подсети — в самом начале, до всего остального.
-    push_subnets(&mut out);
+    // Анти-петля (контракт, раздел 4): адрес самого VPN-сервера всегда напрямую —
+    // в режиме адаптера иначе соединение к серверу могло бы завернуться в туннель
+    // к нему же. Стоит первым, выше любых правил человека.
+    for h in server_hosts {
+        let h = h.trim();
+        if h.is_empty() {
+            continue;
+        }
+        if is_ip_literal(h) {
+            let mask = if h.contains(':') { 128 } else { 32 };
+            out.push(s(&format!("IP-CIDR,{h}/{mask},DIRECT,no-resolve")));
+        } else if let Some(d) = clean_domain(h) {
+            out.push(s(&format!("DOMAIN,{d},DIRECT")));
+        }
+    }
+
+    // QUIC (udp/443) — REJECT в ОБОИХ режимах: браузер открывает QUIC, UDP по
+    // туннелю теряется, отката на TCP нет — YouTube «зависает». Отрезаем сразу,
+    // и браузер падает на надёжный HTTP/2.
+    out.push(s("AND,((NETWORK,udp),(DST-PORT,443)),REJECT"));
+
+    // Локальные подсети — до всего остального. По серверной политике lanAccess:
+    // false (обычно) — напрямую; true — правил нет, LAN идёт в туннель.
+    if !r.lan_access {
+        push_subnets(&mut out);
+    }
 
     if !r.smart {
-        // Умная маршрутизация выключена — всё в туннель, кроме локальной сети.
-        push_local_bypass(&mut out, r);
+        // Профиль «Полный VPN»: всё в туннель, никаких доменных исключений (ни
+        // списков, ни локальных суффиксов) и fail-close — в группе нет DIRECT,
+        // поэтому мёртвый прокси = обрыв, а не утечка реального IP.
         out.push(s(&format!("MATCH,{GROUP}")));
         return out;
     }
@@ -408,10 +468,36 @@ fn build_rules(r: &Rules) -> Vec<Value> {
         }
     }
 
-    // 5. Списки «через VPN».
+    // 5. Списки «через VPN» — по грамматике upstream (контракт, раздел 7).
     for d in &r.list_vpn_domains {
         if let Some(d) = clean_domain(d) {
             out.push(s(&format!("DOMAIN-SUFFIX,{d},{GROUP}")));
+        }
+    }
+    for d in &r.list_vpn_full {
+        if let Some(d) = clean_domain(d) {
+            out.push(s(&format!("DOMAIN,{d},{GROUP}")));
+        }
+    }
+    for k in &r.list_vpn_keywords {
+        let k = k.trim().to_lowercase();
+        if !k.is_empty() && !k.contains([',', ' ', '\t']) {
+            out.push(s(&format!("DOMAIN-KEYWORD,{k},{GROUP}")));
+        }
+    }
+    for re in &r.list_vpn_regex {
+        // Запятая внутри регэкспа сломала бы разбор строки правила движком.
+        let re = re.trim();
+        if !re.is_empty() && !re.contains(',') && regex::Regex::new(re).is_ok() {
+            out.push(s(&format!("DOMAIN-REGEX,{re},{GROUP}")));
+        }
+    }
+    for ip in &r.list_vpn_ips {
+        let ip = ip.trim();
+        if !ip.is_empty() && !ip.contains([',', ' ']) {
+            // Реальный dst-IP под fake-ip: срабатывает на прямых соединениях по
+            // адресу (DC Telegram, CDN без SNI) — ровно для этого IP-виды и нужны.
+            out.push(s(&format!("IP-CIDR,{ip},{GROUP}")));
         }
     }
 

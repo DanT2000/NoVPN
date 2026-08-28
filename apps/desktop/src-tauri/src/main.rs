@@ -143,6 +143,7 @@ fn main() {
             cmds::relaunch_elevated,
             cmds::lists_sync,
             cmds::lists_load,
+            cmds::meta_fetch,
             update::update_check,
             update::update_install,
             cmds::browser_rules,

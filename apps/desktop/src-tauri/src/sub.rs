@@ -23,10 +23,23 @@ pub enum Parsed {
     Nodes(Vec<Node>),
 }
 
+/// Служебные поля профиля NoVPN из `meta.novpn` каждого конфига подписки
+/// (контракт, раздел 3). Есть только у подписок панели NoVPN; у ссылок и чужих
+/// Clash-конфигов их нет — тогда профиль один, режим smart, Full не появляется.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeProfile {
+    pub profile_id: String,
+    pub server_id: String,
+    pub host: String,
+    /// `smart` | `full`.
+    pub mode: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub name: String,
     pub map: Mapping,
+    pub profile: Option<NodeProfile>,
 }
 
 fn s(v: &str) -> Value {
@@ -303,7 +316,7 @@ fn parse_vless(link: &str) -> Option<Node> {
         put_str(&mut m, "flow", &flow);
     }
     apply_transport(&mut m, &u);
-    Some(Node { name, map: m })
+    Some(Node { name, map: m, profile: None })
 }
 
 fn parse_trojan(link: &str) -> Option<Node> {
@@ -322,7 +335,7 @@ fn parse_trojan(link: &str) -> Option<Node> {
     // У trojan шифрование обязательно, даже если в ссылке про него не сказано.
     put(&mut m, "tls", Value::Bool(true));
     apply_transport(&mut m, &u);
-    Some(Node { name, map: m })
+    Some(Node { name, map: m, profile: None })
 }
 
 fn parse_vmess(link: &str) -> Option<Node> {
@@ -386,7 +399,7 @@ fn parse_vmess(link: &str) -> Option<Node> {
         }
         put(&mut m, "ws-opts", Value::Mapping(ws));
     }
-    Some(Node { name, map: m })
+    Some(Node { name, map: m, profile: None })
 }
 
 fn parse_ss(link: &str) -> Option<Node> {
@@ -431,7 +444,7 @@ fn parse_ss(link: &str) -> Option<Node> {
     put_str(&mut m, "cipher", &method);
     put_str(&mut m, "password", &password);
     put(&mut m, "udp", Value::Bool(true));
-    Some(Node { name, map: m })
+    Some(Node { name, map: m, profile: None })
 }
 
 /// Xray-JSON: так отдаёт подписка NoVPN — массив полных конфигов, из каждого
@@ -519,7 +532,19 @@ fn from_xray_json(v: &serde_json::Value) -> Vec<Node> {
                     put_str(&mut m, "servername", sni);
                 }
             }
-            out.push(Node { name, map: m });
+            // Служебные поля панели NoVPN: по profileId клиент сопоставляет конфиг с
+            // meta.json (у умного и полного профиля одного сервера host общий, так
+            // что host — только запасной ключ). Xray-core незнакомые поля игнорирует.
+            let profile = cfg.pointer("/meta/novpn").and_then(|nv| {
+                let g = |k: &str| nv.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let profile_id = g("profileId");
+                if profile_id.is_empty() {
+                    return None;
+                }
+                let mode = if g("mode") == "full" { "full" } else { "smart" };
+                Some(NodeProfile { profile_id, server_id: g("serverId"), host: g("host"), mode: mode.into() })
+            });
+            out.push(Node { name, map: m, profile });
             break; // из профиля берём только основной канал
         }
     }
@@ -530,14 +555,16 @@ fn from_xray_json(v: &serde_json::Value) -> Vec<Node> {
 /// В конфиг и в список серверов должно попадать что-то читаемое.
 fn clean_name(raw: &str) -> String {
     let head = raw.split('|').next().unwrap_or(raw);
+    // «·» оставляем: панель так отделяет приписку второго профиля («Франция · Полный
+    // VPN»), и без неё два профиля одного сервера читались бы одинаково.
     let cleaned: String = head
         .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '#' | '.'))
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '#' | '.' | '·'))
         .collect();
-    let t = cleaned.trim();
+    let t = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     if t.is_empty() {
         "Сервер".into()
     } else {
-        t.to_string()
+        t
     }
 }

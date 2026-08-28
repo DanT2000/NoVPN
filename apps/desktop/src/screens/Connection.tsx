@@ -1,16 +1,23 @@
 /* Подключение: подписка и сервер. Всё, что связано с доступом, — здесь. */
 
 import { useState } from 'react';
-import { useStore } from '../state/store';
+import { representatives, serverKey, useStore } from '../state/store';
 import { Dialog, StatusDot } from '../components/ui';
 import { IconCheck, IconChevron, IconRefresh } from '../components/icons';
+import type { Server } from '../state/types';
+
+/** Есть ли у сервера (по всем его профилям) «Полный VPN». */
+function offersFull(all: Server[], v: Server): boolean {
+  const k = serverKey(v);
+  return all.some((x) => serverKey(x) === k && x.mode === 'full');
+}
 
 export function Connection() {
-  const { s, resetSubscription, checkSubscription } = useStore();
+  const { s, resetSubscription, checkSubscription, fullAvailable, selectedNode } = useStore();
   const [picking, setPicking] = useState(false);
   const [changing, setChanging] = useState(false);
   const server = s.servers.find((x) => x.id === s.serverId) ?? null;
-  const valid = s.subscription.status === 'active';
+  const valid = s.subscription.status === 'active' && !s.meta?.denied;
 
   return (
     <div className="viewport">
@@ -22,9 +29,17 @@ export function Connection() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <StatusDot tone={valid ? 'green' : 'red'} />
           <span className="t-strong" style={{ color: valid ? 'var(--green-fg)' : 'var(--red-fg)' }}>
-            {valid ? 'Активна' : 'Недействительна'}
+            {valid ? 'Активна' : s.meta?.denied ? s.meta.denied.message : 'Недействительна'}
           </span>
         </div>
+        {s.meta?.source === 'cache' ? (
+          <div className="t-note" style={{ marginTop: 8 }}>Панель не отвечает — работаем по последней копии.</div>
+        ) : null}
+        {s.meta?.unsupported ? (
+          <div className="notice notice-amber" style={{ marginTop: 8 }}>
+            Панель новее этого приложения: работаем в умном режиме, обновите NoVPN.
+          </div>
+        ) : null}
         {s.subscription.url ? (
           <div
             className="mono t-note"
@@ -64,6 +79,13 @@ export function Connection() {
             <div className="mono t-meta" style={{ marginTop: 4 }}>
               {server ? `${server.host}:${server.port} · ${server.kind}` : '—'}
             </div>
+            {server ? (
+              <div className="t-note" style={{ marginTop: 6 }}>
+                {fullAvailable
+                  ? `Умная маршрутизация · Полный VPN${selectedNode?.mode === 'full' ? ' (выбран)' : ''}`
+                  : 'Умная маршрутизация'}
+              </div>
+            ) : null}
           </div>
           <span style={{ color: 'var(--text-muted-2)', display: 'grid' }}>
             <IconChevron />
@@ -94,7 +116,9 @@ function ServerDialog({ onClose }: { onClose: () => void }) {
   const { s, setServer } = useStore();
   return (
     <Dialog title="Выберите сервер" onClose={onClose}>
-      {s.servers.map((v) => (
+      {/* Один сервер — одна строка, даже если панель выдала два профиля (умный и
+          полный): какой из них использовать, решает тумблер на главном экране. */}
+      {representatives(s.servers).map((v) => (
         <button
           key={v.id}
           type="button"
@@ -109,7 +133,10 @@ function ServerDialog({ onClose }: { onClose: () => void }) {
           <span className="radio" />
           <span style={{ flex: 1 }}>
             <span className="t-name" style={{ display: 'block' }}>{v.name}</span>
-            <span className="t-note mono" style={{ display: 'block', marginTop: 3 }}>{v.host}</span>
+            <span className="t-note mono" style={{ display: 'block', marginTop: 3 }}>
+              {v.host}
+              {offersFull(s.servers, v) ? ' · умная + полный VPN' : ''}
+            </span>
           </span>
           {/* Задержка известна только после замера — до него честнее промолчать. */}
           {v.ping != null ? (

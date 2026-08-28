@@ -8,6 +8,7 @@ pub mod core;
 pub mod elevate;
 pub mod host;
 pub mod lists;
+pub mod meta;
 pub mod proxy;
 pub mod store;
 pub mod selftest;

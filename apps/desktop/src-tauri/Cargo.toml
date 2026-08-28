@@ -1,6 +1,6 @@
 [package]
 name = "novpn-desktop"
-version = "0.2.5"
+version = "0.2.6"
 description = "NoVPN Desktop"
 edition = "2021"
 
@@ -23,6 +23,9 @@ serde_yaml = "0.9"
 base64 = "0.22"
 urlencoding = "2"
 sha2 = "0.10"
+# Регэкспы из списков AutoRoute приходят из чужих источников (панель их не
+# валидирует): невалидный пропускаем, иначе одна кривая строка валит весь конфиг.
+regex = "1"
 ed25519-dalek = "2"
 sysinfo = "0.32"
 tauri-plugin-dialog = "2"

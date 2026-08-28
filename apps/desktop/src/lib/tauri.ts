@@ -46,6 +46,11 @@ export interface ServerInfo {
   server: string;
   port: number;
   kind: string;
+  /** Профиль панели NoVPN (meta.novpn конфига). У чужих подписок — null. */
+  profileId: string | null;
+  serverId: string | null;
+  /** `smart` | `full`. Без meta.novpn — всегда smart. */
+  mode: 'smart' | 'full';
 }
 
 export interface SubResult {
@@ -54,8 +59,10 @@ export interface SubResult {
 }
 
 export interface RulesPayload {
-  /** Выключенная умная маршрутизация означает «весь трафик в туннель». */
+  /** false = профиль «Полный VPN»: всё в туннель, без исключений, fail-close. */
   smart: boolean;
+  /** Серверная политика LAN из meta.json: false — напрямую, true — в туннель. */
+  lanAccess: boolean;
   /** Режим сетевого адаптера вместо системного прокси. */
   tunnel: boolean;
   /** Обход локальных доменов напрямую. */
@@ -67,9 +74,61 @@ export interface RulesPayload {
   userDomains: { domain: string; route: 'vpn' | 'direct' }[];
   listDirectDomains: string[];
   listVpnDomains: string[];
+  listVpnFull: string[];
+  listVpnKeywords: string[];
+  listVpnRegex: string[];
+  listVpnIps: string[];
   vpnProcesses: string[];
   directProcesses: string[];
 }
+
+/* ── Метаданные подписки (контракт панель↔клиент) ─────────── */
+
+export interface MetaRouting {
+  mode: 'smart' | 'full' | string;
+  lanAccess: boolean;
+  fallbackTypes: string[] | null;
+  ownExceptions: number;
+  expiresAt?: string | null;
+  fallbackProfileId?: string | null;
+}
+export interface MetaProfile {
+  profileId: string;
+  serverId: string;
+  host: string;
+  remark: string;
+  recommended: boolean;
+  protocols: string[];
+  online: boolean;
+  subLink: string;
+  routing: MetaRouting;
+}
+export interface Meta {
+  schemaVersion: number;
+  panel: { name?: string; origin?: string } | null;
+  routingResources: Record<string, string>;
+  profiles: MetaProfile[];
+}
+/** Отказ панели (4xx) — авторитетный: подключаться нельзя, причину показываем. */
+export interface MetaDenied {
+  status: number;
+  kind: 'not_found' | 'disabled' | 'expired' | 'traffic' | string;
+  message: string;
+}
+export interface MetaResult {
+  meta: Meta | null;
+  /** network — свежий ответ; cache — панель не ответила, last-known-good; none — нет meta. */
+  source: 'network' | 'cache' | 'none';
+  denied: MetaDenied | null;
+  unsupported: boolean;
+  networkError: string | null;
+}
+
+/** Профили и их режимы с панели. Никогда не бросает. */
+export const metaFetch = (url?: string) =>
+  call<MetaResult>('meta_fetch', { url: url ?? null }).then(
+    (v) => v ?? { meta: null, source: 'none' as const, denied: null, unsupported: false, networkError: null },
+  );
 
 export const subFetch = (url: string) => callOrThrow<SubResult>('sub_fetch', { url });
 export const subCached = () => callOrThrow<SubResult>('sub_cached');
@@ -147,11 +206,20 @@ export const relaunchElevated = () => callOrThrow<void>('relaunch_elevated');
 /* ── Хранение ─────────────────────────────────────────────── */
 
 export interface ServerLists {
+  /** Домены с поддоменами → через VPN. */
   vpnDomains: string[];
+  /** Остальные виды из грамматики upstream: точные домены, подстроки, регэкспы, подсети. */
+  vpnFull: string[];
+  vpnKeywords: string[];
+  vpnRegex: string[];
+  vpnIps: string[];
   directDomains: string[];
   apps: { id: string; name: string; route: 'vpn' | 'direct'; processes: string[] }[];
   /** Сколько элементов пришло в каждом файле. */
   counts: [string, number][];
+  /** Версия базы по манифесту панели («Правила vN»). */
+  version: number | null;
+  updatedAt: string | null;
 }
 
 /** Обновляет списки с сервера NoVPN. */

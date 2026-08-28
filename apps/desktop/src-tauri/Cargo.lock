@@ -2284,6 +2284,7 @@ version = "0.2.5"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

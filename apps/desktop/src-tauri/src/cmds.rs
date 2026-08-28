@@ -24,11 +24,17 @@ use std::sync::Mutex;
 pub struct Running(pub Mutex<Option<Engine>>, pub Mutex<()>);
 
 #[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
     pub name: String,
     pub server: String,
     pub port: u64,
     pub kind: String,
+    /// Профиль панели NoVPN (из meta.novpn конфига). У чужих подписок — None.
+    pub profile_id: Option<String>,
+    pub server_id: Option<String>,
+    /// `smart` | `full`. Без meta.novpn — всегда smart.
+    pub mode: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +54,10 @@ pub struct RulesIn {
     /// администратора, а окно должно открываться и без них.
     #[serde(default)]
     pub tunnel: bool,
+    /// Серверная политика приватных подсетей из meta.json: false — LAN напрямую,
+    /// true — LAN в туннель. По умолчанию false (и для чужих подписок без meta).
+    #[serde(default)]
+    pub lan_access: bool,
     #[serde(default)]
     pub bypass_local: bool,
     #[serde(default)]
@@ -61,6 +71,14 @@ pub struct RulesIn {
     pub list_direct_domains: Vec<String>,
     #[serde(default)]
     pub list_vpn_domains: Vec<String>,
+    #[serde(default)]
+    pub list_vpn_full: Vec<String>,
+    #[serde(default)]
+    pub list_vpn_keywords: Vec<String>,
+    #[serde(default)]
+    pub list_vpn_regex: Vec<String>,
+    #[serde(default)]
+    pub list_vpn_ips: Vec<String>,
     #[serde(default)]
     pub vpn_processes: Vec<String>,
     #[serde(default)]
@@ -82,6 +100,7 @@ impl From<RulesIn> for Rules {
     fn from(r: RulesIn) -> Self {
         Rules {
             smart: r.smart,
+            lan_access: r.lan_access,
             tunnel: r.tunnel,
             bypass_local: r.bypass_local,
             custom_local: r.custom_local,
@@ -96,6 +115,10 @@ impl From<RulesIn> for Rules {
                 .collect(),
             list_direct_domains: r.list_direct_domains,
             list_vpn_domains: r.list_vpn_domains,
+            list_vpn_full: r.list_vpn_full,
+            list_vpn_keywords: r.list_vpn_keywords,
+            list_vpn_regex: r.list_vpn_regex,
+            list_vpn_ips: r.list_vpn_ips,
             vpn_processes: r.vpn_processes,
             direct_processes: r.direct_processes,
         }
@@ -126,6 +149,9 @@ fn describe(parsed: &Parsed) -> (Vec<ServerInfo>, String) {
                         .and_then(|v| v.as_str())
                         .unwrap_or("vless")
                         .to_string(),
+                    profile_id: n.profile.as_ref().map(|p| p.profile_id.clone()),
+                    server_id: n.profile.as_ref().map(|p| p.server_id.clone()),
+                    mode: n.profile.as_ref().map(|p| p.mode.clone()).unwrap_or_else(|| "smart".into()),
                 })
                 .collect(),
             "ссылки".into(),
@@ -140,6 +166,9 @@ fn describe(parsed: &Parsed) -> (Vec<ServerInfo>, String) {
                             server: p.get("server").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
                             port: p.get("port").and_then(|x| x.as_u64()).unwrap_or(0),
                             kind: p.get("type").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                            profile_id: None,
+                            server_id: None,
+                            mode: "smart".into(),
                         })
                         .collect()
                 })
@@ -550,6 +579,21 @@ pub async fn lists_sync() -> Result<lists::Lists, String> {
 #[tauri::command]
 pub fn lists_load() -> lists::Lists {
     lists::load()
+}
+
+/// Метаданные подписки (профили и их режимы) с панели — по тому же sub-токену,
+/// что в ссылке подписки. Никогда не бросает: отказ панели (4xx), «панель не
+/// ответила» (кэш) и «старая панель / чужой провайдер» (нет meta) — это разные
+/// исходы одного результата, интерфейс их различает.
+#[tauri::command]
+pub async fn meta_fetch(url: Option<String>) -> crate::meta::MetaResult {
+    let sub_url = url.or_else(|| {
+        store::read("state").and_then(|v| v.pointer("/subscription/url").and_then(|x| x.as_str()).map(String::from))
+    });
+    match sub_url {
+        Some(u) => crate::meta::fetch(&u).await,
+        None => crate::meta::MetaResult { meta: crate::meta::load_cached(), source: "none".into(), ..Default::default() },
+    }
 }
 
 /// Правила, добавленные из браузера. Приложение опрашивает их и подмешивает

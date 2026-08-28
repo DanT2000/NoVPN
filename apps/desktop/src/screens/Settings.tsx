@@ -152,7 +152,7 @@ function AdvancedSettings() {
 }
 
 export function Settings() {
-  const { s, setSetting, setSmartRouting, openQuickSetup, go } = useStore();
+  const { s, setSetting, setSmartRouting, openQuickSetup, go, fullAvailable } = useStore();
   const [advOpen, setAdvOpen] = useState(false);
   const [upd, setUpd] = useState<{ state: 'idle' | 'checking' | 'done' | 'installing'; info?: UpdateInfo; error?: string }>({ state: 'idle' });
 
@@ -199,7 +199,21 @@ export function Settings() {
       <Row title="Сворачивать в трей" on={s.settings.tray} onChange={(v) => setSetting('tray', v)} />
 
       <div className="section-label">Маршрутизация</div>
-      <Row title="Умная маршрутизация" on={s.smartRouting} onChange={setSmartRouting} />
+      {fullAvailable ? (
+        <Row
+          title="Умная маршрутизация"
+          note={s.smartRouting ? 'Через VPN идёт только нужное' : 'Выключена: весь трафик через VPN'}
+          on={s.smartRouting}
+          onChange={setSmartRouting}
+        />
+      ) : (
+        <Row
+          title="Умная маршрутизация"
+          note="Всегда включена: полный VPN появится, если его выдаст провайдер"
+          on
+          onChange={() => {}}
+        />
+      )}
       <Row
         title="Обновлять списки автоматически"
         on={s.settings.autoUpdateLists}

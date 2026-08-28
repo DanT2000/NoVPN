@@ -394,3 +394,125 @@ fn custom_dns_is_used_as_nameserver() {
     let empty = build_config(&p, &Rules { dns_provider: "  ".into(), ..Default::default() }, Some("Точка"), Ports::default());
     assert!(empty.contains("1.1.1.1"), "пустой свой DNS -> Cloudflare");
 }
+
+/* ── Контракт панель↔клиент (docs/NOVPN-CLIENT-CONTRACT.md) ──────────────── */
+
+#[test]
+fn xray_json_carries_novpn_profile() {
+    // Панель кладёт в каждый конфиг meta.novpn: по profileId клиент сопоставляет
+    // конфиг с meta.json. У умного и полного профиля одного сервера host общий.
+    let json = format!(
+        r#"[{{"remarks":"🇫🇷 Франция","meta":{{"serverDescription":"🇫🇷 Франция","novpn":{{"profileId":"s_1","serverId":"s_1","host":"a.example","mode":"smart"}}}},
+             "outbounds":[{{"protocol":"vless","settings":{{"vnext":[{{"address":"a.example","port":443,"users":[{{"id":"{UUID}"}}]}}]}},
+               "streamSettings":{{"network":"tcp","security":"reality","realitySettings":{{"serverName":"x","publicKey":"PK","shortId":"1"}}}}}}]}},
+           {{"remarks":"🇫🇷 Франция · Полный VPN","meta":{{"novpn":{{"profileId":"s_1:full","serverId":"s_1","host":"a.example","mode":"full"}}}},
+             "outbounds":[{{"protocol":"vless","settings":{{"vnext":[{{"address":"a.example","port":443,"users":[{{"id":"{UUID}"}}]}}]}},
+               "streamSettings":{{"network":"tcp","security":"reality","realitySettings":{{"serverName":"x","publicKey":"PK","shortId":"1"}}}}}}]}}]"#
+    );
+    let p = parse(&json).expect("подписка с двумя профилями должна разобраться");
+    let Parsed::Nodes(nodes) = &p else { panic!() };
+    assert_eq!(nodes.len(), 2, "один конфиг на профиль");
+    let smart = nodes[0].profile.as_ref().expect("у конфига панели есть профиль");
+    let full = nodes[1].profile.as_ref().expect("у второго тоже");
+    assert_eq!(smart.profile_id, "s_1");
+    assert_eq!(smart.mode, "smart");
+    assert_eq!(full.profile_id, "s_1:full");
+    assert_eq!(full.mode, "full");
+    assert_eq!(smart.host, full.host, "host общий — поэтому ключ profileId, а не host");
+    // Имя второго профиля различимо: «·» сохраняется, эмодзи уходит.
+    assert_eq!(nodes[1].name, "Франция · Полный VPN");
+    assert_eq!(nodes[0].name, "Франция");
+}
+
+#[test]
+fn foreign_subscription_has_no_profile_and_is_smart() {
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Чужой");
+    let p = parse(&link).unwrap();
+    let Parsed::Nodes(nodes) = &p else { panic!() };
+    assert!(nodes[0].profile.is_none(), "у чужой ссылки meta.novpn нет → Full не появляется");
+}
+
+#[test]
+fn upstream_grammar_becomes_mihomo_rules() {
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
+    let p = parse(&link).unwrap();
+    let rules = Rules {
+        list_vpn_domains: vec!["blocked.example".into()],
+        list_vpn_full: vec!["exact.example".into()],
+        list_vpn_keywords: vec!["google".into()],
+        list_vpn_regex: vec![r"^ad\..*".into(), "bad,comma".into()],
+        list_vpn_ips: vec!["10.10.0.0/16".into(), "2001:db8::/32".into()],
+        ..Default::default()
+    };
+    let cfg = build_config(&p, &rules, Some("Точка"), Ports::default());
+    assert!(cfg.contains("DOMAIN-SUFFIX,blocked.example,NoVPN"));
+    assert!(cfg.contains("DOMAIN,exact.example,NoVPN"), "full: → DOMAIN (точное)");
+    assert!(cfg.contains("DOMAIN-KEYWORD,google,NoVPN"));
+    assert!(cfg.contains(r"DOMAIN-REGEX,^ad\..*,NoVPN"));
+    assert!(!cfg.contains("bad,comma"), "регэксп с запятой сломал бы правило — пропускаем");
+    assert!(cfg.contains("IP-CIDR,10.10.0.0/16,NoVPN"));
+    assert!(cfg.contains("IP-CIDR,2001:db8::/32,NoVPN"));
+    assert!(cfg.contains("MATCH,DIRECT"), "smart: всё остальное напрямую");
+}
+
+#[test]
+fn full_profile_is_fail_close_without_domain_exceptions() {
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
+    let p = parse(&link).unwrap();
+    let rules = Rules {
+        smart: false,
+        bypass_local: true,
+        custom_local: vec!["corp.example".into()],
+        user_domains: vec![DomainRule { domain: "gosuslugi.ru".into(), vpn: false }],
+        list_direct_domains: vec!["ya.ru".into()],
+        list_vpn_domains: vec!["openai.com".into()],
+        ..Default::default()
+    };
+    let cfg = build_config(&p, &rules, Some("Точка"), Ports::default());
+    assert!(cfg.contains("MATCH,NoVPN"), "всё в туннель");
+    assert!(!cfg.contains("MATCH,DIRECT"), "fail-close: никакого DIRECT-умолчания");
+    for leak in ["gosuslugi.ru", "ya.ru", "openai.com", "DOMAIN-SUFFIX,corp,DIRECT", "DOMAIN-SUFFIX,corp.example,DIRECT"] {
+        assert!(!cfg.contains(leak), "в полном профиле нет доменных исключений: {leak}");
+    }
+    // Приватные подсети при lanAccess=false — напрямую и в полном профиле.
+    assert!(cfg.contains("IP-CIDR,192.168.0.0/16,DIRECT"));
+}
+
+#[test]
+fn quic_is_rejected_in_both_modes() {
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
+    let p = parse(&link).unwrap();
+    for smart in [true, false] {
+        let cfg = build_config(&p, &Rules { smart, ..Default::default() }, Some("Точка"), Ports::default());
+        assert!(cfg.contains("AND,((NETWORK,udp),(DST-PORT,443)),REJECT"), "QUIC-блок обязателен (smart={smart})");
+    }
+}
+
+#[test]
+fn lan_access_true_sends_private_subnets_into_tunnel() {
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
+    let p = parse(&link).unwrap();
+    let off = build_config(&p, &Rules::default(), Some("Точка"), Ports::default());
+    assert!(off.contains("IP-CIDR,192.168.0.0/16,DIRECT"), "lanAccess=false: LAN напрямую");
+    let on = build_config(&p, &Rules { lan_access: true, ..Default::default() }, Some("Точка"), Ports::default());
+    assert!(!on.contains("IP-CIDR,192.168.0.0/16,DIRECT"), "lanAccess=true: LAN в туннель (правила DIRECT нет)");
+    assert!(!on.contains("IP-CIDR,10.0.0.0/8,DIRECT"));
+}
+
+#[test]
+fn server_host_is_always_direct_anti_loop() {
+    let raw = format!(
+        "vless://{UUID}@a.example:443?security=reality&pbk=K#Домен\n\
+         vless://{UUID}@203.0.113.7:443?security=reality&pbk=K#Адрес"
+    );
+    let p = parse(&raw).unwrap();
+    let rules = Rules { user_domains: vec![DomainRule { domain: "a.example".into(), vpn: true }], ..Default::default() };
+    let cfg = build_config(&p, &rules, Some("Домен"), Ports::default());
+    let loop_dom = cfg.find("DOMAIN,a.example,DIRECT").expect("анти-петля для домена");
+    let loop_ip = cfg.find("IP-CIDR,203.0.113.7/32,DIRECT,no-resolve").expect("анти-петля для адреса");
+    let user = cfg.find("DOMAIN-SUFFIX,a.example,NoVPN").expect("правило человека");
+    assert!(loop_dom < user && loop_ip < user, "анти-петля стоит выше любых правил человека");
+    // и в полном профиле тоже
+    let full = build_config(&p, &Rules { smart: false, ..Default::default() }, Some("Домен"), Ports::default());
+    assert!(full.contains("DOMAIN,a.example,DIRECT"));
+}
