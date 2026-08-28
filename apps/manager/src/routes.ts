@@ -81,7 +81,7 @@ router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 // ── публично: файлы умной маршрутизации (для NoVPN Desktop) ──
 // Клиентам всегда даётся стабильный URL этой панели, даже когда содержимое —
 // зеркало внешнего источника. Секретов нет, отдаём без авторизации.
-const ROUTING_NAMES = new Set(['upstream', 'sites', 'apps']);
+const ROUTING_NAMES = new Set(['upstream', 'apps']);
 
 // sha256 содержимого — для manifest'а и сильного ETag. Считаем лениво и помним по
 // (файл, версия): пересчитывать хеш многомегабайтного списка на каждый запрос
@@ -113,9 +113,39 @@ router.get('/routing/manifest.json', (req, res) => {
       return d ? { name, version: d.version, sha256: d.sha256, bytes: d.bytes, updatedAt: d.updatedAt, url: `${origin}/routing/${name}.json` } : null;
     })
     .filter(Boolean);
+  // DAT-файлы AutoRoute — тот же датасет, что и upstream.json, в формате V2Ray/Xray.
+  const dat = autoroute.datFiles();
+  const published = repo.listAutoRouteBuilds().find((b) => b.published);
+  for (const [name, buf] of [['geosite', dat.geosite], ['geoip', dat.geoip]] as const) {
+    files.push({
+      name,
+      version: dat.version ?? 0,
+      sha256: crypto.createHash('sha256').update(buf).digest('hex'),
+      bytes: buf.length,
+      updatedAt: published?.builtAt ?? '',
+      url: `${origin}/routing/autoroute/${name}.dat`,
+    });
+  }
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=60');
   res.json({ schemaVersion: CONTRACT_SCHEMA_VERSION, files });
+});
+
+// Публичные DAT-файлы сборки AutoRoute: geosite.dat (домены) и geoip.dat (подсети),
+// тег `novpn`. Для Xray/sing-box/чужих панелей — тот же датасет, что и upstream.json.
+router.get('/routing/autoroute/:file', (req, res) => {
+  const name = String(req.params.file ?? '');
+  if (name !== 'geosite.dat' && name !== 'geoip.dat') return res.status(404).json(err('not_found', 'Файл не найден.'));
+  const dat = autoroute.datFiles();
+  const buf = name === 'geosite.dat' ? dat.geosite : dat.geoip;
+  const etag = `"${crypto.createHash('sha256').update(buf).digest('hex')}"`;
+  res.setHeader('ETag', etag);
+  res.setHeader('Cache-Control', 'public, max-age=60');
+  const inm = req.headers['if-none-match'];
+  if (typeof inm === 'string' && inm.split(',').some((v) => v.trim() === etag)) return res.status(304).end();
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  res.send(buf);
 });
 
 router.get('/routing/:file', (req, res) => {
@@ -237,11 +267,22 @@ router.get('/sub/:token', (req, res) => {
 // (srv=null → глобальная политика для агрегированной подписки). Возвращает JSON или
 // null (пусто/все ссылки битые → НЕ отдаём all-direct утечку). Один источник правды
 // для агрегированной /full и пер-серверной /server/:id/full.
+/** Какие профили Xray положены пользователю на сервере (в порядке выдачи: умный первым).
+ *  Сервер решает, что выдаёт вообще; полный профиль вторым — только если разрешён
+ *  пользователю (u.fullServers). Сервер «только полный» отдаёт полный всем. */
+function profilesFor(u: NonNullable<ReturnType<typeof repo.getUser>>, srv: NonNullable<ReturnType<typeof repo.getServer>>): Array<'smart' | 'full'> {
+  const cfg = repo.getEndpointConfig(srv.host);
+  if (cfg.profiles === 'full') return ['full'];
+  if (cfg.profiles === 'smart') return ['smart'];
+  return u.fullServers.includes(srv.id) ? ['smart', 'full'] : ['smart'];
+}
+
 function buildUserXrayFull(
   u: NonNullable<ReturnType<typeof repo.getUser>>,
   links: string[],
   srv: ReturnType<typeof repo.getServer>,
   overQuota: boolean,
+  profile: 'smart' | 'full' = 'smart',
 ): string | null {
   if (links.length === 0) return null;
   // Значок сервера И флаг страны показываем ВМЕСТЕ, но ФЛАГ СТРАНЫ — ПЕРВЫМ: Happ рисует
@@ -253,9 +294,18 @@ function buildUserXrayFull(
   const title = srv ? [icon, srv.name].filter(Boolean).join(' ') : '';
   // Настройки генерации ПЕР-СЕРВЕР (обход-домены, LAN, набор фоллбэк-прокси, полный
   // туннель), с фолбэком на глобальные, если сервер не задан (агрегированная подписка).
-  const cfg = srv
+  const cfg: ReturnType<typeof repo.getEndpointConfig> = srv
     ? repo.getEndpointConfig(srv.host)
-    : { xrayWhitelist: repo.getSettings().xrayWhitelist !== false, whitelistDomains: repo.getSettings().whitelistDomains, lanAccess: repo.getSettings().lanAccess === true, fallbackTypes: null as null };
+    : {
+        xrayWhitelist: repo.getSettings().xrayWhitelist !== false,
+        profiles: repo.getSettings().xrayWhitelist === false ? 'full' : 'both',
+        fullDefault: true,
+        smartDirection: 'match-vpn',
+        smartSource: 'autoroute',
+        whitelistDomains: repo.getSettings().whitelistDomains,
+        lanAccess: repo.getSettings().lanAccess === true,
+        fallbackTypes: null,
+      };
   // Аварийный фоллбэк — ПЕР-СЕРВЕР: берём ТОЛЬКО прокси ЭТОГО сервера (srv.id), а не все
   // прокси пользователя. Иначе на конфиг одного сервера (напр. домашний полный туннель,
   // где своих прокси нет) навешивались бы прокси ДРУГОГО сервера + observatory/балансиры,
@@ -275,9 +325,33 @@ function buildUserXrayFull(
       }
     }
   }
-  // Пер-серверный «продвинутый режим» выкл → полный туннель (всё через VPN, без исключений).
-  const disableWhitelist = cfg.xrayWhitelist === false;
-  return buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, cfg.whitelistDomains, cfg.lanAccess, disableWhitelist) || null;
+  // Полный VPN: никаких доменных правил, всё в туннель, fail-close.
+  const disableWhitelist = profile === 'full';
+  // Умный профиль. match-vpn (основной): список AutoRoute + свои домены сервера → в VPN,
+  // остальное напрямую. match-direct (унаследованный обход белых списков): свой/встроенный
+  // RU-список → напрямую, остальное в VPN. Свой список сервера ДОПОЛНЯЕТ основной, а не
+  // заменяет его: в обоих направлениях у него то же действие, что и у списка.
+  let domains: string[] = cfg.whitelistDomains ?? [];
+  let ips: string[] = [];
+  if (!disableWhitelist && cfg.smartDirection === 'match-vpn' && cfg.smartSource === 'autoroute') {
+    const sub = autoroute.subscriptionRules();
+    domains = [...sub.domains, ...(cfg.whitelistDomains ?? [])];
+    ips = sub.ips;
+  }
+  const novpn = {
+    profileId: srv ? (profile === 'full' ? `${srv.id}:full` : srv.id) : null,
+    serverId: srv?.id ?? null,
+    host: srv?.host ?? null,
+    mode: profile,
+  };
+  return (
+    buildWhitelistXrayConfig(links, repo.brandName(), proxies, title, domains, cfg.lanAccess, disableWhitelist, {
+      direction: cfg.smartDirection,
+      ipRoutes: ips,
+      novpn,
+      remarkSuffix: profile === 'full' ? ' · Полный VPN' : '',
+    }) || null
+  );
 }
 
 // Заголовки+тело полного конфига (одинаковы для агрегированной и пер-серверной подписки).
@@ -311,8 +385,12 @@ router.get('/sub/:token/full', (req, res) => {
   const parts: string[] = [];
   for (const e of entries) {
     const srv = repo.getServer(e.serverId);
-    const json = buildUserXrayFull(u, [e.link], srv, overQuota);
-    if (json) parts.push(json);
+    // Один конфиг на ПРОФИЛЬ: сервер с обоими режимами даёт два — умный первым,
+    // «Полный VPN» вторым (если разрешён пользователю). Порядок 1:1 с meta.profiles[].
+    for (const profile of srv ? profilesFor(u, srv) : (['smart'] as const)) {
+      const json = buildUserXrayFull(u, [e.link], srv, overQuota, profile);
+      if (json) parts.push(json);
+    }
   }
   if (parts.length === 0) return res.status(404).send(''); // пусто/битое → не отдаём all-direct утечку
   sendUserXrayFull(res, u, parts.length === 1 ? parts[0]! : `[\n${parts.join(',\n')}\n]`);
@@ -346,36 +424,48 @@ router.get('/sub/:token/meta.json', (req, res) => {
   if (u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb)
     return res.status(403).json(err('traffic', 'Лимит трафика исчерпан.'));
   const origin = reqOrigin(req as never);
+  const token = String(req.params.token);
+  // Профили — 1:1 с конфигами агрегированной подписки /sub/<t>/full, в том же порядке:
+  // старейший сервер первым, у сервера — умный профиль, затем «Полный VPN».
+  const entries = [...repo.subscriptionXrayEntries(u.id)].reverse();
   const seen = new Set<string>();
-  const servers: unknown[] = [];
-  for (const e of repo.subscriptionXrayEntries(u.id)) {
+  const profiles: unknown[] = [];
+  for (const e of entries) {
     if (seen.has(e.serverId)) continue;
     seen.add(e.serverId);
     const srv = repo.getServer(e.serverId);
     if (!srv) continue;
     const cfg = repo.getEndpointConfig(srv.host);
-    const icon = srv.flagEmoji || (srv.country ? srv.country.split(' ')[0] : '') || '';
-    servers.push({
-      id: srv.id,
-      host: srv.host,
-      remark: [icon, srv.name].filter(Boolean).join(' '),
-      protocols: srv.protocols,
-      online: srv.agent === 'online' && srv.endpointOk,
-      subLink: `${origin}/sub/${String(req.params.token)}/server/${srv.id}/full`,
-      routing: {
-        mode: cfg.xrayWhitelist ? 'smart' : 'full',
-        // ВНИМАНИЕ на семантику: false (по умолчанию) — приватные подсети идут НАПРЯМУЮ,
-        // мимо туннеля; true — они идут ЧЕРЕЗ туннель (самохостер добирается до локалки
-        // своего сервера). Это одинаково в обоих режимах.
-        lanAccess: cfg.lanAccess,
-        // Какие прокси-каналы разрешены как АВАРИЙНЫЙ транспорт, если Xray заблокируют.
-        // Это не маршрутизация и не список исключений. null = все доступные.
-        fallbackTypes: cfg.fallbackTypes,
-        // Сколько доменов-исключений задано у этого сервера. В режиме full исключения
-        // не применяются вовсе — счётчик только для отображения.
-        ownExceptions: cfg.xrayWhitelist ? (cfg.whitelistDomains?.length ?? 0) : 0,
-      },
-    });
+    // Значок и флаг — ровно как в remarks конфига (флаг страны первым, значок вторым).
+    const emoji = (srv.flagEmoji || '').trim();
+    const cflag = (srv.country || '').trim().match(/^(\p{Regional_Indicator}{2})/u)?.[1] ?? '';
+    const icon = cflag && emoji && cflag !== emoji ? cflag + emoji : cflag || emoji;
+    const baseRemark = [icon, srv.name].filter(Boolean).join(' ');
+    for (const mode of profilesFor(u, srv)) {
+      profiles.push({
+        profileId: mode === 'full' ? `${srv.id}:full` : srv.id,
+        serverId: srv.id,
+        host: srv.host,
+        remark: mode === 'full' ? `${baseRemark} · Полный VPN` : baseRemark,
+        // Умный профиль — рекомендуемый; полный — по явному желанию человека.
+        recommended: mode === 'smart',
+        protocols: srv.protocols,
+        online: srv.agent === 'online' && srv.endpointOk,
+        subLink: `${origin}/sub/${token}/server/${srv.id}/full${mode === 'full' ? '?profile=full' : ''}`,
+        routing: {
+          mode,
+          // ВНИМАНИЕ на семантику: false (по умолчанию) — приватные подсети идут НАПРЯМУЮ,
+          // мимо туннеля; true — они идут ЧЕРЕЗ туннель (самохостер добирается до локалки
+          // своего сервера). Это одинаково в обоих режимах.
+          lanAccess: cfg.lanAccess,
+          // Какие прокси-каналы разрешены как АВАРИЙНЫЙ транспорт, если Xray заблокируют.
+          // Это не маршрутизация и не список исключений. null = все доступные.
+          fallbackTypes: cfg.fallbackTypes,
+          // Сколько собственных доменов сервера дополняют список. В full — 0: правил нет.
+          ownExceptions: mode === 'smart' ? (cfg.whitelistDomains?.length ?? 0) : 0,
+        },
+      });
+    }
   }
   res.setHeader('Cache-Control', 'no-store');
   res.json({
@@ -384,10 +474,11 @@ router.get('/sub/:token/meta.json', (req, res) => {
     routingResources: {
       manifest: `${origin}/routing/manifest.json`,
       upstream: `${origin}/routing/upstream.json`,
-      sites: `${origin}/routing/sites.json`,
       apps: `${origin}/routing/apps.json`,
+      geosite: `${origin}/routing/autoroute/geosite.dat`,
+      geoip: `${origin}/routing/autoroute/geoip.dat`,
     },
-    servers,
+    profiles,
   });
 });
 
@@ -404,7 +495,11 @@ router.get('/sub/:token/server/:id/full', (req, res) => {
   if (!srv || srv.detached || !srv.protocols.includes('xray')) return res.status(404).send('');
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
   const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id, serverId);
-  const json = buildUserXrayFull(u, links, srv, overQuota);
+  // ?profile=full — отдельный импорт профиля «Полный VPN» (только если он положен).
+  const wanted = String(req.query.profile ?? '') === 'full' ? 'full' : 'smart';
+  const allowed = profilesFor(u, srv);
+  const profile = allowed.includes(wanted) ? wanted : allowed[0]!;
+  const json = buildUserXrayFull(u, links, srv, overQuota, profile);
   if (!json) return res.status(404).send('');
   sendUserXrayFull(res, u, json);
 });
@@ -824,6 +919,12 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.expiresAt !== undefined) fields.expires_at = b.expiresAt; // null = снять срок
   if (b.resetPolicy !== undefined) fields.reset_policy = b.resetPolicy === 'monthly' ? 'monthly' : 'never';
   if (b.allowedServers !== undefined) fields.allowed_servers = JSON.stringify(b.allowedServers);
+  // Полный VPN разрешаем только на серверах из allowedServers (новых или текущих):
+  // право на второй профиль не должно переживать отзыв самого сервера.
+  if (b.fullServers !== undefined) {
+    const scope = new Set<string>(Array.isArray(b.allowedServers) ? (b.allowedServers as string[]) : u.allowedServers);
+    fields.full_servers = JSON.stringify((Array.isArray(b.fullServers) ? (b.fullServers as unknown[]).map(String) : []).filter((s) => scope.has(s)));
+  }
   if (b.allowedProtocols !== undefined)
     fields.allowed_protocols = JSON.stringify(
       (Array.isArray(b.allowedProtocols) ? (b.allowedProtocols as string[]) : []).filter((p) => p === 'xray' || p === 'amneziawg'),
@@ -1394,6 +1495,11 @@ router.put('/api/admin/servers/:id/endpoint-config', requireAdmin, (req, res) =>
   if ('lanAccess' in b) patch.lanAccess = b.lanAccess === null ? null : !!b.lanAccess;
   if ('whitelistDomains' in b) patch.whitelistDomains = b.whitelistDomains === null ? null : (Array.isArray(b.whitelistDomains) ? b.whitelistDomains.map((x: unknown) => String(x).trim()).filter(Boolean) : null);
   if ('fallbackTypes' in b) patch.fallbackTypes = b.fallbackTypes === null ? null : (Array.isArray(b.fallbackTypes) ? b.fallbackTypes.filter((x: unknown) => x === 'https' || x === 'http' || x === 'socks') : null);
+  // Профили подписки и параметры умного профиля.
+  if ('profiles' in b) patch.profiles = b.profiles === 'smart' || b.profiles === 'full' || b.profiles === 'both' ? b.profiles : null;
+  if ('fullDefault' in b) patch.fullDefault = b.fullDefault === null ? null : !!b.fullDefault;
+  if ('smartDirection' in b) patch.smartDirection = b.smartDirection === 'match-direct' ? 'match-direct' : b.smartDirection === 'match-vpn' ? 'match-vpn' : null;
+  if ('smartSource' in b) patch.smartSource = b.smartSource === 'local' ? 'local' : b.smartSource === 'autoroute' ? 'autoroute' : null;
   repo.setEndpointConfig(s.host, patch);
   res.json({ ok: true, config: repo.getEndpointConfig(s.host) });
 });
@@ -1656,7 +1762,7 @@ router.post('/api/admin/routing/:name/check', requireAdmin, async (req, res) => 
   const name = String(req.params.name);
   if (!repo.getRoutingRow(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
   try {
-    const result = await checkMirror(name as 'upstream' | 'sites' | 'apps', { apply: false });
+    const result = await checkMirror(name as 'upstream' | 'apps', { apply: false });
     res.json(result);
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка проверки.'));
@@ -1743,6 +1849,11 @@ router.post('/api/admin/autoroute/rollback', requireAdmin, (req, res) => {
   const r = autoroute.rollbackTo(autoroute.DATASET, version);
   if (!r.ok) return res.status(404).json(err('not_found', r.reason));
   res.json(r);
+});
+// Поиск по опубликованной сборке: откуда пришло правило, какое действие, приоритет.
+router.get('/api/admin/autoroute/search', requireAdmin, (req, res) => {
+  const q = String(req.query.q ?? '').slice(0, 253);
+  res.json({ query: q, hits: autoroute.searchRules(q) });
 });
 
 // ── admin: канал обновлений NoVPN Desktop ──

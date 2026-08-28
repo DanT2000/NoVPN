@@ -7,12 +7,12 @@
   "routingResources": {
     "manifest": "https://old.example/routing/manifest.json",
     "upstream": "https://old.example/routing/upstream.json",
-    "sites": "https://old.example/routing/sites.json",
     "apps": "https://old.example/routing/apps.json"
   },
-  "servers": [
+  "profiles": [
     {
-      "id": "s_legacy",
+      "profileId": "s_legacy",
+      "serverId": "s_legacy",
       "host": "legacy.example",
       "remark": "Старый",
       "protocols": [

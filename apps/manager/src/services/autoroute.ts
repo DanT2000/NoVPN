@@ -18,12 +18,14 @@ import type {
   AutoRouteBuildResult,
   AutoRouteBuildSource,
   AutoRouteConflict,
+  AutoRouteSearchHit,
   AutoRouteState,
   RoutingAction,
   RoutingSourceFormat,
   RoutingSourceStats,
 } from '@novpn/shared';
 import { convertList, detectSourceFormat } from '../lib/routingConvert.js';
+import { encodeGeoIp, encodeGeoSite } from '../lib/geodat.js';
 import { parseSource, ruleKey, type ParsedRule } from '../lib/routingRules.js';
 import { decompileSrs, SingboxUnavailableError } from './singbox.js';
 import { fetchSource, ROUTING_MAX_BYTES } from './routingSync.js';
@@ -262,6 +264,10 @@ function publishBuild(dataset: string, version: number, rules: StoredRule[]): vo
   repo.saveRoutingContent(dataset, content);
   repo.saveRoutingSource(dataset, { mode: 'local' });
   repo.markAutoRouteBuildPublished(dataset, version);
+  // Кеши правил/DAT привязаны к версии; сбрасываем, чтобы подписка и DAT сразу
+  // отдавали новую сборку, а не дожидались следующего сравнения версий.
+  publishedCache.delete(dataset);
+  datCache.delete(dataset);
 }
 
 /** Откатиться на сохранённую версию: публикуем её содержимое как есть. */
@@ -279,13 +285,94 @@ export function rollbackTo(dataset: string, version: number): { ok: boolean; rea
   return { ok: true, reason: `Опубликована версия v${version}.` };
 }
 
+/** Правила опубликованной версии (или [] — ещё не собирали). Кешируем по версии:
+ *  их читает КАЖДАЯ выдача подписки, а JSON на сотни тысяч записей парсить на каждый
+ *  запрос — это секунды. */
+const publishedCache = new Map<string, { version: number; rules: StoredRule[] }>();
+export function publishedRules(dataset = DATASET): StoredRule[] {
+  const version = repo.getPublishedAutoRouteVersion(dataset);
+  if (version == null) return [];
+  const c = publishedCache.get(dataset);
+  if (c && c.version === version) return c.rules;
+  const raw = repo.getAutoRouteBuildRules(dataset, version);
+  let rules: StoredRule[] = [];
+  try {
+    rules = raw ? (JSON.parse(raw) as StoredRule[]) : [];
+  } catch {
+    rules = [];
+  }
+  publishedCache.set(dataset, { version, rules });
+  return rules;
+}
+
+// Потолок правил, которые зашиваются в телефонный Xray-конфиг. Полная сборка (Re:filter
+// и т.п.) — это сотни тысяч записей и мегабайты JSON, Happ/v2rayNG на таком конфиге
+// работают плохо. Публичный upstream.json и DAT отдаются БЕЗ потолка; в подписку идут
+// первые SUBSCRIPTION_CAP по приоритету источников. Факт обрезки виден в AutoRoute.
+export const SUBSCRIPTION_CAP = 30_000;
+
+/** Правила для Xray-подписки: только с действием «в VPN», в формате префиксов Xray
+ *  (domain:/full:/keyword:/regexp:) и отдельно CIDR. С потолком. */
+export function subscriptionRules(dataset = DATASET): { domains: string[]; ips: string[]; total: number; truncated: boolean } {
+  const all = publishedRules(dataset).filter((r) => r.a === 'vpn');
+  const slice = all.slice(0, SUBSCRIPTION_CAP);
+  const domains: string[] = [];
+  const ips: string[] = [];
+  for (const r of slice) {
+    if (r.k === 'ip') ips.push(r.v);
+    else domains.push(`${r.k}:${r.v}`);
+  }
+  return { domains, ips, total: all.length, truncated: all.length > slice.length };
+}
+
+/** Публичные DAT-файлы из опубликованной сборки (кеш по версии: байты детерминированы). */
+const datCache = new Map<string, { version: number; geosite: Buffer; geoip: Buffer }>();
+export function datFiles(dataset = DATASET): { version: number | null; geosite: Buffer; geoip: Buffer } {
+  const version = repo.getPublishedAutoRouteVersion(dataset);
+  const c = datCache.get(dataset);
+  if (version != null && c && c.version === version) return { version, geosite: c.geosite, geoip: c.geoip };
+  const rules = publishedRules(dataset).filter((r) => r.a === 'vpn');
+  const geosite = encodeGeoSite(rules.filter((r) => r.k !== 'ip').map((r) => ({ kind: r.k as Exclude<typeof r.k, 'ip'>, value: r.v })));
+  const geoip = encodeGeoIp(rules.filter((r) => r.k === 'ip').map((r) => r.v));
+  if (version != null) datCache.set(dataset, { version, geosite, geoip });
+  return { version, geosite, geoip };
+}
+
+/** Поиск по опубликованной сборке: что за правило, из какого источника, с каким
+ *  приоритетом. Домен ищем и по точному значению, и по родительским доменам
+ *  (запрос «api.openai.com» находит правило «openai.com»). */
+export function searchRules(query: string, dataset = DATASET, limit = 50): AutoRouteSearchHit[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const sources = new Map(repo.listAutoRouteSources(dataset).map((s) => [s.id, s]));
+  const parents = new Set<string>();
+  const labels = q.split('.');
+  for (let i = 0; i < labels.length - 1; i++) parents.add(labels.slice(i).join('.'));
+  const hits: AutoRouteSearchHit[] = [];
+  for (const r of publishedRules(dataset)) {
+    const exact = r.v === q;
+    const parent = r.k === 'domain' && parents.has(r.v);
+    const partial = !exact && !parent && r.v.includes(q);
+    if (!exact && !parent && !partial) continue;
+    const s = sources.get(r.s);
+    hits.push({ kind: r.k, value: r.v, action: r.a, sourceId: r.s, sourceTitle: s?.title ?? r.s, priority: s?.priority ?? 999 });
+    if (hits.length >= limit * 4) break;
+  }
+  // Точные и родительские совпадения — первыми, затем частичные; внутри — по приоритету.
+  const rank = (h: AutoRouteSearchHit) => (h.value === q ? 0 : parents.has(h.value) ? 1 : 2);
+  return hits.sort((a, b) => rank(a) - rank(b) || a.priority - b.priority).slice(0, limit);
+}
+
 export function getState(origin: string, dataset = DATASET): AutoRouteState {
+  const sub = subscriptionRules(dataset);
   return {
     dataset,
     sources: repo.listAutoRouteSources(dataset),
     builds: repo.listAutoRouteBuilds(dataset),
     publishedVersion: repo.getPublishedAutoRouteVersion(dataset),
     publicUrl: `${origin}/routing/${dataset}.json`,
+    dat: { geosite: `${origin}/routing/autoroute/geosite.dat`, geoip: `${origin}/routing/autoroute/geoip.dat` },
+    subscription: { rules: sub.domains.length + sub.ips.length, cap: SUBSCRIPTION_CAP, truncated: sub.truncated },
   };
 }
 

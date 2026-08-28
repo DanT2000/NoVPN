@@ -71,17 +71,36 @@ export interface Server {
   routing?: ServerRoutingSummary;
 }
 
-/** Как этот сервер выдаёт конфиги. `smart` — умная маршрутизация (список идёт мимо
- *  туннеля), `full` — полный туннель без исключений. Хранится как xray_whitelist
- *  в server_keys: это ровно та же настройка, просто названная по-человечески. */
+/** Режим одного профиля в подписке. `smart` — умная маршрутизация: список AutoRoute
+ *  (что не работает в России) идёт в VPN, всё остальное — напрямую. `full` — полный
+ *  туннель, весь трафик в VPN без исключений. */
 export type ServerRoutingMode = 'smart' | 'full';
 
+/** Какие профили выдаёт сервер: только умный, только полный или оба (умный первым,
+ *  полный — вторым, по разрешению пользователя). */
+export type ServerRoutingProfiles = 'smart' | 'full' | 'both';
+
+/** Направление умного профиля. `match-vpn` (основной): список → VPN, остальное
+ *  напрямую. `match-direct` (унаследованный «обход белых списков»): список →
+ *  напрямую, остальное в VPN. */
+export type SmartDirection = 'match-vpn' | 'match-direct';
+
+/** Откуда умный профиль берёт список. `autoroute` — опубликованная сборка AutoRoute;
+ *  `local` — только свой список сервера (или встроенный RU-список в match-direct). */
+export type SmartSourceKind = 'autoroute' | 'local';
+
 export interface ServerRoutingSummary {
+  /** Оставлено для совместимости: 'full' если сервер выдаёт ТОЛЬКО полный профиль. */
   mode: ServerRoutingMode;
+  profiles: ServerRoutingProfiles;
+  direction: SmartDirection;
+  source: SmartSourceKind;
+  /** Новым пользователям этого сервера Полный VPN разрешён по умолчанию. */
+  fullByDefault: boolean;
   lanAccess: boolean;
   /** null = разрешены все доступные запасные каналы. */
   fallbackTypes: ('https' | 'http' | 'socks')[] | null;
-  /** Сколько доменов-исключений задано ИМЕННО у этого сервера (0 — берётся общий список). */
+  /** Сколько доменов задано ИМЕННО у этого сервера (дополняют основной список). */
   ownExceptions: number;
 }
 
@@ -110,6 +129,9 @@ export interface User {
   /** Типы прокси, которые пользователь может себе выдать в кабинете (если они
    *  установлены на сервере). Пусто — прокси недоступны. */
   allowedProxies: ProxyType[];
+  /** Серверы, на которых пользователю разрешён профиль «Полный VPN» (вторым профилем
+   *  в подписке Xray). Работает только там, где сервер выдаёт оба профиля. */
+  fullServers: string[];
   isActive: boolean;
   telegram: string | null;
   createdAt: string;
@@ -254,10 +276,10 @@ export interface AppSettings {
 // Каждый файл может управляться локально ИЛИ зеркалить внешний URL.
 // Публичные URL панели неизменны: /routing/<name>.json.
 //
-// `sites` остаётся: NoVPN Desktop читает /routing/sites.json наравне с upstream и
-// apps. Файл кратко убирали как «клиентскую, а не серверную сущность», но клиент на
-// него опирается — ломать URL без согласованной с клиентом миграции нельзя.
-export type RoutingFileName = 'upstream' | 'sites' | 'apps';
+// `sites` убран окончательно (решение владельца, подтверждено трижды): список сайтов —
+// локальная настройка пользователя в NoVPN Desktop (в т.ч. одним кликом из расширения),
+// с панелью не синхронизируется. Клиент при 404 держит last-known-good и не ломается.
+export type RoutingFileName = 'upstream' | 'apps';
 export type RoutingMode = 'local' | 'mirror';
 /** Состояние последней проверки внешнего источника. */
 export type RoutingSyncStatus = 'idle' | 'ok' | 'nochange' | 'error' | 'rejected';
@@ -414,6 +436,21 @@ export interface AutoRouteState {
   /** Версия, опубликованная на публичном URL (null — ещё ни разу не собирали). */
   publishedVersion: number | null;
   publicUrl: string;
+  /** Публичные DAT-файлы (формат V2Ray/Xray geosite/geoip, тег `novpn`). */
+  dat: { geosite: string; geoip: string };
+  /** Сколько правил из опубликованной сборки реально зашивается в подписку Xray
+   *  (есть потолок — телефонный конфиг не должен раздуваться до мегабайт). */
+  subscription: { rules: number; cap: number; truncated: boolean };
+}
+
+/** Результат поиска по опубликованной сборке: откуда пришло правило и почему победило. */
+export interface AutoRouteSearchHit {
+  kind: RoutingRuleKind;
+  value: string;
+  action: RoutingAction;
+  sourceId: string;
+  sourceTitle: string;
+  priority: number;
 }
 
 /** Итог одной пересборки. */

@@ -20,6 +20,9 @@ const { seedIfEmpty } = await import('../src/seed.js');
 const autoroute = await import('../src/services/autoroute.js');
 
 seedIfEmpty();
+// Свежая БД получает источники по умолчанию («что не работает в России»); тесты
+// слияния/приоритетов рассчитывают на пустой список — убираем их.
+for (const s of repo.listAutoRouteSources()) repo.deleteAutoRouteSource(s.id);
 
 function stubFetch(body: string, headers: Record<string, string> = {}) {
   (globalThis as any).fetch = async () => new Response(body, { status: 200, headers });
@@ -212,4 +215,53 @@ test('сборка без включённых источников не пуб�
   assert.equal(res.ok, false);
   assert.equal(res.build, null);
   assert.equal(repo.getRoutingContent('upstream'), before, 'содержимое не тронуто');
+});
+
+test('subscriptionRules: только action=vpn, префиксы Xray, CIDR отдельно, потолок честно помечен', async () => {
+  const vpn = repo.addAutoRouteSource({ title: 'В VPN', url: 'https://src/vpn.lst', action: 'vpn' });
+  const direct = repo.addAutoRouteSource({ title: 'Напрямую', url: 'https://src/direct.lst', action: 'direct' });
+  stubFetch('blocked.ru\nfull:exact.ru\n10.0.0.0/8\n');
+  await autoroute.refreshSource(vpn.id);
+  stubFetch('home.ru\n');
+  await autoroute.refreshSource(direct.id);
+  autoroute.buildDataset();
+  const sub = autoroute.subscriptionRules();
+  assert.deepEqual(sub.domains.sort(), ['domain:blocked.ru', 'full:exact.ru']);
+  assert.deepEqual(sub.ips, ['10.0.0.0/8']);
+  assert.equal(sub.truncated, false);
+  assert.equal(sub.total, 3, 'direct-правила в подписку не идут');
+  assert.ok(autoroute.SUBSCRIPTION_CAP >= 10_000);
+  repo.deleteAutoRouteSource(vpn.id);
+  repo.deleteAutoRouteSource(direct.id);
+});
+
+test('searchRules: точное, родительский домен и частичное совпадение, с источником и приоритетом', async () => {
+  const s = repo.addAutoRouteSource({ title: 'Поисковый', url: 'https://src/search.lst', action: 'vpn' });
+  stubFetch('openai.com\nyoutube.com\n');
+  await autoroute.refreshSource(s.id);
+  autoroute.buildDataset();
+  const exact = autoroute.searchRules('openai.com');
+  assert.equal(exact[0]!.value, 'openai.com');
+  assert.equal(exact[0]!.sourceTitle, 'Поисковый');
+  assert.equal(exact[0]!.action, 'vpn');
+  const parent = autoroute.searchRules('api.openai.com');
+  assert.equal(parent[0]!.value, 'openai.com', 'поддомен находит правило родителя');
+  const partial = autoroute.searchRules('tube');
+  assert.ok(partial.some((h) => h.value === 'youtube.com'));
+  assert.deepEqual(autoroute.searchRules('   '), []);
+  repo.deleteAutoRouteSource(s.id);
+});
+
+test('datFiles: пересборка сбрасывает кеш — DAT сразу отражает новую версию', async () => {
+  const s = repo.addAutoRouteSource({ title: 'DAT', url: 'https://src/dat.lst', action: 'vpn' });
+  stubFetch('one.example\n');
+  await autoroute.refreshSource(s.id);
+  autoroute.buildDataset();
+  const before = autoroute.datFiles().geosite;
+  stubFetch('one.example\ntwo.example\n');
+  await autoroute.refreshSource(s.id);
+  autoroute.buildDataset();
+  const after = autoroute.datFiles().geosite;
+  assert.notDeepEqual(before, after);
+  repo.deleteAutoRouteSource(s.id);
 });

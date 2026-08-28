@@ -199,4 +199,6 @@ export const httpApi: ApiClient = {
     ),
   buildAutoRoute: (opts) => req<import('@novpn/shared').AutoRouteBuildResult>('POST', '/api/admin/autoroute/build', opts ?? {}),
   rollbackAutoRoute: (version) => req<{ ok: boolean; reason: string }>('POST', '/api/admin/autoroute/rollback', { version }),
+  searchAutoRoute: (q) =>
+    req<{ query: string; hits: import('@novpn/shared').AutoRouteSearchHit[] }>('GET', `/api/admin/autoroute/search?q=${encodeURIComponent(q)}`),
 };

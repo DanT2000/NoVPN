@@ -76,7 +76,7 @@ function EndpointConfigPanel({ server }: { server: Server }) {
       if (!alive) return;
       setCfg(r.config);
       setWl((r.config.whitelistDomains ?? []).join('\n'));
-    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null }); });
+    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', fullDefault: true, smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fallbackTypes: null }); });
     return () => { alive = false; };
   }, [server.host]);
 
@@ -110,26 +110,63 @@ function EndpointConfigPanel({ server }: { server: Server }) {
         в одной стране один список обхода, в другой — другой.
       </div>
 
-      <div className="body small muted" style={{ margin: '0 0 4px' }}>Режим выдачи:</div>
+      <div className="body small muted" style={{ margin: '0 0 4px' }}>Какие профили выдаёт этот сервер в подписке Xray:</div>
       <div className="chip-row" style={{ marginBottom: 6 }}>
-        <Chip
-          label="Умная маршрутизация"
-          active={cfg.xrayWhitelist !== false}
-          disabled={busy}
-          onClick={() => void save({ xrayWhitelist: true } as Partial<EndpointConfigView>)}
-        />
-        <Chip
-          label="Полный VPN"
-          active={cfg.xrayWhitelist === false}
-          disabled={busy}
-          onClick={() => void save({ xrayWhitelist: false } as Partial<EndpointConfigView>)}
-        />
+        <Chip label="Оба: умный + полный" active={cfg.profiles === 'both'} disabled={busy} onClick={() => void save({ profiles: 'both' })} />
+        <Chip label="Только умная маршрутизация" active={cfg.profiles === 'smart'} disabled={busy} onClick={() => void save({ profiles: 'smart' })} />
+        <Chip label="Только полный VPN" active={cfg.profiles === 'full'} disabled={busy} onClick={() => void save({ profiles: 'full' })} />
       </div>
       <div className="body small muted" style={{ marginBottom: 10 }}>
-        {cfg.xrayWhitelist !== false
-          ? 'Список ниже идёт напрямую, всё остальное — через VPN. Обычный режим для всех пользователей.'
-          : 'Весь трафик идёт через VPN, исключений нет. Выдавайте только там, где это действительно нужно: список доменов ниже в этом режиме не применяется.'}
+        {cfg.profiles === 'both'
+          ? 'В приложении у человека появятся два профиля этого сервера: «умный» первым (рекомендуемый) и «Полный VPN» вторым — если он разрешён пользователю.'
+          : cfg.profiles === 'smart'
+            ? 'Один профиль: что не работает в России — через VPN, остальное напрямую.'
+            : 'Один профиль: весь трафик через VPN без исключений. Список доменов ниже не применяется.'}
       </div>
+
+      {cfg.profiles === 'both' ? (
+        <div className="chip-row" style={{ marginBottom: 10 }}>
+          <Chip
+            label={cfg.fullDefault ? 'Новым пользователям полный VPN: разрешён' : 'Новым пользователям полный VPN: закрыт'}
+            active={cfg.fullDefault}
+            disabled={busy}
+            onClick={() => void save({ fullDefault: !cfg.fullDefault })}
+          />
+        </div>
+      ) : null}
+
+      {cfg.profiles !== 'full' ? (
+        <>
+          <div className="body small muted" style={{ margin: '6px 0 4px' }}>Умный профиль — откуда список и куда он ведёт:</div>
+          <div className="chip-row" style={{ marginBottom: 4 }}>
+            <Chip
+              label="AutoRoute: список → в VPN, остальное напрямую"
+              active={cfg.smartSource === 'autoroute' && cfg.smartDirection === 'match-vpn'}
+              disabled={busy}
+              onClick={() => void save({ smartSource: 'autoroute', smartDirection: 'match-vpn' })}
+            />
+            <Chip
+              label="Свой список → в VPN, остальное напрямую"
+              active={cfg.smartSource === 'local' && cfg.smartDirection === 'match-vpn'}
+              disabled={busy}
+              onClick={() => void save({ smartSource: 'local', smartDirection: 'match-vpn' })}
+            />
+            <Chip
+              label="Обход белых списков: список → напрямую, остальное в VPN"
+              active={cfg.smartDirection === 'match-direct'}
+              disabled={busy}
+              onClick={() => void save({ smartSource: 'local', smartDirection: 'match-direct' })}
+            />
+          </div>
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            {cfg.smartDirection === 'match-direct'
+              ? 'Унаследованный режим: всё идёт через VPN, а список ниже (или встроенный RU-список) — напрямую.'
+              : cfg.smartSource === 'autoroute'
+                ? 'Основной режим. База собирается в разделе AutoRoute; домены ниже дополняют её.'
+                : 'Через VPN идёт только то, что перечислено ниже. Если список пуст — весь трафик напрямую.'}
+          </div>
+        </>
+      ) : null}
 
       <div className="chip-row" style={{ marginBottom: 6 }}>
         <Chip label={cfg.lanAccess ? 'Доступ в локалку: вкл' : 'Доступ в локалку: выкл'} active={cfg.lanAccess} disabled={busy} onClick={() => void save({ lanAccess: !cfg.lanAccess })} />
@@ -144,8 +181,12 @@ function EndpointConfigPanel({ server }: { server: Server }) {
       </div>
 
       <Field
-        label="Домены обхода этого сервера (по одному в строке)"
-        hint="По одному домену в строке, без префикса domain: — просто «ya.ru» (охватит и поддомены www.ya.ru). Точное совпадение — «full:go.yandex». Эти домены идут напрямую, мимо VPN. Пусто → берётся глобальный список. Меняется без переустановки."
+        label="Свои домены этого сервера (по одному в строке)"
+        hint={
+          cfg.smartDirection === 'match-direct'
+            ? 'Идут напрямую, мимо VPN. Просто «ya.ru» = и поддомены; «full:go.yandex» = точное совпадение. Пусто → глобальный/встроенный список. Меняется без переустановки.'
+            : 'Дополняют список «в VPN»: просто «example.com» = и поддомены; «full:x.y» = точное совпадение. В полном профиле не применяются. Меняется без переустановки.'
+        }
       >
         <textarea
           className="textarea mono"
@@ -668,13 +709,22 @@ export function Servers() {
                     <div style={{ minWidth: 0 }}>
                       <div className="eyebrow" style={{ marginBottom: 4 }}>Маршрутизация</div>
                       <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                        <b style={{ fontSize: 14, color: s.routing.mode === 'full' ? 'var(--amber-fg)' : 'var(--text-primary)' }}>
-                          {s.routing.mode === 'full' ? 'Полный VPN' : 'Умная маршрутизация'}
+                        <b style={{ fontSize: 14, color: s.routing.profiles === 'full' ? 'var(--amber-fg)' : 'var(--text-primary)' }}>
+                          {s.routing.profiles === 'both'
+                            ? 'Умная маршрутизация + Полный VPN'
+                            : s.routing.profiles === 'full'
+                              ? 'Только полный VPN'
+                              : 'Умная маршрутизация'}
                         </b>
                         <span className="small muted">
-                          {s.routing.ownExceptions > 0
-                            ? `свои исключения: ${s.routing.ownExceptions}`
-                            : 'исключения: общий список'}
+                          {s.routing.profiles !== 'full'
+                            ? s.routing.direction === 'match-direct'
+                              ? 'обход белых списков'
+                              : s.routing.source === 'autoroute'
+                                ? 'база AutoRoute'
+                                : 'свой список'
+                            : 'без исключений'}
+                          {s.routing.ownExceptions > 0 ? ` · своих доменов: ${s.routing.ownExceptions}` : ''}
                           {' · '}LAN: {s.routing.lanAccess ? 'вкл' : 'выкл'}
                           {' · '}запасные: {s.routing.fallbackTypes === null ? 'все' : s.routing.fallbackTypes.length ? s.routing.fallbackTypes.join(', ').toUpperCase() : 'нет'}
                         </span>

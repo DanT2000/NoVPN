@@ -3,15 +3,14 @@ import type { RoutingCheckResult, RoutingFileMeta, RoutingFileName, RoutingSourc
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { Chip, Field, Loading, Panel, Toggle } from '../components/ui';
-import { AutoRoute } from './AutoRoute';
 import { JsonEditor } from '../components/JsonEditor';
 import type { JsonValidity } from '../components/JsonEditor';
 import { downloadText } from '../lib/clipboard';
 
 const FILES: { name: RoutingFileName; title: string; blurb: string }[] = [
-  // Upstream сюда не входит: им управляет AutoRoute (сборка из многих источников),
-  // а не одиночный редактор файла. Остальные — обычные управляемые файлы.
-  { name: 'sites', title: 'Sites JSON', blurb: 'Правила по сайтам/доменам. Читается NoVPN Desktop по постоянному адресу /routing/sites.json.' },
+  // Upstream сюда не входит: им управляет AutoRoute (отдельный редактор, сборка из
+  // многих источников). Sites убран — список сайтов пользователь ведёт локально в
+  // NoVPN Desktop. Остаётся только каталог приложений.
   { name: 'apps', title: 'Apps JSON', blurb: 'Каталог приложений: имена процессов, пути установки, иконки, рекомендуемый маршрут.' },
 ];
 
@@ -73,6 +72,7 @@ function StatsRows({ stats }: { stats: RoutingSourceStats | null | undefined }) 
 }
 
 export function SmartRouting() {
+  const { goAdmin } = useApp();
   const [files, setFiles] = useState<RoutingFileMeta[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -104,7 +104,19 @@ export function SmartRouting() {
 
       {err ? <div className="notice notice-red" style={{ marginBottom: 14 }}>{err}</div> : null}
       <div className="stack" style={{ gap: 16, maxWidth: 760 }}>
-        <AutoRoute />
+        {/* Основная база — в отдельном редакторе AutoRoute; здесь только вход в него. */}
+        <Panel title="AutoRoute — основная база">
+          <div className="body small muted" style={{ marginTop: -2 }}>
+            Что не работает в России — идёт через VPN, остальное напрямую. Источники, приоритеты, версии и откат,
+            публичные DAT/JSON-ссылки и проверка домена — всё в отдельном редакторе.
+          </div>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn btn-primary btn-sm" onClick={() => goAdmin('autoroute')}>Открыть AutoRoute</button>
+            <a className="btn btn-outline btn-sm" href={`${origin}/routing/autoroute/geosite.dat`} target="_blank" rel="noreferrer">geosite.dat</a>
+            <a className="btn btn-outline btn-sm" href={`${origin}/routing/autoroute/geoip.dat`} target="_blank" rel="noreferrer">geoip.dat</a>
+            <a className="btn btn-outline btn-sm" href={`${origin}/routing/upstream.json`} target="_blank" rel="noreferrer">upstream.json</a>
+          </div>
+        </Panel>
         {!files ? (
           <Loading text="Загрузка…" />
         ) : (

@@ -363,6 +363,19 @@ for (const stmt of [
   // Уровень записи журнала ошибок: 'error' | 'warn' | 'info' — для красивого вида
   // и фильтрации логов в админке.
   "ALTER TABLE job_errors ADD COLUMN level TEXT NOT NULL DEFAULT 'error'",
+  // ── Профили подписки Xray ──
+  // Какие профили выдаёт сервер: 'smart' | 'full' | 'both' (NULL = унаследовать из
+  // xray_whitelist: true→both, false→full — см. бэкфилл ниже).
+  'ALTER TABLE server_keys ADD COLUMN profiles TEXT',
+  // Новым пользователям сервера Полный VPN разрешён по умолчанию (1) или закрыт (0).
+  'ALTER TABLE server_keys ADD COLUMN full_default INTEGER',
+  // Направление умного профиля: 'match-vpn' (список → VPN, остальное напрямую) или
+  // 'match-direct' (унаследованный обход белых списков). NULL = match-vpn.
+  'ALTER TABLE server_keys ADD COLUMN smart_direction TEXT',
+  // Источник списка умного профиля: 'autoroute' (сборка) или 'local' (свой список). NULL = autoroute.
+  'ALTER TABLE server_keys ADD COLUMN smart_source TEXT',
+  // Серверы, на которых пользователю разрешён профиль «Полный VPN» (JSON-массив id).
+  'ALTER TABLE users ADD COLUMN full_servers TEXT',
   // Прокси-логин снят с сервера по квоте (обратимо, симметрично устройствам): при
   // возврате под лимит логин поднимается заново тем же паролем. is_active остаётся 1.
   'ALTER TABLE proxy_accounts ADD COLUMN quota_blocked INTEGER NOT NULL DEFAULT 0',
@@ -424,17 +437,50 @@ try {
   /* таблиц ещё нет */
 }
 
-// Восстановление файла `sites` после его кратковременного удаления: строку сносила
-// миграция, а NoVPN Desktop читает /routing/sites.json — без строки публичный URL
-// отдавал 404. Создаём пустой файл, если его нет; содержимое админ вернёт из
-// источника или бэкапа. Существующую строку не трогаем.
+// Файл `sites` упразднён окончательно: список сайтов — локальная настройка пользователя
+// в NoVPN Desktop, с панелью не синхронизируется. Строку убираем, чтобы публичный URL
+// не висел; клиент при 404 живёт своим локальным списком.
 try {
-  db.prepare("INSERT INTO routing_files(name, content, version, updated_at) VALUES('sites', ?, 1, ?) ON CONFLICT(name) DO NOTHING").run(
-    '{\n  "items": []\n}',
-    new Date().toISOString(),
-  );
+  db.prepare("DELETE FROM routing_files WHERE name = 'sites'").run();
 } catch {
   /* таблицы ещё нет */
+}
+
+// AutoRoute: источники по умолчанию — «что не работает в России». Добавляются один
+// раз, только если у датасета ещё нет ни одного источника с таким URL. Порядок =
+// приоритет: курируемый компактный список первым, объёмные — ниже.
+try {
+  const DEFAULT_SOURCES: Array<{ id: string; title: string; url: string }> = [
+    { id: 'rs_itdog_inside', title: 'itdoginfo · заблокировано в России', url: 'https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/inside-raw.lst' },
+    { id: 'rs_refilter_domains', title: 'Re:filter · домены', url: 'https://raw.githubusercontent.com/1andrevich/Re-filter-lists/main/domains_all.lst' },
+    { id: 'rs_refilter_ips', title: 'Re:filter · IP-подсети', url: 'https://raw.githubusercontent.com/1andrevich/Re-filter-lists/main/ipsum.lst' },
+    { id: 'rs_antifilter_community', title: 'Antifilter Community · домены', url: 'https://community.antifilter.download/list/domains.lst' },
+  ];
+  const have = new Set((db.prepare("SELECT url FROM routing_sources WHERE dataset = 'upstream'").all() as Array<{ url: string }>).map((r) => r.url));
+  let next = ((db.prepare("SELECT MAX(priority) AS m FROM routing_sources WHERE dataset = 'upstream'").get() as { m: number | null }).m ?? -1) + 1;
+  const ins = db.prepare(
+    `INSERT OR IGNORE INTO routing_sources(id, dataset, title, url, format, action, enabled, priority, created_at)
+     VALUES(?, 'upstream', ?, ?, 'auto', 'vpn', 1, ?, ?)`,
+  );
+  for (const s of DEFAULT_SOURCES) {
+    if (have.has(s.url)) continue;
+    ins.run(s.id, s.title, s.url, next++, new Date().toISOString());
+  }
+  // Унаследованный источник дублирует itdoginfo по URL — под общим именем он понятнее.
+  db.prepare("UPDATE routing_sources SET title = 'itdoginfo · заблокировано в России' WHERE id = 'rs_legacy_upstream' AND title = 'Прежний внешний источник'").run();
+} catch {
+  /* таблиц ещё нет */
+}
+
+// Профили подписки: бэкфилл. Серверы, которые выдавали «умный» конфиг, теперь выдают
+// ОБА профиля (владелец: «пользователи, которые уже есть — у них всех ещё и будет
+// full»), серверы с полным туннелем — только полный. Пользователям Полный VPN
+// разрешаем на всех их серверах — один раз, пока колонка пустая.
+try {
+  db.prepare("UPDATE server_keys SET profiles = CASE WHEN xray_whitelist = 0 THEN 'full' ELSE 'both' END WHERE profiles IS NULL").run();
+  db.prepare('UPDATE users SET full_servers = allowed_servers WHERE full_servers IS NULL').run();
+} catch {
+  /* таблиц ещё нет */
 }
 
 // Схлопывание расщеплённых строк server_keys. Раньше keyvault писал ключи по

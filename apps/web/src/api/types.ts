@@ -22,6 +22,7 @@ import type {
   AutoRouteSourceInput,
   AutoRouteSourcePatch,
   AutoRouteBuildResult,
+  AutoRouteSearchHit,
   Server,
   TelegramSettings,
   TestServerConnectionResult,
@@ -62,6 +63,7 @@ export type UpdateUserPatch = Partial<
     | 'allowedServers'
     | 'allowedProtocols'
     | 'allowedProxies'
+    | 'fullServers'
     | 'expiresAt'
   >
 >;
@@ -275,6 +277,7 @@ export interface ApiClient {
   checkAutoRouteSource(id: string): Promise<{ ok: boolean; reason: string; count: number | null; source: AutoRouteSource | null }>;
   buildAutoRoute(opts?: { refresh?: boolean }): Promise<AutoRouteBuildResult>;
   rollbackAutoRoute(version: number): Promise<{ ok: boolean; reason: string }>;
+  searchAutoRoute(q: string): Promise<{ query: string; hits: AutoRouteSearchHit[] }>;
 
   // ── admin: графики истории + здоровье серверов ──
   getStats(days: number): Promise<{ days: number; series: StatsPoint[] }>;
@@ -301,7 +304,16 @@ export interface EndpointProfileView {
 }
 
 export interface EndpointConfigView {
+  /** Совместимость: false ⇔ сервер выдаёт только полный туннель. */
   xrayWhitelist: boolean;
+  /** Какие профили выдаёт сервер: умный, полный или оба. */
+  profiles: 'smart' | 'full' | 'both';
+  /** Новым пользователям Полный VPN разрешён по умолчанию. */
+  fullDefault: boolean;
+  /** Направление умного профиля: список → VPN (основной) или список → напрямую (унаследованный). */
+  smartDirection: 'match-vpn' | 'match-direct';
+  /** Откуда список умного профиля: сборка AutoRoute или только свой список. */
+  smartSource: 'autoroute' | 'local';
   whitelistDomains: string[] | undefined;
   lanAccess: boolean;
   fallbackTypes: Array<'https' | 'http' | 'socks'> | null;

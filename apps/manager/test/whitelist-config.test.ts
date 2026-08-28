@@ -161,3 +161,49 @@ test('buildWhitelistXrayConfig: аварийный фоллбэк Xray→HTTPS�
   // RU-домены по-прежнему напрямую
   assert.ok(cfg.routing.rules.some((r: any) => r.outboundTag === 'direct' && r.domain));
 });
+
+test('match-vpn (умная маршрутизация): список → В туннель, остальное напрямую, торрент-правила нет, meta.novpn на месте', () => {
+  const cfg = JSON.parse(
+    buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', ['blocked.example', 'full:exact.example'], false, false, {
+      direction: 'match-vpn',
+      ipRoutes: ['10.10.0.0/16'],
+      novpn: { profileId: 's1', serverId: 's1', host: '1.vpn.example.com', mode: 'smart' },
+      remarkSuffix: '',
+    }),
+  );
+  const listRule = cfg.routing.rules.find((r: any) => r.domain);
+  assert.equal(listRule.outboundTag, 'proxy-t0-0', 'домены из списка уходят в VPN');
+  assert.deepEqual(listRule.domain, ['domain:blocked.example', 'full:exact.example']);
+  const ipRule = cfg.routing.rules.find((r: any) => r.ip && r.ip.includes('10.10.0.0/16'));
+  assert.equal(ipRule.outboundTag, 'proxy-t0-0', 'CIDR из списка тоже в VPN');
+  assert.ok(!cfg.routing.rules.some((r: any) => r.protocol), 'в match-vpn нет отдельного bittorrent-правила: база и так direct');
+  const last = cfg.routing.rules[cfg.routing.rules.length - 1];
+  assert.equal(last.outboundTag, 'direct', 'терминальное правило — напрямую');
+  assert.equal(cfg.meta.serverDescription, '🇫🇷 Франция');
+  assert.deepEqual(cfg.meta.novpn, { profileId: 's1', serverId: 's1', host: '1.vpn.example.com', mode: 'smart' });
+  assert.ok(cfg.routing.rules.some((r: any) => r.network === 'udp' && r.port === 443), 'QUIC-блок остаётся');
+});
+
+test('match-vpn с пустым списком НЕ подставляет RU-дефолт (это было бы наоборот)', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '', [], false, false, { direction: 'match-vpn' }));
+  assert.ok(!cfg.routing.rules.some((r: any) => r.domain), 'доменных правил нет');
+  const last = cfg.routing.rules[cfg.routing.rules.length - 1];
+  assert.equal(last.outboundTag, 'direct');
+});
+
+test('match-vpn + прокси-тиры: список → балансировщик lb0, остальное direct, цепочка тиров сохранена', () => {
+  const proxies: ProxyFallback[] = [{ kind: 'https', host: 'p.example', port: 8443, user: 'u', pass: 'p' }];
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', proxies, '', ['blocked.example'], false, false, { direction: 'match-vpn' }));
+  const listRule = cfg.routing.rules.find((r: any) => r.domain);
+  assert.equal(listRule.balancerTag, 'lb0');
+  assert.ok(cfg.routing.balancers.length >= 2, 'тиры есть');
+  const direct = cfg.routing.rules.find((r: any) => r.outboundTag === 'direct' && r.network === 'tcp,udp');
+  assert.ok(direct, 'терминальное direct-правило');
+});
+
+test('полный туннель с приставкой профиля: remarks получает « · Полный VPN»', () => {
+  const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '🇫🇷 Франция', [], false, true, { remarkSuffix: ' · Полный VPN', novpn: { mode: 'full' } }));
+  assert.equal(cfg.remarks, '🇫🇷 Франция · Полный VPN');
+  assert.equal(cfg.meta.serverDescription, '🇫🇷 Франция · Полный VPN');
+  assert.ok(!cfg.routing.rules.some((r: any) => r.domain));
+});

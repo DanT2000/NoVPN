@@ -267,6 +267,7 @@ export const mockApi: ApiClient = {
       allowedServers: input.allowedServers,
       allowedProtocols: input.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
       allowedProxies: input.allowedProxies ?? [],
+      fullServers: input.allowedServers,
       isActive: true, telegram: null, createdAt: nowIso(), lastActivityAt: null,
       // Новым — только личная ссылка: вход по коду для них не открывается.
       accessToken: 'tok-' + Math.random().toString(36).slice(2, 14), codeLoginUntil: null,
@@ -462,13 +463,13 @@ export const mockApi: ApiClient = {
     const s = state.servers.find((x) => x.host === host);
     return {
       profile: { exists: !!s, ports: s?.ports ?? { xray: 443, awg: 51820, http: 8080, socks: 1080, https: 8443 }, legacyPorts: s?.legacyPorts ?? [], hasXrayKeys: !!s, hasAwgKeys: !!s, updatedAt: s ? new Date().toISOString() : null },
-      config: (s as any)?._cfg ?? { xrayWhitelist: true, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null },
+      config: (s as any)?._cfg ?? { xrayWhitelist: true, profiles: 'both' as const, fullDefault: true, smartDirection: 'match-vpn' as const, smartSource: 'autoroute' as const, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null },
     };
   },
   async saveEndpointConfig(id: string, patch: any) {
     await wait(200);
     const s = state.servers.find((x) => x.id === id) as any;
-    const cur = s?._cfg ?? { xrayWhitelist: true, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null };
+    const cur = s?._cfg ?? { xrayWhitelist: true, profiles: 'both' as const, fullDefault: true, smartDirection: 'match-vpn' as const, smartSource: 'autoroute' as const, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null };
     const next = { ...cur, ...patch };
     if (s) s._cfg = next;
     return { ok: true, config: next };
@@ -616,7 +617,7 @@ export const mockApi: ApiClient = {
   // ── умная маршрутизация (in-memory) ──
   async getRoutingFiles() {
     await wait(120);
-    return { files: (['upstream', 'sites', 'apps'] as const).map((n) => routingMeta(n)) };
+    return { files: (['upstream', 'apps'] as const).map((n) => routingMeta(n)) };
   },
   async getRoutingFile(name) {
     await wait(120);
@@ -656,6 +657,8 @@ export const mockApi: ApiClient = {
       builds: AR_BUILDS.map((b) => ({ ...b })),
       publishedVersion: AR_BUILDS.find((b) => b.published)?.version ?? null,
       publicUrl: 'https://demo.novpn/routing/upstream.json',
+      dat: { geosite: 'https://demo.novpn/routing/autoroute/geosite.dat', geoip: 'https://demo.novpn/routing/autoroute/geoip.dat' },
+      subscription: { rules: 11936, cap: 30000, truncated: false },
     };
   },
   async addAutoRouteSource(input) {
@@ -741,6 +744,13 @@ export const mockApi: ApiClient = {
     AR_BUILDS.forEach((b) => (b.published = b.version === version));
     return { ok: true, reason: `Опубликована версия v${version}.` };
   },
+  async searchAutoRoute(q) {
+    await wait(120);
+    const hits = q.trim()
+      ? [{ kind: 'domain' as const, value: q.trim().toLowerCase(), action: 'vpn' as const, sourceId: 'rs_refilter', sourceTitle: 'Re:filter', priority: 0 }]
+      : [];
+    return { query: q, hits };
+  },
 };
 
 // Демо-состояние канала обновлений десктопа.
@@ -757,12 +767,11 @@ const DESKTOP_VERSIONS = [{ version: '0.2.5', sizeBytes: 16185753 }];
 const DESKTOP_CFG: { mode: 'auto' | 'pin' | 'manual'; pinnedVersion: string | null } = { mode: 'auto', pinnedVersion: null };
 
 // Демо-состояние трёх файлов для mock-режима.
-const ROUTING: Record<'upstream' | 'sites' | 'apps', {
+const ROUTING: Record<'upstream' | 'apps', {
   content: string; version: number; updatedAt: string; mode: 'local' | 'mirror'; sourceUrl: string;
   autoSync: boolean; lastCheckAt: string | null; lastOkAt: string | null; entryCount: number | null;
 }> = {
   upstream: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
-  sites: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
   apps: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
 };
 
@@ -797,7 +806,7 @@ function mockFormat(url: string): 'json' | 'lst' | 'txt' | 'srs' {
   const ext = (url.split(/[?#]/)[0] ?? '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   return ext === 'lst' || ext === 'txt' || ext === 'srs' ? ext : 'json';
 }
-function routingMeta(name: 'upstream' | 'sites' | 'apps') {
+function routingMeta(name: 'upstream' | 'apps') {
   const f = ROUTING[name];
   return {
     name, version: f.version, updatedAt: f.updatedAt,

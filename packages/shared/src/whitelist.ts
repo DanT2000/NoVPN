@@ -89,6 +89,20 @@ function proxyOutbound(p: ProxyFallback): Record<string, unknown> {
   return o;
 }
 
+/** Дополнительные параметры сборки конфига (см. buildWhitelistXrayConfig). */
+export interface XrayBuildOptions {
+  /** `match-direct` (унаследованный обход белых списков): список → напрямую, остальное в
+   *  VPN. `match-vpn` (умная маршрутизация по AutoRoute): список → VPN, остальное напрямую. */
+  direction?: 'match-direct' | 'match-vpn';
+  /** CIDR-правила той же направленности, что и доменный список (из AutoRoute). */
+  ipRoutes?: string[];
+  /** Служебные метаданные для клиентского приложения (кладутся в `meta.novpn`).
+   *  Xray-core незнакомые поля игнорирует, Happ читает `meta.serverDescription`. */
+  novpn?: Record<string, unknown>;
+  /** Приписка к имени профиля, например « · Полный VPN» у второго профиля сервера. */
+  remarkSuffix?: string;
+}
+
 export function buildWhitelistXrayConfig(
   links: string[],
   appName = 'NoVPN',
@@ -97,15 +111,20 @@ export function buildWhitelistXrayConfig(
   whitelistRoutes: string[] = RU_WHITELIST_ROUTES,
   lanAccess = false,
   disableWhitelist = false,
+  opts: XrayBuildOptions = {},
 ): string {
   // Имя профиля (remarks) = имя сервера с флагом, ровно как в панели («🇫🇷 Франция»).
-  // Режим (обход белых списков / полный туннель) в НАЗВАНИЕ не добавляем — владелец сам
-  // настраивает сервер, лишние приписки в Happ/приложении не нужны и мешают опознать страну.
-  const remarks = title || appName;
-  // Список доменов может приходить из редактируемой настройки админки; нормализуем и,
-  // если он пуст, откатываемся к встроенному дефолту (иначе обход бы не работал).
+  // Режим в название НЕ добавляем — кроме явной приписки второго профиля (« · Полный VPN»),
+  // иначе в приложении два профиля одного сервера были бы неотличимы.
+  const remarks = (title || appName) + (opts.remarkSuffix ?? '');
+  const matchVpn = opts.direction === 'match-vpn';
+  // Список доменов может приходить из редактируемой настройки админки; нормализуем.
+  // В унаследованном режиме пустой список = встроенный RU-дефолт (иначе обход бы не
+  // работал). В режиме match-vpn пустой список — это честная «пустая сборка»: подставлять
+  // RU-домены как «то, что идёт в VPN» было бы ровно наоборот.
   const routes = normalizeWhitelistRoutes(whitelistRoutes);
-  const wlRoutes = routes.length ? routes : RU_WHITELIST_ROUTES;
+  const wlRoutes = routes.length ? routes : matchVpn ? [] : RU_WHITELIST_ROUTES;
+  const ipRoutes = (opts.ipRoutes ?? []).filter(Boolean);
   // Тиры в порядке приоритета: 0 = Xray (reality), затем каждый прокси — свой тир.
   const tiers: Array<Record<string, unknown>[]> = [];
   const xray = links.map(parseVlessLink).filter((o): o is Record<string, unknown> => !!o);
@@ -134,18 +153,27 @@ export function buildWhitelistXrayConfig(
     { tag: 'socks', listen: '127.0.0.1', port: 10808, protocol: 'socks', settings: { auth: 'noauth', udp: true }, sniffing },
     { tag: 'http', listen: '127.0.0.1', port: 10809, protocol: 'http', settings: { allowTransparent: false }, sniffing },
   ];
+  // Куда уходит СПИСОК. match-direct (обход белых списков): список → direct. match-vpn
+  // (умная маршрутизация): список → в туннель, а туннель — это первый тир либо
+  // балансировщик lb0 (несколько серверов/тиров); терминальное правило тогда → direct.
+  // При disableWhitelist (полный туннель) доменных правил нет вовсе.
+  const listTarget = matchVpn ? (proxies.length || xray.length > 1 ? { balancerTag: 'lb0' } : { outboundTag: 'proxy-t0-0' }) : { outboundTag: 'direct' };
   const whitelistRules = [
-    // Российские «белые» домены — напрямую (работают даже в режиме белого списка).
-    // disableWhitelist=true → правило УБИРАЕМ: РФ-зона тоже идёт через VPN (полный туннель).
-    ...(disableWhitelist ? [] : [{ type: 'field', outboundTag: 'direct', domain: wlRoutes }]),
+    ...(disableWhitelist || !wlRoutes.length ? [] : [{ type: 'field', ...listTarget, domain: wlRoutes }]),
+    ...(disableWhitelist || !ipRoutes.length ? [] : [{ type: 'field', ...listTarget, ip: ipRoutes }]),
     // Приватные/локальные адреса. По умолчанию (lanAccess=false) — напрямую (клиент
     // держит свою локалку сам, приватные адреса не уходят в туннель). При lanAccess=true
     // это правило УБИРАЕМ: приватные адреса пойдут через прокси/туннель к серверу — так
     // самохостер добирается до локальной сети СВОЕГО сервера (дома) через VPN.
     ...(lanAccess ? [] : [{ type: 'field', outboundTag: 'direct', ip: PRIVATE_IPS }]),
     // Торренты — мимо VPN (при disableWhitelist тоже убираем: никаких исключений).
-    ...(disableWhitelist ? [] : [{ type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] }]),
+    // В match-vpn база и так direct — отдельное правило не нужно.
+    ...(disableWhitelist || matchVpn ? [] : [{ type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] }]),
   ];
+  // Терминальное правило: куда уходит всё, что не попало в список. match-direct → в
+  // туннель (первый тир / балансировщик); match-vpn → напрямую. Полный туннель → в туннель.
+  const restTarget = matchVpn && !disableWhitelist ? 'direct' : null;
+  const meta: Record<string, unknown> = { serverDescription: remarks, ...(opts.novpn ? { novpn: opts.novpn } : {}) };
   // QUIC (UDP/443) через прокси-цепочку нестабилен: YouTube/Google-сервисы «зависают»,
   // т.к. браузер открыл QUIC, а UDP по VLESS/прокси теряется, и отката на TCP не происходит.
   // Блокируем UDP/443 → браузер сразу падает на надёжный HTTP/2 (TCP). RU-домены уже ушли
@@ -163,7 +191,7 @@ export function buildWhitelistXrayConfig(
     const rules: Array<Record<string, unknown>> = [...whitelistRules, quicBlock];
     const cfg: Record<string, unknown> = {
       remarks,
-      meta: { serverDescription: remarks },
+      meta,
       log: { loglevel: 'warning' },
       inbounds,
       outbounds,
@@ -174,9 +202,10 @@ export function buildWhitelistXrayConfig(
       // использовался бы только первый; все мертвы → напрямую.
       cfg.observatory = { subjectSelector: ['proxy-t0-'], probeUrl: 'https://www.cloudflare.com/cdn-cgi/trace', probeInterval: '30s', enableConcurrency: true };
       (cfg.routing as Record<string, unknown>).balancers = [{ tag: 'lb0', selector: ['proxy-t0-'], fallbackTag: failFallback, strategy: { type: 'leastPing' } }];
-      rules.push({ type: 'field', inboundTag: ['socks', 'http'], balancerTag: 'lb0', network: 'tcp,udp' });
+      if (restTarget) rules.push({ type: 'field', outboundTag: restTarget, network: 'tcp,udp' });
+      else rules.push({ type: 'field', inboundTag: ['socks', 'http'], balancerTag: 'lb0', network: 'tcp,udp' });
     } else {
-      rules.push({ type: 'field', outboundTag: tier0.length ? 'proxy-t0-0' : 'direct', network: 'tcp,udp' });
+      rules.push({ type: 'field', outboundTag: restTarget ?? (tier0.length ? 'proxy-t0-0' : 'direct'), network: 'tcp,udp' });
     }
     return JSON.stringify(cfg, null, 2);
   }
@@ -198,7 +227,9 @@ export function buildWhitelistXrayConfig(
     });
     outbounds.push({ protocol: 'loopback', tag: `loop-${i}`, settings: { inboundTag: `t${i}-in` } });
   }
-  rules.push({ type: 'field', inboundTag: ['socks', 'http'], balancerTag: 'lb0', network: 'tcp,udp' });
+  // match-vpn: не попавшее в список — напрямую; иначе весь входящий трафик — в цепочку тиров.
+  if (restTarget) rules.push({ type: 'field', outboundTag: restTarget, network: 'tcp,udp' });
+  else rules.push({ type: 'field', inboundTag: ['socks', 'http'], balancerTag: 'lb0', network: 'tcp,udp' });
   for (let i = 0; i < n; i++) {
     if (i > 0) rules.push({ type: 'field', inboundTag: [`t${i}-in`], balancerTag: `lb${i}` });
     balancers.push({

@@ -113,6 +113,8 @@ function UserCardInner({ user }: { user: User }) {
   const [allowedServers, setAllowedServers] = useState<string[]>([...user.allowedServers]);
   const [protocols, setProtocols] = useState<Protocol[]>([...user.allowedProtocols]);
   const [proxies, setProxies] = useState<ProxyType[]>([...(user.allowedProxies ?? [])]);
+  // Серверы, на которых этому человеку разрешён второй профиль «Полный VPN».
+  const [fullServers, setFullServers] = useState<string[]>([...(user.fullServers ?? [])]);
   const [savingProfile, setSavingProfile] = useState(false);
 
   // ── Личная ссылка ──
@@ -226,6 +228,8 @@ function UserCardInner({ user }: { user: User }) {
         allowedServers,
         allowedProtocols: eff as User['allowedProtocols'],
         allowedProxies: effProxies,
+        // Право на полный профиль живёт только на разрешённых серверах.
+        fullServers: fullServers.filter((id) => allowedServers.includes(id)),
       });
       showToast('Профиль сохранён');
     } finally {
@@ -582,6 +586,36 @@ function UserCardInner({ user }: { user: User }) {
             </div>
           )}
         </div>
+
+        {/* Полный VPN — второй профиль в подписке Xray, по разрешению на каждом сервере.
+            Показываем только серверы, которые выдают оба профиля: у «только умного» и
+            «только полного» переключать нечего. */}
+        {(() => {
+          const candidates = servers.filter((s) => allowedServers.includes(s.id) && s.routing?.profiles === 'both');
+          if (candidates.length === 0) return null;
+          return (
+            <div className="field">
+              <span className="field-label">Полный VPN (второй профиль в подписке)</span>
+              <div className="chip-row">
+                {candidates.map((s) => {
+                  const on = fullServers.includes(s.id);
+                  return (
+                    <Chip
+                      key={s.id}
+                      label={`${s.name}: ${on ? 'разрешён' : 'закрыт'}`}
+                      active={on}
+                      onClick={() => setFullServers((prev) => (on ? prev.filter((x) => x !== s.id) : [...prev, s.id]))}
+                    />
+                  );
+                })}
+              </div>
+              <span className="small muted">
+                Умный профиль есть у всех. Полный — весь трафик через VPN без исключений — появится у человека
+                вторым профилем этого сервера после сохранения; при следующем обновлении подписки в приложении.
+              </span>
+            </div>
+          );
+        })()}
 
         <div className="field">
           <span className="field-label">Разрешённые VPN-протоколы</span>

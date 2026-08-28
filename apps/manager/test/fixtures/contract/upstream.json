@@ -1,0 +1,7 @@
+{
+  "items": [
+    "blocked.example",
+    "full:exact.example",
+    "10.10.0.0/16"
+  ]
+}

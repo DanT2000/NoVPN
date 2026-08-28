@@ -1,16 +1,15 @@
-// AutoRoute — конструктор основной базы умной маршрутизации (Upstream).
+// AutoRoute — отдельный редактор основной базы умной маршрутизации (Upstream).
 //
-// Раньше Upstream был одним JSON-файлом с редактором и одним внешним URL. Теперь
-// это сборка из многих источников: порядок задаёт приоритет (кто выше — тот
-// побеждает в конфликте), каждая сборка versioned и откатывается.
-//
-// Публичный URL при этом не меняется: /routing/upstream.json продолжает отдавать
-// {items:[...]}, поэтому уже настроенные клиенты ничего не замечают.
+// Здесь собирается список «что не работает в России»: много источников в разных
+// форматах → нормализация → слияние по приоритету → версия. Результат публикуется
+// тремя сериализациями одного датасета: upstream.json, geosite.dat, geoip.dat —
+// и зашивается в умный профиль Xray-подписки (список → VPN, остальное напрямую).
 
 import { useEffect, useRef, useState } from 'react';
 import type {
   AutoRouteBuild,
   AutoRouteConflict,
+  AutoRouteSearchHit,
   AutoRouteSource,
   AutoRouteSourceFormat,
   AutoRouteState,
@@ -18,7 +17,7 @@ import type {
 } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
-import { Chip, Field, Loading, Panel, Toggle } from '../components/ui';
+import { Chip, Field, Loading, Panel, ScreenHeader, Toggle } from '../components/ui';
 import { copyText } from '../lib/clipboard';
 
 const ACTION_LABEL: Record<RoutingAction, string> = {
@@ -55,6 +54,21 @@ function fmtDate(iso: string | null): string {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 const num = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString('ru-RU'));
+
+function CopyLink({ url, label }: { url: string; label: string }) {
+  const { showToast } = useApp();
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '4px 12px', alignItems: 'baseline', fontSize: 13 }}>
+      <span className="muted">{label}</span>
+      <a className="mono" href={url} target="_blank" rel="noreferrer" style={{ color: 'var(--link)', wordBreak: 'break-all', fontSize: 12 }}>
+        {url}
+      </a>
+      <button className="btn btn-outline btn-sm" onClick={async () => showToast((await copyText(url)) ? 'Ссылка скопирована' : 'Не удалось скопировать')}>
+        Копировать
+      </button>
+    </div>
+  );
+}
 
 export function AutoRoute() {
   const { showToast, showConfirm } = useApp();
@@ -108,7 +122,6 @@ export function AutoRoute() {
 
   const reorder = async (ids: string[]) => {
     if (!state) return;
-    // оптимистично переставляем — иначе список «прыгает» после ответа
     const byId = new Map(state.sources.map((s) => [s.id, s]));
     setState({ ...state, sources: ids.map((i) => byId.get(i)!).filter(Boolean) });
     await run('reorder', () => api.reorderAutoRouteSources(ids));
@@ -143,145 +156,210 @@ export function AutoRoute() {
   const enabledCount = state.sources.filter((s) => s.enabled).length;
 
   return (
-    <Panel title="AutoRoute — Upstream">
-      <div className="body small muted" style={{ marginTop: -2 }}>
-        Основная база умной маршрутизации. Собирается из нескольких источников и публикуется по постоянному
-        адресу — при каждой сборке ссылка остаётся прежней.
+    <>
+      <ScreenHeader eyebrow="Маршрутизация" title="AutoRoute" />
+      <div className="body small muted" style={{ margin: '-8px 0 16px', maxWidth: 680 }}>
+        Основная база умной маршрутизации: что не работает в России — идёт через VPN, остальное напрямую.
+        Собирается из нескольких источников, публикуется по постоянным ссылкам и зашивается в умный профиль подписки.
       </div>
+      <div className="stack" style={{ gap: 16, maxWidth: 820 }}>
+        {/* Что опубликовано */}
+        <Panel title="Опубликованная сборка">
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px', fontSize: 13 }}>
+            <span className="muted">Версия</span>
+            <span>{published ? `v${published.version} · ${fmtDate(published.builtAt)}` : 'ещё не собиралась — нажмите «Проверить и пересобрать»'}</span>
+            <span className="muted">Правил</span>
+            <span>{published ? `${num(published.domains)} доменов, ${num(published.ips)} IP-подсетей` : '—'}</span>
+            <span className="muted">В подписке Xray</span>
+            <span>
+              {num(state.subscription.rules)} правил
+              {state.subscription.truncated ? (
+                <span style={{ color: 'var(--amber-fg)' }}> — достигнут потолок {num(state.subscription.cap)}: в телефонный конфиг входят первые по приоритету, остальные только в DAT/JSON</span>
+              ) : null}
+            </span>
+          </div>
+          <div className="stack" style={{ gap: 6, marginTop: 4 }}>
+            <CopyLink label="geosite.dat" url={state.dat.geosite} />
+            <CopyLink label="geoip.dat" url={state.dat.geoip} />
+            <CopyLink label="upstream.json" url={state.publicUrl} />
+          </div>
+          <div className="small muted">
+            Три сериализации одного датасета. DAT — для Xray, sing-box и чужих панелей (тег <span className="mono">novpn</span>);
+            JSON — для NoVPN Desktop. Ссылки постоянные: при каждой сборке меняется содержимое, не адрес.
+          </div>
+        </Panel>
 
-      {/* Публикация */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px', fontSize: 13 }}>
-        <span className="muted">Версия</span>
-        <span>{published ? `v${published.version} · ${fmtDate(published.builtAt)}` : 'ещё не собиралась'}</span>
-        <span className="muted">Правил</span>
-        <span>{published ? `${num(published.domains)} доменов, ${num(published.ips)} IP` : '—'}</span>
-        <span className="muted">Публичный URL</span>
-        <span style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-          <a
-            className="mono"
-            href={state.publicUrl}
-            target="_blank"
-            rel="noreferrer"
-            style={{ color: 'var(--link)', wordBreak: 'break-all' }}
-          >
-            {state.publicUrl}
-          </a>
-          <button
-            className="btn btn-outline btn-sm"
-            onClick={async () => showToast((await copyText(state.publicUrl)) ? 'Ссылка скопирована' : 'Не удалось скопировать')}
-          >
-            Копировать
-          </button>
-        </span>
+        {/* Поиск по сборке */}
+        <RuleSearch />
+
+        {/* Источники */}
+        <Panel title={`Источники (${enabledCount} из ${state.sources.length} включено)`}>
+          <span className="small muted" style={{ marginTop: -4 }}>
+            Порядок = приоритет. Если один домен пришёл из нескольких списков с разными действиями, побеждает верхний.
+            Перетаскивайте мышью или двигайте стрелками. Источник, который сейчас недоступен, участвует последней
+            удачной версией — база от этого не худеет.
+          </span>
+
+          {state.sources.length === 0 ? (
+            <div className="small muted" style={{ marginTop: 8 }}>Пока ни одного источника — добавьте первый ниже.</div>
+          ) : (
+            <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+              {state.sources.map((s, i) => (
+                <SourceRow
+                  key={s.id}
+                  source={s}
+                  index={i}
+                  total={state.sources.length}
+                  busy={busy}
+                  onDragStart={() => (dragId.current = s.id)}
+                  onDropOn={() => onDrop(s.id)}
+                  onMove={(d) => move(s.id, d)}
+                  onToggle={(v) => void run(`t:${s.id}`, () => api.updateAutoRouteSource(s.id, { enabled: v }))}
+                  onCheck={() =>
+                    void run(`c:${s.id}`, async () => {
+                      const r = await api.checkAutoRouteSource(s.id);
+                      showToast(r.ok ? `${s.title}: ${r.reason} Правил: ${num(r.count)}` : `${s.title}: ${r.reason}`);
+                    })
+                  }
+                  onSave={(patch) => void run(`e:${s.id}`, () => api.updateAutoRouteSource(s.id, patch))}
+                  onDelete={() =>
+                    showConfirm({
+                      title: 'Удалить источник?',
+                      text: `«${s.title}» больше не будет участвовать в сборке. Уже опубликованная версия не изменится, пока вы не пересоберёте базу.`,
+                      confirmLabel: 'Удалить',
+                      onConfirm: async () => {
+                        await api.deleteAutoRouteSource(s.id);
+                        await load();
+                      },
+                    })
+                  }
+                />
+              ))}
+            </div>
+          )}
+
+          {adding ? (
+            <SourceForm
+              busy={busy === 'add'}
+              onCancel={() => setAdding(false)}
+              onSubmit={(input) =>
+                void run('add', async () => {
+                  await api.addAutoRouteSource(input);
+                  setAdding(false);
+                })
+              }
+            />
+          ) : (
+            <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setAdding(true)}>Добавить источник</button>
+              <button className="btn btn-primary btn-sm" disabled={!!busy || !enabledCount} onClick={() => void build(true)}>
+                {busy === 'build' ? 'Проверяем и собираем…' : 'Проверить и пересобрать'}
+              </button>
+              <button
+                className="btn btn-outline btn-sm"
+                disabled={!!busy || !enabledCount}
+                title="Пересобрать из уже скачанного — быстро, например после смены приоритетов"
+                onClick={() => void build(false)}
+              >
+                {busy === 'rebuild' ? 'Собираем…' : 'Пересобрать без скачивания'}
+              </button>
+            </div>
+          )}
+        </Panel>
+
+        {conflicts.length > 0 ? <Conflicts list={conflicts} onClose={() => setConflicts([])} /> : null}
+
+        {/* История сборок */}
+        {state.builds.length > 0 ? (
+          <Panel title="История сборок">
+            <div className="stack" style={{ gap: 8 }}>
+              {state.builds.map((b) => (
+                <BuildRow
+                  key={b.version}
+                  build={b}
+                  busy={busy === `r:${b.version}`}
+                  onRollback={() =>
+                    showConfirm({
+                      title: `Откатиться на v${b.version}?`,
+                      text: 'Публичные ссылки и подписка начнут отдавать содержимое этой версии. Источники и их приоритеты не меняются — при следующей сборке снова получится свежая версия.',
+                      confirmLabel: 'Откатиться',
+                      onConfirm: async () => {
+                        const r = await api.rollbackAutoRoute(b.version);
+                        showToast(r.reason);
+                        await load();
+                      },
+                    })
+                  }
+                />
+              ))}
+            </div>
+          </Panel>
+        ) : null}
       </div>
-      <div className="small muted" style={{ marginTop: -4 }}>
-        Эту ссылку можно отдать кому угодно: другая панель NoVPN вставит её как внешний источник, а Xray/sing-box
-        возьмёт список напрямую.
-      </div>
+    </>
+  );
+}
 
-      {/* Источники */}
-      <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
-        <span className="field-label">Источники ({enabledCount} из {state.sources.length} включено)</span>
-        <span className="small muted" style={{ marginTop: -4 }}>
-          Порядок = приоритет. Чем выше источник, тем он важнее: если один домен пришёл из нескольких списков с
-          разными действиями, побеждает верхний. Перетаскивайте мышью или двигайте стрелками.
-        </span>
+/** Поиск домена по опубликованной сборке: откуда пришло правило и почему победило. */
+function RuleSearch() {
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState<AutoRouteSearchHit[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-        {state.sources.length === 0 ? (
-          <div className="small muted" style={{ marginTop: 8 }}>Пока ни одного источника — добавьте первый ниже.</div>
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current);
+    if (!q.trim()) {
+      setHits(null);
+      return;
+    }
+    timer.current = setTimeout(async () => {
+      setBusy(true);
+      try {
+        const r = await api.searchAutoRoute(q.trim());
+        setHits(r.hits);
+      } catch {
+        setHits([]);
+      } finally {
+        setBusy(false);
+      }
+    }, 250);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [q]);
+
+  return (
+    <Panel title="Проверить домен">
+      <Field label="Домен" hint="Покажет, попадает ли домен в базу, из какого источника пришло правило и с каким приоритетом. Поддомен находит правило родителя.">
+        <input
+          className="input mono"
+          style={{ fontSize: 13 }}
+          spellCheck={false}
+          placeholder="youtube.com"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </Field>
+      {busy ? <span className="small muted">Ищем…</span> : null}
+      {hits && !busy ? (
+        hits.length === 0 ? (
+          <div className="small muted">Не найдено: такой домен идёт по умолчанию — напрямую.</div>
         ) : (
-          <div className="stack" style={{ gap: 8, marginTop: 8 }}>
-            {state.sources.map((s, i) => (
-              <SourceRow
-                key={s.id}
-                source={s}
-                index={i}
-                total={state.sources.length}
-                busy={busy}
-                onDragStart={() => (dragId.current = s.id)}
-                onDropOn={() => onDrop(s.id)}
-                onMove={(d) => move(s.id, d)}
-                onToggle={(v) => void run(`t:${s.id}`, () => api.updateAutoRouteSource(s.id, { enabled: v }))}
-                onCheck={() =>
-                  void run(`c:${s.id}`, async () => {
-                    const r = await api.checkAutoRouteSource(s.id);
-                    showToast(r.ok ? `${s.title}: ${r.reason} Правил: ${num(r.count)}` : `${s.title}: ${r.reason}`);
-                  })
-                }
-                onSave={(patch) => void run(`e:${s.id}`, () => api.updateAutoRouteSource(s.id, patch))}
-                onDelete={() =>
-                  showConfirm({
-                    title: 'Удалить источник?',
-                    text: `«${s.title}» больше не будет участвовать в сборке. Уже опубликованная версия не изменится, пока вы не пересоберёте базу.`,
-                    confirmLabel: 'Удалить',
-                    onConfirm: async () => {
-                      await api.deleteAutoRouteSource(s.id);
-                      await load();
-                    },
-                  })
-                }
-              />
+          <div className="stack" style={{ gap: 6 }}>
+            {hits.map((h) => (
+              <div key={`${h.kind}:${h.value}:${h.sourceId}`} className="row-between" style={{ gap: 10, flexWrap: 'wrap', fontSize: 13 }}>
+                <span className="mono" style={{ wordBreak: 'break-all' }}>
+                  {h.kind === 'domain' ? '' : `${h.kind}:`}{h.value}
+                </span>
+                <span className="small muted">
+                  <b style={{ color: h.action === 'vpn' ? 'var(--text-primary)' : 'var(--amber-fg)' }}>{ACTION_LABEL[h.action]}</b>
+                  {' · '}{h.sourceTitle}{' · '}приоритет {h.priority + 1}
+                </span>
+              </div>
             ))}
           </div>
-        )}
-
-        {adding ? (
-          <SourceForm
-            busy={busy === 'add'}
-            onCancel={() => setAdding(false)}
-            onSubmit={(input) =>
-              void run('add', async () => {
-                await api.addAutoRouteSource(input);
-                setAdding(false);
-              })
-            }
-          />
-        ) : (
-          <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-            <button className="btn btn-secondary btn-sm" onClick={() => setAdding(true)}>Добавить источник</button>
-            <button className="btn btn-primary btn-sm" disabled={!!busy || !enabledCount} onClick={() => void build(true)}>
-              {busy === 'build' ? 'Проверяем и собираем…' : 'Проверить и пересобрать'}
-            </button>
-            <button
-              className="btn btn-outline btn-sm"
-              disabled={!!busy || !enabledCount}
-              title="Пересобрать из уже скачанного — быстро, например после смены приоритетов"
-              onClick={() => void build(false)}
-            >
-              {busy === 'rebuild' ? 'Собираем…' : 'Пересобрать без скачивания'}
-            </button>
-          </div>
-        )}
-      </div>
-
-      {conflicts.length > 0 ? <Conflicts list={conflicts} onClose={() => setConflicts([])} /> : null}
-
-      {/* История сборок */}
-      {state.builds.length > 0 ? (
-        <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
-          <span className="field-label">История сборок</span>
-          <div className="stack" style={{ gap: 8 }}>
-            {state.builds.map((b) => (
-              <BuildRow
-                key={b.version}
-                build={b}
-                busy={busy === `r:${b.version}`}
-                onRollback={() =>
-                  showConfirm({
-                    title: `Откатиться на v${b.version}?`,
-                    text: 'Публичный URL начнёт отдавать содержимое этой версии. Источники и их приоритеты не меняются — при следующей сборке снова получится свежая версия.',
-                    confirmLabel: 'Откатиться',
-                    onConfirm: async () => {
-                      const r = await api.rollbackAutoRoute(b.version);
-                      showToast(r.reason);
-                      await load();
-                    },
-                  })
-                }
-              />
-            ))}
-          </div>
-        </div>
+        )
       ) : null}
     </Panel>
   );
@@ -405,14 +483,14 @@ function SourceForm({
       <Field label="Название" hint="Как показывать в списке. Пусто — возьмём URL.">
         <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Re:filter" />
       </Field>
-      <Field label="URL" hint="Прямой адрес списка. Форматы: .json, .lst, .txt, .srs (sing-box).">
+      <Field label="URL" hint="Прямой адрес списка. Форматы: .json, .lst, .txt, .srs (sing-box). Домены, CIDR и префиксы Xray (full:/keyword:/regexp:) понимаются.">
         <input
           className="input mono"
           style={{ fontSize: 12 }}
           spellCheck={false}
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://community.antifilter.download/list/domains.lst"
+          placeholder="https://raw.githubusercontent.com/…/domains_all.lst"
         />
       </Field>
       <div className="field">
