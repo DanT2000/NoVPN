@@ -334,8 +334,17 @@ router.get('/sub/:token/full', (req, res) => {
  */
 router.get('/sub/:token/meta.json', (req, res) => {
   const u = repo.getUserBySubToken(String(req.params.token ?? ''));
-  if (!u || !u.isActive) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
-  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  // Отзыв доступа должен реально срабатывать. Клиент держит last-known-good и по
+  // сетевой ошибке кэш не стирает — значит «доступ отозван» обязано отличаться от
+  // «панель не ответила». Неизвестный токен → 404; токен известен, но доступа больше
+  // нет → 403 с машинно-читаемой причиной. И то, и другое — ответ панели, то есть
+  // авторитетный сигнал: клиент перестаёт предлагать профили.
+  if (!u) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  if (!u.isActive) return res.status(403).json(err('disabled', 'Доступ отключён. Обратитесь к администратору.'));
+  if (u.expiresAt && new Date(u.expiresAt) < new Date())
+    return res.status(403).json(err('expired', 'Срок действия доступа истёк.'));
+  if (u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb)
+    return res.status(403).json(err('traffic', 'Лимит трафика исчерпан.'));
   const origin = reqOrigin(req as never);
   const seen = new Set<string>();
   const servers: unknown[] = [];

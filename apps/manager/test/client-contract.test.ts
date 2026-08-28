@@ -140,7 +140,37 @@ test('meta.json: remark = значок + имя сервера, как в пан
 });
 
 test('meta.json: чужой/битый токен — 404, а не пустой ответ', async () => {
-  assert.equal((await getJson('/sub/nope-not-a-token/meta.json')).status, 404);
+  const r = await getJson('/sub/nope-not-a-token/meta.json');
+  assert.equal(r.status, 404);
+  assert.equal(r.body.error.type, 'not_found');
+});
+
+// Отзыв доступа обязан отличаться от «панель не ответила»: клиент по сетевой ошибке
+// кэш не стирает, поэтому без явного авторитетного ответа отключённый пользователь
+// продолжал бы подключаться по last-known-good бесконечно.
+test('meta.json: отзыв доступа — 403 с машинно-читаемой причиной, не 404 и не 200', async () => {
+  const victim = repo.insertUser({
+    name: 'Отозванный', comment: '', category: null, tags: [], code: 'code02',
+    deviceLimit: 1, expiresAt: null, trafficLimitGb: null, resetPolicy: 'never',
+    allowedServers: [], allowedProtocols: ['xray'],
+  });
+  const t = repo.getSubToken(victim.id)!;
+  assert.equal((await getJson(`/sub/${t}/meta.json`)).status, 200, 'пока доступ есть — 200');
+
+  repo.updateUserFields(victim.id, { is_active: 0 });
+  let r = await getJson(`/sub/${t}/meta.json`);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.error.type, 'disabled');
+
+  repo.updateUserFields(victim.id, { is_active: 1, expires_at: new Date(Date.now() - 86_400_000).toISOString() });
+  r = await getJson(`/sub/${t}/meta.json`);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.error.type, 'expired');
+
+  repo.updateUserFields(victim.id, { expires_at: null, traffic_limit_gb: 1, traffic_used_gb: 2 });
+  r = await getJson(`/sub/${t}/meta.json`);
+  assert.equal(r.status, 403);
+  assert.equal(r.body.error.type, 'traffic');
 });
 
 test('legacy-фикстура без блока routing обязана читаться как smart', () => {

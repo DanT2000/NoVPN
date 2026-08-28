@@ -2,45 +2,45 @@
   "schemaVersion": 1,
   "panel": {
     "name": "NoVPN",
-    "origin": "http://127.0.0.1:53251"
+    "origin": "http://127.0.0.1:53996"
   },
   "routingResources": {
-    "manifest": "http://127.0.0.1:53251/routing/manifest.json",
-    "upstream": "http://127.0.0.1:53251/routing/upstream.json",
-    "sites": "http://127.0.0.1:53251/routing/sites.json",
-    "apps": "http://127.0.0.1:53251/routing/apps.json"
+    "manifest": "http://127.0.0.1:53996/routing/manifest.json",
+    "upstream": "http://127.0.0.1:53996/routing/upstream.json",
+    "sites": "http://127.0.0.1:53996/routing/sites.json",
+    "apps": "http://127.0.0.1:53996/routing/apps.json"
   },
   "servers": [
     {
-      "id": "s_dRK5B1fz",
-      "host": "home.example.test",
-      "remark": "🇷🇺 Дом",
-      "protocols": [
-        "xray"
-      ],
-      "online": false,
-      "subLink": "http://127.0.0.1:53251/sub/K2v4AQzbHY9e2wZC3_NDIB1j/server/s_dRK5B1fz/full",
-      "routing": {
-        "mode": "full",
-        "lanAccess": false,
-        "fallbackTypes": null,
-        "ownExceptions": 0
-      }
-    },
-    {
-      "id": "s_ApHwtHLy",
+      "id": "s_oouvM4OJ",
       "host": "fr.example.test",
       "remark": "🇫🇷 Франция",
       "protocols": [
         "xray"
       ],
       "online": false,
-      "subLink": "http://127.0.0.1:53251/sub/K2v4AQzbHY9e2wZC3_NDIB1j/server/s_ApHwtHLy/full",
+      "subLink": "http://127.0.0.1:53996/sub/ma6fBGZapvDH78F4Tef-CxFa/server/s_oouvM4OJ/full",
       "routing": {
         "mode": "smart",
         "lanAccess": false,
         "fallbackTypes": null,
         "ownExceptions": 3
+      }
+    },
+    {
+      "id": "s_uJ8OiZ1h",
+      "host": "home.example.test",
+      "remark": "🇷🇺 Дом",
+      "protocols": [
+        "xray"
+      ],
+      "online": false,
+      "subLink": "http://127.0.0.1:53996/sub/ma6fBGZapvDH78F4Tef-CxFa/server/s_uJ8OiZ1h/full",
+      "routing": {
+        "mode": "full",
+        "lanAccess": false,
+        "fallbackTypes": null,
+        "ownExceptions": 0
       }
     }
   ]
