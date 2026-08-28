@@ -63,7 +63,6 @@ export type UpdateUserPatch = Partial<
     | 'allowedServers'
     | 'allowedProtocols'
     | 'allowedProxies'
-    | 'fullServers'
     | 'expiresAt'
   >
 >;
@@ -306,10 +305,8 @@ export interface EndpointProfileView {
 export interface EndpointConfigView {
   /** Совместимость: false ⇔ сервер выдаёт только полный туннель. */
   xrayWhitelist: boolean;
-  /** Какие профили выдаёт сервер: умный, полный или оба. */
-  profiles: 'smart' | 'full' | 'both';
-  /** Новым пользователям Полный VPN разрешён по умолчанию. */
-  fullDefault: boolean;
+  /** 'both' — умная маршрутизация включена (умный + полный профили), 'full' — только полный. */
+  profiles: 'both' | 'full';
   /** Направление умного профиля: список → VPN (основной) или список → напрямую (унаследованный). */
   smartDirection: 'match-vpn' | 'match-direct';
   /** Откуда список умного профиля: сборка AutoRoute или только свой список. */

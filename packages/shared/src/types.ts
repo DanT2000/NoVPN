@@ -76,9 +76,11 @@ export interface Server {
  *  туннель, весь трафик в VPN без исключений. */
 export type ServerRoutingMode = 'smart' | 'full';
 
-/** Какие профили выдаёт сервер: только умный, только полный или оба (умный первым,
- *  полный — вторым, по разрешению пользователя). */
-export type ServerRoutingProfiles = 'smart' | 'full' | 'both';
+/** Какие профили выдаёт сервер. 'both' — умная маршрутизация включена: умный профиль
+ *  первым (рекомендуемый) и «Полный VPN» вторым, у всех пользователей. 'full' — умная
+ *  выключена: только полный туннель. Пер-пользовательских запретов нет намеренно:
+ *  на сервере ничего не блокируется, а лишний трафик — это лимиты самого человека. */
+export type ServerRoutingProfiles = 'both' | 'full';
 
 /** Направление умного профиля. `match-vpn` (основной): список → VPN, остальное
  *  напрямую. `match-direct` (унаследованный «обход белых списков»): список →
@@ -95,8 +97,6 @@ export interface ServerRoutingSummary {
   profiles: ServerRoutingProfiles;
   direction: SmartDirection;
   source: SmartSourceKind;
-  /** Новым пользователям этого сервера Полный VPN разрешён по умолчанию. */
-  fullByDefault: boolean;
   lanAccess: boolean;
   /** null = разрешены все доступные запасные каналы. */
   fallbackTypes: ('https' | 'http' | 'socks')[] | null;
@@ -129,9 +129,6 @@ export interface User {
   /** Типы прокси, которые пользователь может себе выдать в кабинете (если они
    *  установлены на сервере). Пусто — прокси недоступны. */
   allowedProxies: ProxyType[];
-  /** Серверы, на которых пользователю разрешён профиль «Полный VPN» (вторым профилем
-   *  в подписке Xray). Работает только там, где сервер выдаёт оба профиля. */
-  fullServers: string[];
   isActive: boolean;
   telegram: string | null;
   createdAt: string;

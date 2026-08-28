@@ -267,14 +267,12 @@ router.get('/sub/:token', (req, res) => {
 // (srv=null → глобальная политика для агрегированной подписки). Возвращает JSON или
 // null (пусто/все ссылки битые → НЕ отдаём all-direct утечку). Один источник правды
 // для агрегированной /full и пер-серверной /server/:id/full.
-/** Какие профили Xray положены пользователю на сервере (в порядке выдачи: умный первым).
- *  Сервер решает, что выдаёт вообще; полный профиль вторым — только если разрешён
- *  пользователю (u.fullServers). Сервер «только полный» отдаёт полный всем. */
-function profilesFor(u: NonNullable<ReturnType<typeof repo.getUser>>, srv: NonNullable<ReturnType<typeof repo.getServer>>): Array<'smart' | 'full'> {
-  const cfg = repo.getEndpointConfig(srv.host);
-  if (cfg.profiles === 'full') return ['full'];
-  if (cfg.profiles === 'smart') return ['smart'];
-  return u.fullServers.includes(srv.id) ? ['smart', 'full'] : ['smart'];
+/** Какие профили Xray выдаёт сервер (в порядке выдачи: умный первым, полный вторым).
+ *  Умная маршрутизация включена → оба профиля у ВСЕХ пользователей; выключена → только
+ *  полный. Пер-пользовательских запретов нет: на сервере ничего не блокируется, и
+ *  человек всё равно мог бы получить полный туннель, поправив конфиг руками. */
+function profilesFor(_u: NonNullable<ReturnType<typeof repo.getUser>>, srv: NonNullable<ReturnType<typeof repo.getServer>>): Array<'smart' | 'full'> {
+  return repo.getEndpointConfig(srv.host).profiles === 'full' ? ['full'] : ['smart', 'full'];
 }
 
 function buildUserXrayFull(
@@ -299,7 +297,6 @@ function buildUserXrayFull(
     : {
         xrayWhitelist: repo.getSettings().xrayWhitelist !== false,
         profiles: repo.getSettings().xrayWhitelist === false ? 'full' : 'both',
-        fullDefault: true,
         smartDirection: 'match-vpn',
         smartSource: 'autoroute',
         whitelistDomains: repo.getSettings().whitelistDomains,
@@ -919,12 +916,6 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.expiresAt !== undefined) fields.expires_at = b.expiresAt; // null = снять срок
   if (b.resetPolicy !== undefined) fields.reset_policy = b.resetPolicy === 'monthly' ? 'monthly' : 'never';
   if (b.allowedServers !== undefined) fields.allowed_servers = JSON.stringify(b.allowedServers);
-  // Полный VPN разрешаем только на серверах из allowedServers (новых или текущих):
-  // право на второй профиль не должно переживать отзыв самого сервера.
-  if (b.fullServers !== undefined) {
-    const scope = new Set<string>(Array.isArray(b.allowedServers) ? (b.allowedServers as string[]) : u.allowedServers);
-    fields.full_servers = JSON.stringify((Array.isArray(b.fullServers) ? (b.fullServers as unknown[]).map(String) : []).filter((s) => scope.has(s)));
-  }
   if (b.allowedProtocols !== undefined)
     fields.allowed_protocols = JSON.stringify(
       (Array.isArray(b.allowedProtocols) ? (b.allowedProtocols as string[]) : []).filter((p) => p === 'xray' || p === 'amneziawg'),
@@ -1496,8 +1487,7 @@ router.put('/api/admin/servers/:id/endpoint-config', requireAdmin, (req, res) =>
   if ('whitelistDomains' in b) patch.whitelistDomains = b.whitelistDomains === null ? null : (Array.isArray(b.whitelistDomains) ? b.whitelistDomains.map((x: unknown) => String(x).trim()).filter(Boolean) : null);
   if ('fallbackTypes' in b) patch.fallbackTypes = b.fallbackTypes === null ? null : (Array.isArray(b.fallbackTypes) ? b.fallbackTypes.filter((x: unknown) => x === 'https' || x === 'http' || x === 'socks') : null);
   // Профили подписки и параметры умного профиля.
-  if ('profiles' in b) patch.profiles = b.profiles === 'smart' || b.profiles === 'full' || b.profiles === 'both' ? b.profiles : null;
-  if ('fullDefault' in b) patch.fullDefault = b.fullDefault === null ? null : !!b.fullDefault;
+  if ('profiles' in b) patch.profiles = b.profiles === 'full' ? 'full' : b.profiles === 'both' || b.profiles === 'smart' ? 'both' : null;
   if ('smartDirection' in b) patch.smartDirection = b.smartDirection === 'match-direct' ? 'match-direct' : b.smartDirection === 'match-vpn' ? 'match-vpn' : null;
   if ('smartSource' in b) patch.smartSource = b.smartSource === 'local' ? 'local' : b.smartSource === 'autoroute' ? 'autoroute' : null;
   repo.setEndpointConfig(s.host, patch);

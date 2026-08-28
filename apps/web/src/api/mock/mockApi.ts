@@ -267,7 +267,6 @@ export const mockApi: ApiClient = {
       allowedServers: input.allowedServers,
       allowedProtocols: input.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
       allowedProxies: input.allowedProxies ?? [],
-      fullServers: input.allowedServers,
       isActive: true, telegram: null, createdAt: nowIso(), lastActivityAt: null,
       // Новым — только личная ссылка: вход по коду для них не открывается.
       accessToken: 'tok-' + Math.random().toString(36).slice(2, 14), codeLoginUntil: null,
@@ -463,13 +462,13 @@ export const mockApi: ApiClient = {
     const s = state.servers.find((x) => x.host === host);
     return {
       profile: { exists: !!s, ports: s?.ports ?? { xray: 443, awg: 51820, http: 8080, socks: 1080, https: 8443 }, legacyPorts: s?.legacyPorts ?? [], hasXrayKeys: !!s, hasAwgKeys: !!s, updatedAt: s ? new Date().toISOString() : null },
-      config: (s as any)?._cfg ?? { xrayWhitelist: true, profiles: 'both' as const, fullDefault: true, smartDirection: 'match-vpn' as const, smartSource: 'autoroute' as const, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null },
+      config: (s as any)?._cfg ?? { xrayWhitelist: true, profiles: 'both' as const, smartDirection: 'match-vpn' as const, smartSource: 'autoroute' as const, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null },
     };
   },
   async saveEndpointConfig(id: string, patch: any) {
     await wait(200);
     const s = state.servers.find((x) => x.id === id) as any;
-    const cur = s?._cfg ?? { xrayWhitelist: true, profiles: 'both' as const, fullDefault: true, smartDirection: 'match-vpn' as const, smartSource: 'autoroute' as const, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null };
+    const cur = s?._cfg ?? { xrayWhitelist: true, profiles: 'both' as const, smartDirection: 'match-vpn' as const, smartSource: 'autoroute' as const, whitelistDomains: undefined, lanAccess: false, fallbackTypes: null };
     const next = { ...cur, ...patch };
     if (s) s._cfg = next;
     return { ok: true, config: next };

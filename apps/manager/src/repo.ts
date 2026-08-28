@@ -111,8 +111,6 @@ export interface NewUserRow {
   allowedServers: string[];
   allowedProtocols: Array<'xray' | 'amneziawg'>;
   allowedProxies?: Array<'http' | 'https' | 'socks5'>;
-  /** Серверы с разрешённым Полным VPN. Не задано → по умолчанию сервера (defaultFullServers). */
-  fullServers?: string[];
   /** Разрешить вход по коду. По умолчанию нет — основной способ это личная ссылка. */
   codeLoginEnabled?: boolean;
 }
@@ -131,14 +129,12 @@ export function insertUser(u: NewUserRow): User {
   const now = nowIso();
   db.prepare(
     `INSERT INTO users(id,name,comment,category,tags,code,device_limit,expires_at,traffic_limit_gb,traffic_used_gb,
-      reset_policy,allowed_servers,allowed_protocols,allowed_proxies,full_servers,is_active,telegram,created_at,updated_at,
+      reset_policy,allowed_servers,allowed_protocols,allowed_proxies,is_active,telegram,created_at,updated_at,
       access_token,code_login_until,sub_token)
      VALUES(@id,@name,@comment,@category,@tags,@code,@device_limit,@expires_at,@traffic_limit_gb,0,
-      @reset_policy,@allowed_servers,@allowed_protocols,@allowed_proxies,@full_servers,1,NULL,@now,@now,
+      @reset_policy,@allowed_servers,@allowed_protocols,@allowed_proxies,1,NULL,@now,@now,
       @access_token,@code_login_until,@sub_token)`,
   ).run({
-    // Полный VPN новому пользователю — по настройке серверов (оба профиля + «по умолчанию открыт»).
-    full_servers: JSON.stringify(u.fullServers ?? defaultFullServers(u.allowedServers)),
     id, name: u.name, comment: u.comment, category: u.category, tags: JSON.stringify(u.tags), code: u.code,
     device_limit: u.deviceLimit, expires_at: u.expiresAt, traffic_limit_gb: u.trafficLimitGb,
     reset_policy: u.resetPolicy, allowed_servers: JSON.stringify(u.allowedServers),
@@ -758,10 +754,8 @@ export type FallbackType = 'https' | 'http' | 'socks';
 export interface EndpointConfig {
   /** Совместимость: false ⇔ сервер выдаёт ТОЛЬКО полный туннель (profiles === 'full'). */
   xrayWhitelist: boolean;
-  /** Какие профили выдаёт сервер. Умный идёт первым, полный — вторым по разрешению пользователя. */
-  profiles: 'smart' | 'full' | 'both';
-  /** Новым пользователям Полный VPN на этом сервере разрешён по умолчанию. */
-  fullDefault: boolean;
+  /** 'both' — умная маршрутизация включена (умный + полный профили у всех), 'full' — только полный. */
+  profiles: 'both' | 'full';
   /** Направление умного профиля: список → VPN (основной) или список → напрямую (унаследованный). */
   smartDirection: 'match-vpn' | 'match-direct';
   /** Откуда список умного профиля: сборка AutoRoute или только свой список сервера. */
@@ -778,8 +772,9 @@ export function getEndpointConfig(rawHost: string): EndpointConfig {
   const g = getSettings();
   // Профили: явное значение сервера, иначе выводим из старого флага (false → только полный).
   const legacyFullOnly = r?.xray_whitelist == null ? g.xrayWhitelist === false : r.xray_whitelist === 0;
+  // 'smart' из ранней версии схемы читаем как 'both': полный профиль выдаётся всем.
   const profiles: EndpointConfig['profiles'] =
-    r?.profiles === 'smart' || r?.profiles === 'full' || r?.profiles === 'both' ? r.profiles : legacyFullOnly ? 'full' : 'both';
+    r?.profiles === 'full' ? 'full' : r?.profiles === 'both' || r?.profiles === 'smart' ? 'both' : legacyFullOnly ? 'full' : 'both';
   const jsonArr = (s: unknown): string[] | undefined => {
     if (typeof s !== 'string') return undefined;
     try {
@@ -792,7 +787,6 @@ export function getEndpointConfig(rawHost: string): EndpointConfig {
   return {
     xrayWhitelist: profiles !== 'full',
     profiles,
-    fullDefault: r?.full_default == null ? true : r.full_default === 1,
     smartDirection: r?.smart_direction === 'match-direct' ? 'match-direct' : 'match-vpn',
     smartSource: r?.smart_source === 'local' ? 'local' : 'autoroute',
     // Битый JSON → наследуем ГЛОБАЛЬНЫЙ список (а не молча RU-дефолт билдера). #14
@@ -805,8 +799,7 @@ export function setEndpointConfig(
   rawHost: string,
   patch: Partial<{
     xrayWhitelist: boolean | null;
-    profiles: 'smart' | 'full' | 'both' | null;
-    fullDefault: boolean | null;
+    profiles: 'both' | 'full' | null;
     smartDirection: 'match-vpn' | 'match-direct' | null;
     smartSource: 'autoroute' | 'local' | null;
     whitelistDomains: string[] | null;
@@ -830,7 +823,6 @@ export function setEndpointConfig(
     vals.pf = patch.profiles ?? null;
     vals.xw = patch.profiles == null ? null : patch.profiles === 'full' ? 0 : 1;
   }
-  if ('fullDefault' in patch) { set.push('full_default = @fd'); vals.fd = patch.fullDefault == null ? null : patch.fullDefault ? 1 : 0; }
   if ('smartDirection' in patch) { set.push('smart_direction = @sd'); vals.sd = patch.smartDirection ?? null; }
   if ('smartSource' in patch) { set.push('smart_source = @ss'); vals.ss = patch.smartSource ?? null; }
   if ('lanAccess' in patch) { set.push('lan_access = @la'); vals.la = patch.lanAccess == null ? null : patch.lanAccess ? 1 : 0; }
@@ -861,7 +853,6 @@ function withEndpoint(s: Server): Server {
     profiles: cfg.profiles,
     direction: cfg.smartDirection,
     source: cfg.smartSource,
-    fullByDefault: cfg.fullDefault,
     lanAccess: cfg.lanAccess,
     fallbackTypes: cfg.fallbackTypes,
     ownExceptions,
@@ -869,16 +860,6 @@ function withEndpoint(s: Server): Server {
   return s;
 }
 
-/** На каких из разрешённых серверов новому пользователю по умолчанию открыт Полный VPN:
- *  там, где сервер выдаёт оба профиля и админ не закрыл полный «по умолчанию». */
-export function defaultFullServers(allowedServers: string[]): string[] {
-  return allowedServers.filter((id) => {
-    const s = getServer(id);
-    if (!s) return false;
-    const cfg = getEndpointConfig(s.host);
-    return cfg.profiles === 'both' && cfg.fullDefault;
-  });
-}
 
 /** Патч публичного endpoint'а в уже выданной vless-ссылке: host:port подменяются на
  *  ТЕКУЩИЕ (uuid/ключи/метка сохраняются). Так смена порта/домена доезжает до

@@ -191,16 +191,19 @@ test('подписка: умный профиль = список AutoRoute + с�
   for (const cfg of [smart, full]) assert.ok(cfg.routing.rules.some((r: any) => r.network === 'udp' && r.port === 443 && r.outboundTag === 'block'));
 });
 
-test('право на Полный VPN пер-пользовательское: сняли → профиль исчез из meta и из подписки', async () => {
-  repo.updateUserFields(userId, { full_servers: JSON.stringify([]) });
-  const { body } = await getJson(`/sub/${subToken}/meta.json`);
-  assert.deepEqual(body.profiles.map((p: any) => p.profileId).sort(), [bothId, `${fullId}:full`].sort(), 'полный профиль «обоих» сервера пропал; полный-only сервер остался');
-  const sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
+test('умная маршрутизация выключена на сервере → только полный профиль; включена → оба у любого пользователя', async () => {
+  repo.setEndpointConfig(bothHost, { profiles: 'full' });
+  let { body } = await getJson(`/sub/${subToken}/meta.json`);
+  assert.deepEqual(body.profiles.map((p: any) => p.profileId).sort(), [`${bothId}:full`, `${fullId}:full`].sort(), 'умный профиль пропал у сервера с выключенной умной');
+  let sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
   assert.equal(sub.length, 2);
-  // и наоборот: ?profile=full без права отдаёт умный
-  const one = JSON.parse(await (await fetch(`${base}/sub/${subToken}/server/${bothId}/full?profile=full`)).text());
-  assert.equal(one.meta.novpn.mode, 'smart', 'без права полный не выдаётся даже по прямой ссылке');
-  repo.updateUserFields(userId, { full_servers: JSON.stringify([bothId]) });
+  // ?profile=full и без него — один и тот же полный профиль
+  const one = JSON.parse(await (await fetch(`${base}/sub/${subToken}/server/${bothId}/full`)).text());
+  assert.equal(one.meta.novpn.mode, 'full');
+  // включили обратно — оба профиля, без каких-либо пер-пользовательских разрешений
+  repo.setEndpointConfig(bothHost, { profiles: 'both' });
+  ({ body } = await getJson(`/sub/${subToken}/meta.json`));
+  assert.deepEqual(body.profiles.map((p: any) => p.profileId).sort(), [bothId, `${bothId}:full`, `${fullId}:full`].sort());
   const back = JSON.parse(await (await fetch(`${base}/sub/${subToken}/server/${bothId}/full?profile=full`)).text());
   assert.equal(back.meta.novpn.mode, 'full');
 });

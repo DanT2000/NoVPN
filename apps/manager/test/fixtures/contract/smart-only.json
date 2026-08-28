@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "panel": {
     "name": "NoVPN",
-    "origin": "http://127.0.0.1:49480"
+    "origin": "http://127.0.0.1:55071"
   },
   "routingResources": {
-    "manifest": "http://127.0.0.1:49480/routing/manifest.json",
-    "upstream": "http://127.0.0.1:49480/routing/upstream.json",
-    "apps": "http://127.0.0.1:49480/routing/apps.json",
-    "geosite": "http://127.0.0.1:49480/routing/autoroute/geosite.dat",
-    "geoip": "http://127.0.0.1:49480/routing/autoroute/geoip.dat"
+    "manifest": "http://127.0.0.1:55071/routing/manifest.json",
+    "upstream": "http://127.0.0.1:55071/routing/upstream.json",
+    "apps": "http://127.0.0.1:55071/routing/apps.json",
+    "geosite": "http://127.0.0.1:55071/routing/autoroute/geosite.dat",
+    "geoip": "http://127.0.0.1:55071/routing/autoroute/geoip.dat"
   },
   "profiles": [
     {
-      "profileId": "s_zOlkrw-q",
-      "serverId": "s_zOlkrw-q",
+      "profileId": "s_T-LmBHdB",
+      "serverId": "s_T-LmBHdB",
       "host": "fr.example.test",
       "remark": "🇫🇷 Франция",
       "recommended": true,
@@ -22,7 +22,7 @@
         "xray"
       ],
       "online": false,
-      "subLink": "http://127.0.0.1:49480/sub/7iyRf1yZNRgYOiuMvFm0JqHh/server/s_zOlkrw-q/full",
+      "subLink": "http://127.0.0.1:55071/sub/MqxWUYe0sc0ZF8U6NWNcG4qb/server/s_T-LmBHdB/full",
       "routing": {
         "mode": "smart",
         "lanAccess": false,

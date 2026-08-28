@@ -76,7 +76,7 @@ function EndpointConfigPanel({ server }: { server: Server }) {
       if (!alive) return;
       setCfg(r.config);
       setWl((r.config.whitelistDomains ?? []).join('\n'));
-    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', fullDefault: true, smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fallbackTypes: null }); });
+    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fallbackTypes: null }); });
     return () => { alive = false; };
   }, [server.host]);
 
@@ -110,30 +110,16 @@ function EndpointConfigPanel({ server }: { server: Server }) {
         в одной стране один список обхода, в другой — другой.
       </div>
 
-      <div className="body small muted" style={{ margin: '0 0 4px' }}>Какие профили выдаёт этот сервер в подписке Xray:</div>
+      <div className="body small muted" style={{ margin: '0 0 4px' }}>Умная маршрутизация на этом сервере:</div>
       <div className="chip-row" style={{ marginBottom: 6 }}>
-        <Chip label="Оба: умный + полный" active={cfg.profiles === 'both'} disabled={busy} onClick={() => void save({ profiles: 'both' })} />
-        <Chip label="Только умная маршрутизация" active={cfg.profiles === 'smart'} disabled={busy} onClick={() => void save({ profiles: 'smart' })} />
-        <Chip label="Только полный VPN" active={cfg.profiles === 'full'} disabled={busy} onClick={() => void save({ profiles: 'full' })} />
+        <Chip label="Включена: умный профиль + полный VPN" active={cfg.profiles === 'both'} disabled={busy} onClick={() => void save({ profiles: 'both' })} />
+        <Chip label="Выключена: только полный VPN" active={cfg.profiles === 'full'} disabled={busy} onClick={() => void save({ profiles: 'full' })} />
       </div>
       <div className="body small muted" style={{ marginBottom: 10 }}>
         {cfg.profiles === 'both'
-          ? 'В приложении у человека появятся два профиля этого сервера: «умный» первым (рекомендуемый) и «Полный VPN» вторым — если он разрешён пользователю.'
-          : cfg.profiles === 'smart'
-            ? 'Один профиль: что не работает в России — через VPN, остальное напрямую.'
-            : 'Один профиль: весь трафик через VPN без исключений. Список доменов ниже не применяется.'}
+          ? 'У каждого пользователя в приложении два профиля этого сервера: «умный» первым (рекомендуемый — что не работает в России, через VPN, остальное напрямую) и «Полный VPN» вторым (весь трафик в туннель). Выбирает сам человек; лишний трафик — его лимиты.'
+          : 'Один профиль: весь трафик через VPN без исключений. Список доменов ниже не применяется.'}
       </div>
-
-      {cfg.profiles === 'both' ? (
-        <div className="chip-row" style={{ marginBottom: 10 }}>
-          <Chip
-            label={cfg.fullDefault ? 'Новым пользователям полный VPN: разрешён' : 'Новым пользователям полный VPN: закрыт'}
-            active={cfg.fullDefault}
-            disabled={busy}
-            onClick={() => void save({ fullDefault: !cfg.fullDefault })}
-          />
-        </div>
-      ) : null}
 
       {cfg.profiles !== 'full' ? (
         <>
