@@ -646,6 +646,101 @@ export const mockApi: ApiClient = {
     if (!f.sourceUrl) return { ok: false, changed: false, status: 'error' as const, reason: 'Не задан URL источника.', count: null, added: null, removed: null };
     return { ok: true, changed: false, status: 'nochange' as const, reason: 'Обновлений нет.', count: f.entryCount, added: 0, removed: 0 };
   },
+
+  // ── AutoRoute (демо-данные) ──
+  async getAutoRoute() {
+    await wait(150);
+    return {
+      dataset: 'upstream',
+      sources: AR_SOURCES.map((s) => ({ ...s })),
+      builds: AR_BUILDS.map((b) => ({ ...b })),
+      publishedVersion: AR_BUILDS.find((b) => b.published)?.version ?? null,
+      publicUrl: 'https://demo.novpn/routing/upstream.json',
+    };
+  },
+  async addAutoRouteSource(input) {
+    await wait(200);
+    const s = {
+      id: `rs_${Math.random().toString(36).slice(2, 8)}`,
+      dataset: 'upstream',
+      title: input.title || input.url,
+      url: input.url,
+      format: input.format ?? ('auto' as const),
+      resolvedFormat: null,
+      action: input.action ?? ('vpn' as const),
+      enabled: input.enabled !== false,
+      priority: AR_SOURCES.length,
+      lastCheckAt: null,
+      lastOkAt: null,
+      status: 'idle' as const,
+      statusReason: '',
+      ruleCount: null,
+      stats: null,
+    };
+    AR_SOURCES.push(s);
+    return { ...s };
+  },
+  async updateAutoRouteSource(id, patch) {
+    await wait(150);
+    const s = AR_SOURCES.find((x) => x.id === id);
+    if (!s) throw new Error('Источник не найден.');
+    Object.assign(s, patch);
+    return { ...s };
+  },
+  async deleteAutoRouteSource(id) {
+    await wait(150);
+    const i = AR_SOURCES.findIndex((x) => x.id === id);
+    if (i >= 0) AR_SOURCES.splice(i, 1);
+    return { ok: true };
+  },
+  async reorderAutoRouteSources(ids) {
+    await wait(120);
+    AR_SOURCES.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+    AR_SOURCES.forEach((s, i) => (s.priority = i));
+    return { sources: AR_SOURCES.map((s) => ({ ...s })) };
+  },
+  async checkAutoRouteSource(id) {
+    await wait(400);
+    const s = AR_SOURCES.find((x) => x.id === id);
+    if (!s) throw new Error('Источник не найден.');
+    s.lastCheckAt = new Date().toISOString();
+    s.lastOkAt = s.lastCheckAt;
+    s.status = 'ok';
+    s.statusReason = '';
+    s.ruleCount = s.ruleCount ?? 1200;
+    return { ok: true, reason: 'Обновлено.', count: s.ruleCount, source: { ...s } };
+  },
+  async buildAutoRoute() {
+    await wait(600);
+    const version = (AR_BUILDS[0]?.version ?? 0) + 1;
+    AR_BUILDS.forEach((b) => (b.published = false));
+    const build = {
+      version,
+      builtAt: new Date().toISOString(),
+      sha256: Math.random().toString(16).slice(2).padEnd(64, '0'),
+      domains: 12480,
+      ips: 640,
+      added: 412,
+      removed: 38,
+      conflicts: 7,
+      sourcesChanged: AR_SOURCES.filter((s) => s.enabled).length,
+      sources: AR_SOURCES.filter((s) => s.enabled).map((s) => ({
+        sourceId: s.id,
+        title: s.title,
+        rules: s.ruleCount ?? 0,
+        won: s.ruleCount ?? 0,
+        conflicts: 0,
+      })),
+      published: true,
+    };
+    AR_BUILDS.unshift(build);
+    return { ok: true, reason: `Собрано ${build.domains + build.ips} правил.`, build, conflicts: [] };
+  },
+  async rollbackAutoRoute(version) {
+    await wait(300);
+    AR_BUILDS.forEach((b) => (b.published = b.version === version));
+    return { ok: true, reason: `Опубликована версия v${version}.` };
+  },
 };
 
 // Демо-состояние канала обновлений десктопа.
@@ -669,6 +764,34 @@ const ROUTING: Record<'upstream' | 'apps', {
   upstream: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
   apps: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
 };
+
+// Демо-состояние AutoRoute: пара источников и история сборок — чтобы экран было
+// видно в mock-режиме без бэкенда.
+const AR_SOURCES: import('@novpn/shared').AutoRouteSource[] = [
+  {
+    id: 'rs_refilter', dataset: 'upstream', title: 'Re:filter', url: 'https://community.antifilter.download/list/domains.lst',
+    format: 'auto', resolvedFormat: 'lst', action: 'vpn', enabled: true, priority: 0,
+    lastCheckAt: new Date(Date.now() - 36e5).toISOString(), lastOkAt: new Date(Date.now() - 36e5).toISOString(),
+    status: 'ok', statusReason: '', ruleCount: 11840, stats: { format: 'lst', lines: 12100, valid: 11900, skipped: 200, dups: 60 },
+  },
+  {
+    id: 'rs_v2fly_ai', dataset: 'upstream', title: 'V2Fly OpenAI', url: 'https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/openai',
+    format: 'auto', resolvedFormat: 'txt', action: 'vpn', enabled: true, priority: 1,
+    lastCheckAt: new Date(Date.now() - 72e5).toISOString(), lastOkAt: new Date(Date.now() - 72e5).toISOString(),
+    status: 'ok', statusReason: '', ruleCount: 96, stats: { format: 'txt', lines: 120, valid: 100, skipped: 20, dups: 4 },
+  },
+];
+const AR_BUILDS: import('@novpn/shared').AutoRouteBuild[] = [
+  {
+    version: 3, builtAt: new Date(Date.now() - 36e5).toISOString(), sha256: 'a1b2c3'.padEnd(64, '0'),
+    domains: 11900, ips: 36, added: 412, removed: 38, conflicts: 7, sourcesChanged: 2,
+    sources: [
+      { sourceId: 'rs_refilter', title: 'Re:filter', rules: 11840, won: 11840, conflicts: 0 },
+      { sourceId: 'rs_v2fly_ai', title: 'V2Fly OpenAI', rules: 96, won: 89, conflicts: 7 },
+    ],
+    published: true,
+  },
+];
 function mockFormat(url: string): 'json' | 'lst' | 'txt' | 'srs' {
   const ext = (url.split(/[?#]/)[0] ?? '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   return ext === 'lst' || ext === 'txt' || ext === 'srs' ? ext : 'json';

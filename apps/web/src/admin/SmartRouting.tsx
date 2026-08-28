@@ -3,12 +3,14 @@ import type { RoutingCheckResult, RoutingFileMeta, RoutingFileName, RoutingSourc
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { Chip, Field, Loading, Panel, Toggle } from '../components/ui';
+import { AutoRoute } from './AutoRoute';
 import { JsonEditor } from '../components/JsonEditor';
 import type { JsonValidity } from '../components/JsonEditor';
 import { downloadText } from '../lib/clipboard';
 
 const FILES: { name: RoutingFileName; title: string; blurb: string }[] = [
-  { name: 'upstream', title: 'Upstream JSON', blurb: 'Основной список маршрутизации (например, обход блокировок).' },
+  // Upstream сюда не входит: им управляет AutoRoute (сборка из многих источников),
+  // а не одиночный редактор файла. Apps — обычный управляемый каталог.
   { name: 'apps', title: 'Apps JSON', blurb: 'Каталог приложений: имена процессов, пути установки, иконки, рекомендуемый маршрут.' },
 ];
 
@@ -94,22 +96,23 @@ export function SmartRouting() {
         <div className="eyebrow" style={{ marginBottom: 4 }}>Маршрутизация</div>
         <div style={{ fontSize: 22, fontWeight: 700 }}>Умная маршрутизация</div>
         <div className="body small muted" style={{ marginTop: 6, maxWidth: 620 }}>
-          Файлы конфигурации для NoVPN Desktop. Клиентам всегда отдаётся стабильный URL этой панели —
-          даже когда содержимое зеркалируется с внешнего источника.
+          Конфигурация для NoVPN Desktop. Клиентам всегда отдаётся стабильный URL этой панели — даже когда
+          содержимое собирается из внешних источников.
         </div>
       </div>
 
       {err ? <div className="notice notice-red" style={{ marginBottom: 14 }}>{err}</div> : null}
-      {!files ? (
-        <Loading text="Загрузка…" />
-      ) : (
-        <div className="stack" style={{ gap: 16, maxWidth: 760 }}>
-          {FILES.map((f) => {
+      <div className="stack" style={{ gap: 16, maxWidth: 760 }}>
+        <AutoRoute />
+        {!files ? (
+          <Loading text="Загрузка…" />
+        ) : (
+          FILES.map((f) => {
             const meta = files.find((x) => x.name === f.name);
             return meta ? <RoutingCard key={f.name} spec={f} meta={meta} origin={origin} onChanged={load} /> : null;
-          })}
-        </div>
-      )}
+          })
+        )}
+      </div>
     </>
   );
 }

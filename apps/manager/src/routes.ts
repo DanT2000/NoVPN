@@ -29,6 +29,7 @@ import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
 import * as repo from './repo.js';
 import { checkMirror } from './services/routingSync.js';
+import * as autoroute from './services/autoroute.js';
 import { renderGuidePage } from './services/guides.js';
 import { renderDownloadPage } from './services/downloadPage.js';
 import {
@@ -1524,6 +1525,88 @@ router.post('/api/admin/routing/:name/check', requireAdmin, async (req, res) => 
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка проверки.'));
   }
+});
+
+// ── admin: AutoRoute (Upstream собирается из многих источников) ──
+const AR_ACTIONS = new Set(['vpn', 'direct', 'block']);
+const AR_FORMATS = new Set(['auto', 'json', 'lst', 'txt', 'srs']);
+
+function arSourceInput(b: any): { ok: true; value: any } | { ok: false; message: string } {
+  const url = String(b?.url ?? '').trim().slice(0, 2048);
+  if (!/^https?:\/\//i.test(url)) return { ok: false, message: 'URL должен начинаться с http:// или https://.' };
+  const format = b?.format === undefined ? 'auto' : String(b.format);
+  if (!AR_FORMATS.has(format)) return { ok: false, message: 'Неизвестный формат источника.' };
+  const action = b?.action === undefined ? 'vpn' : String(b.action);
+  if (!AR_ACTIONS.has(action)) return { ok: false, message: 'Неизвестное действие источника.' };
+  return { ok: true, value: { title: String(b?.title ?? '').trim().slice(0, 120), url, format, action, enabled: b?.enabled !== false } };
+}
+
+router.get('/api/admin/autoroute', requireAdmin, (req, res) => {
+  res.json(autoroute.getState(reqOrigin(req as never)));
+});
+router.post('/api/admin/autoroute/sources', requireAdmin, (req, res) => {
+  const parsed = arSourceInput(req.body ?? {});
+  if (!parsed.ok) return res.status(400).json(err('validation', parsed.message));
+  const s = repo.addAutoRouteSource(parsed.value);
+  repo.addLog(`AutoRoute: добавлен источник «${s.title || s.url}»`);
+  res.json(s);
+});
+router.patch('/api/admin/autoroute/sources/:id', requireAdmin, (req, res) => {
+  const b = req.body ?? {};
+  const patch: Record<string, unknown> = {};
+  if (b.title !== undefined) patch.title = String(b.title).trim().slice(0, 120);
+  if (b.enabled !== undefined) patch.enabled = !!b.enabled;
+  if (b.action !== undefined) {
+    if (!AR_ACTIONS.has(String(b.action))) return res.status(400).json(err('validation', 'Неизвестное действие источника.'));
+    patch.action = String(b.action);
+  }
+  if (b.format !== undefined) {
+    if (!AR_FORMATS.has(String(b.format))) return res.status(400).json(err('validation', 'Неизвестный формат источника.'));
+    patch.format = String(b.format);
+  }
+  if (b.url !== undefined) {
+    const u = String(b.url).trim().slice(0, 2048);
+    if (!/^https?:\/\//i.test(u)) return res.status(400).json(err('validation', 'URL должен начинаться с http:// или https://.'));
+    patch.url = u;
+  }
+  const s = repo.updateAutoRouteSource(String(req.params.id), patch as never);
+  if (!s) return res.status(404).json(err('not_found', 'Источник не найден.'));
+  res.json(s);
+});
+router.delete('/api/admin/autoroute/sources/:id', requireAdmin, (req, res) => {
+  const s = repo.getAutoRouteSource(String(req.params.id));
+  if (!repo.deleteAutoRouteSource(String(req.params.id))) return res.status(404).json(err('not_found', 'Источник не найден.'));
+  repo.addLog(`AutoRoute: удалён источник «${s?.title || s?.url || req.params.id}»`);
+  res.json({ ok: true });
+});
+router.post('/api/admin/autoroute/sources/reorder', requireAdmin, (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map(String) : [];
+  res.json({ sources: repo.reorderAutoRouteSources(ids) });
+});
+router.post('/api/admin/autoroute/sources/:id/check', requireAdmin, async (req, res) => {
+  try {
+    const r = await autoroute.refreshSource(String(req.params.id));
+    res.json({ ...r, source: repo.getAutoRouteSource(String(req.params.id)) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка проверки.'));
+  }
+});
+router.post('/api/admin/autoroute/build', requireAdmin, async (req, res) => {
+  try {
+    // refresh=false — пересобрать из уже скачанного (мгновенно, например после
+    // смены приоритетов); по умолчанию сначала обновляем источники.
+    const result = req.body?.refresh === false ? autoroute.buildDataset() : await autoroute.refreshAllAndBuild();
+    res.json(result);
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка сборки.'));
+  }
+});
+router.post('/api/admin/autoroute/rollback', requireAdmin, (req, res) => {
+  const version = Number(req.body?.version);
+  if (!Number.isInteger(version) || version <= 0) return res.status(400).json(err('validation', 'Неверная версия.'));
+  const r = autoroute.rollbackTo(autoroute.DATASET, version);
+  if (!r.ok) return res.status(404).json(err('not_found', r.reason));
+  res.json(r);
 });
 
 // ── admin: канал обновлений NoVPN Desktop ──

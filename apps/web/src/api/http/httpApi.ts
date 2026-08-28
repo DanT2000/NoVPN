@@ -184,4 +184,19 @@ export const httpApi: ApiClient = {
     req<{ meta: RoutingFileMeta; changed: boolean }>('PUT', `/api/admin/routing/${name}`, { content }),
   saveRoutingSource: (name, patch) => req<{ meta: RoutingFileMeta }>('PUT', `/api/admin/routing/${name}/source`, patch),
   checkRoutingSource: (name) => req<RoutingCheckResult>('POST', `/api/admin/routing/${name}/check`),
+
+  getAutoRoute: () => req<import('@novpn/shared').AutoRouteState>('GET', '/api/admin/autoroute'),
+  addAutoRouteSource: (input) => req<import('@novpn/shared').AutoRouteSource>('POST', '/api/admin/autoroute/sources', input),
+  updateAutoRouteSource: (id, patch) =>
+    req<import('@novpn/shared').AutoRouteSource>('PATCH', `/api/admin/autoroute/sources/${id}`, patch),
+  deleteAutoRouteSource: (id) => req<Ok>('DELETE', `/api/admin/autoroute/sources/${id}`),
+  reorderAutoRouteSources: (ids) =>
+    req<{ sources: import('@novpn/shared').AutoRouteSource[] }>('POST', '/api/admin/autoroute/sources/reorder', { ids }),
+  checkAutoRouteSource: (id) =>
+    req<{ ok: boolean; reason: string; count: number | null; source: import('@novpn/shared').AutoRouteSource | null }>(
+      'POST',
+      `/api/admin/autoroute/sources/${id}/check`,
+    ),
+  buildAutoRoute: (opts) => req<import('@novpn/shared').AutoRouteBuildResult>('POST', '/api/admin/autoroute/build', opts ?? {}),
+  rollbackAutoRoute: (version) => req<{ ok: boolean; reason: string }>('POST', '/api/admin/autoroute/rollback', { version }),
 };

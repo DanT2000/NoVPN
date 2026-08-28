@@ -17,6 +17,11 @@ import type {
   RoutingFileMeta,
   RoutingFileFull,
   RoutingSourceStats,
+  AutoRouteSource,
+  AutoRouteSourceInput,
+  AutoRouteSourcePatch,
+  AutoRouteBuild,
+  AutoRouteBuildSource,
   Server,
   ServerPorts,
   TelegramSettings,
@@ -1101,9 +1106,255 @@ export function saveRoutingSource(
 
 /** Файлы, которые надо авто-проверять по расписанию (зеркало + автосинк + URL). */
 export function listRoutingSyncTargets(): Array<{ name: RoutingFileMeta['name'] }> {
+  // Файлы, которыми управляет AutoRoute, из старого одноисточникового зеркала
+  // исключаются: иначе часовой синк затирал бы результат сборки содержимым
+  // одного случайного URL.
   return db
-    .prepare("SELECT name FROM routing_files WHERE mode = 'mirror' AND auto_sync = 1 AND source_url != ''")
+    .prepare(
+      `SELECT name FROM routing_files
+        WHERE mode = 'mirror' AND auto_sync = 1 AND source_url != ''
+          AND name NOT IN (SELECT DISTINCT dataset FROM routing_sources)`,
+    )
     .all() as Array<{ name: RoutingFileMeta['name'] }>;
+}
+
+// ── AutoRoute: источники и сборки ────────────────────────────────────────────
+
+function rowToAutoRouteSource(r: any): AutoRouteSource {
+  return {
+    id: r.id,
+    dataset: r.dataset,
+    title: r.title || r.url,
+    url: r.url,
+    format: r.format ?? 'auto',
+    resolvedFormat: r.resolved_format ?? null,
+    action: r.action ?? 'vpn',
+    enabled: r.enabled === 1,
+    priority: r.priority ?? 0,
+    lastCheckAt: r.last_check_at ?? null,
+    lastOkAt: r.last_ok_at ?? null,
+    status: r.status ?? 'idle',
+    statusReason: r.status_reason ?? '',
+    ruleCount: r.cached_count ?? null,
+    stats: parseSourceStats(r.stats),
+  };
+}
+
+export function listAutoRouteSources(dataset = 'upstream'): AutoRouteSource[] {
+  return (db.prepare('SELECT * FROM routing_sources WHERE dataset = ? ORDER BY priority, rowid').all(dataset) as any[]).map(
+    rowToAutoRouteSource,
+  );
+}
+export function getAutoRouteSourceRow(id: string): any | null {
+  return db.prepare('SELECT * FROM routing_sources WHERE id = ?').get(id) ?? null;
+}
+export function getAutoRouteSource(id: string): AutoRouteSource | null {
+  const r = getAutoRouteSourceRow(id);
+  return r ? rowToAutoRouteSource(r) : null;
+}
+
+export function addAutoRouteSource(input: AutoRouteSourceInput, dataset = 'upstream'): AutoRouteSource {
+  const id = `rs_${crypto.randomBytes(6).toString('base64url')}`;
+  const next =
+    ((db.prepare('SELECT MAX(priority) AS m FROM routing_sources WHERE dataset = ?').get(dataset) as { m: number | null }).m ?? -1) + 1;
+  db.prepare(
+    `INSERT INTO routing_sources(id, dataset, title, url, format, action, enabled, priority, created_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    dataset,
+    (input.title ?? '').trim(),
+    input.url.trim(),
+    input.format ?? 'auto',
+    input.action ?? 'vpn',
+    input.enabled === false ? 0 : 1,
+    next,
+    nowIso(),
+  );
+  return getAutoRouteSource(id)!;
+}
+
+export function updateAutoRouteSource(id: string, patch: AutoRouteSourcePatch): AutoRouteSource | null {
+  const cur = getAutoRouteSourceRow(id);
+  if (!cur) return null;
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const put = (col: string, v: unknown) => {
+    sets.push(`${col} = ?`);
+    vals.push(v);
+  };
+  if (patch.title !== undefined) put('title', patch.title.trim());
+  if (patch.action !== undefined) put('action', patch.action);
+  if (patch.enabled !== undefined) put('enabled', patch.enabled ? 1 : 0);
+  if (patch.priority !== undefined) put('priority', patch.priority);
+  if (patch.format !== undefined) put('format', patch.format);
+  // Смена URL или формата обесценивает кеш и валидаторы условного GET: иначе
+  // получим 304 на новый адрес и продолжим отдавать правила от старого источника.
+  const urlChanged = patch.url !== undefined && patch.url.trim() !== String(cur.url ?? '');
+  const formatChanged = patch.format !== undefined && patch.format !== cur.format;
+  if (patch.url !== undefined) put('url', patch.url.trim());
+  if (urlChanged || formatChanged) {
+    put('etag', null);
+    put('last_modified', null);
+    put('cached', null);
+    put('cached_count', null);
+    put('resolved_format', null);
+    put('stats', null);
+    put('status', 'idle');
+    put('status_reason', '');
+    put('last_ok_at', null);
+  }
+  if (!sets.length) return rowToAutoRouteSource(cur);
+  vals.push(id);
+  db.prepare(`UPDATE routing_sources SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  return getAutoRouteSource(id);
+}
+
+export function deleteAutoRouteSource(id: string): boolean {
+  const r = db.prepare('DELETE FROM routing_sources WHERE id = ?').run(id);
+  return r.changes > 0;
+}
+
+/** Переставить источники: порядок ids задаёт приоритет (0 — самый приоритетный).
+ *  Не перечисленные остаются позади в прежнем относительном порядке. */
+export function reorderAutoRouteSources(ids: string[], dataset = 'upstream'): AutoRouteSource[] {
+  const all = listAutoRouteSources(dataset);
+  const known = new Set(all.map((s) => s.id));
+  const ordered = ids.filter((i) => known.has(i));
+  const rest = all.filter((s) => !ordered.includes(s.id)).map((s) => s.id);
+  const final = [...ordered, ...rest];
+  const stmt = db.prepare('UPDATE routing_sources SET priority = ? WHERE id = ?');
+  db.transaction(() => final.forEach((id, i) => stmt.run(i, id)))();
+  return listAutoRouteSources(dataset);
+}
+
+/** Состояние после проверки источника. `cached` пишем ТОЛЬКО при успехе —
+ *  иначе теряется last-known-good и сборка обеднеет из-за временной недоступности. */
+export function setAutoRouteSourceState(
+  id: string,
+  s: {
+    lastCheckAt?: string;
+    lastOkAt?: string;
+    status?: string;
+    statusReason?: string;
+    etag?: string | null;
+    lastModified?: string | null;
+    resolvedFormat?: string;
+    stats?: RoutingSourceStats | null;
+    cached?: string;
+    cachedCount?: number;
+  },
+): void {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const put = (col: string, v: unknown) => {
+    sets.push(`${col} = ?`);
+    vals.push(v);
+  };
+  if (s.lastCheckAt !== undefined) put('last_check_at', s.lastCheckAt);
+  if (s.lastOkAt !== undefined) put('last_ok_at', s.lastOkAt);
+  if (s.status !== undefined) put('status', s.status);
+  if (s.statusReason !== undefined) put('status_reason', s.statusReason);
+  if (s.etag !== undefined) put('etag', s.etag);
+  if (s.lastModified !== undefined) put('last_modified', s.lastModified);
+  if (s.resolvedFormat !== undefined) put('resolved_format', s.resolvedFormat);
+  if (s.stats !== undefined) put('stats', s.stats ? JSON.stringify(s.stats) : null);
+  if (s.cached !== undefined) put('cached', s.cached);
+  if (s.cachedCount !== undefined) put('cached_count', s.cachedCount);
+  if (!sets.length) return;
+  vals.push(id);
+  db.prepare(`UPDATE routing_sources SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+}
+
+function rowToAutoRouteBuild(r: any): AutoRouteBuild {
+  let sources: AutoRouteBuildSource[] = [];
+  try {
+    sources = JSON.parse(String(r.summary ?? '[]')) as AutoRouteBuildSource[];
+  } catch {
+    sources = [];
+  }
+  return {
+    version: r.version,
+    builtAt: r.built_at,
+    sha256: r.sha256,
+    domains: r.domains ?? 0,
+    ips: r.ips ?? 0,
+    added: r.added ?? 0,
+    removed: r.removed ?? 0,
+    conflicts: r.conflicts ?? 0,
+    sourcesChanged: r.sources_changed ?? 0,
+    sources,
+    published: r.published === 1,
+  };
+}
+
+export function listAutoRouteBuilds(dataset = 'upstream', limit = 20): AutoRouteBuild[] {
+  return (
+    db.prepare('SELECT * FROM routing_builds WHERE dataset = ? ORDER BY version DESC LIMIT ?').all(dataset, limit) as any[]
+  ).map(rowToAutoRouteBuild);
+}
+export function getAutoRouteBuildRules(dataset: string, version: number): string | null {
+  const r = db.prepare('SELECT rules FROM routing_builds WHERE dataset = ? AND version = ?').get(dataset, version) as
+    | { rules: string }
+    | undefined;
+  return r ? String(r.rules ?? '[]') : null;
+}
+export function getPublishedAutoRouteVersion(dataset = 'upstream'): number | null {
+  const r = db.prepare('SELECT version FROM routing_builds WHERE dataset = ? AND published = 1').get(dataset) as
+    | { version: number }
+    | undefined;
+  return r ? r.version : null;
+}
+
+/** Записать новую сборку. Версия — следующая по счёту для датасета. */
+export function insertAutoRouteBuild(
+  dataset: string,
+  b: {
+    sha256: string;
+    domains: number;
+    ips: number;
+    added: number;
+    removed: number;
+    conflicts: number;
+    sourcesChanged: number;
+    sources: AutoRouteBuildSource[];
+    rules: string;
+  },
+): AutoRouteBuild {
+  const max = (db.prepare('SELECT MAX(version) AS m FROM routing_builds WHERE dataset = ?').get(dataset) as { m: number | null }).m ?? 0;
+  const version = max + 1;
+  db.prepare(
+    `INSERT INTO routing_builds(dataset, version, built_at, sha256, domains, ips, added, removed, conflicts, sources_changed, summary, rules, published)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+  ).run(
+    dataset,
+    version,
+    nowIso(),
+    b.sha256,
+    b.domains,
+    b.ips,
+    b.added,
+    b.removed,
+    b.conflicts,
+    b.sourcesChanged,
+    JSON.stringify(b.sources),
+    b.rules,
+  );
+  // История не растёт бесконечно: держим последние 30 сборок на датасет.
+  db.prepare(
+    `DELETE FROM routing_builds WHERE dataset = ? AND published = 0 AND version <= (
+       SELECT MIN(version) FROM (SELECT version FROM routing_builds WHERE dataset = ? ORDER BY version DESC LIMIT 30)
+     ) - 1`,
+  ).run(dataset, dataset);
+  return rowToAutoRouteBuild(db.prepare('SELECT * FROM routing_builds WHERE dataset = ? AND version = ?').get(dataset, version));
+}
+
+/** Отметить версию опубликованной (ровно одна на датасет). */
+export function markAutoRouteBuildPublished(dataset: string, version: number): void {
+  db.transaction(() => {
+    db.prepare('UPDATE routing_builds SET published = 0 WHERE dataset = ?').run(dataset);
+    db.prepare('UPDATE routing_builds SET published = 1 WHERE dataset = ? AND version = ?').run(dataset, version);
+  })();
 }
 
 /** Запомнить числовой chat_id привязанного пользователя (для бот-рассылки).

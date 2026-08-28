@@ -17,6 +17,11 @@ import type {
   RoutingFileMeta,
   RoutingFileName,
   RoutingSourcePatch,
+  AutoRouteState,
+  AutoRouteSource,
+  AutoRouteSourceInput,
+  AutoRouteSourcePatch,
+  AutoRouteBuildResult,
   Server,
   TelegramSettings,
   TestServerConnectionResult,
@@ -260,6 +265,16 @@ export interface ApiClient {
   saveRoutingFile(name: RoutingFileName, content: string): Promise<{ meta: RoutingFileMeta; changed: boolean }>;
   saveRoutingSource(name: RoutingFileName, patch: RoutingSourcePatch): Promise<{ meta: RoutingFileMeta }>;
   checkRoutingSource(name: RoutingFileName): Promise<RoutingCheckResult>;
+
+  // AutoRoute: Upstream собирается из многих источников
+  getAutoRoute(): Promise<AutoRouteState>;
+  addAutoRouteSource(input: AutoRouteSourceInput): Promise<AutoRouteSource>;
+  updateAutoRouteSource(id: string, patch: AutoRouteSourcePatch): Promise<AutoRouteSource>;
+  deleteAutoRouteSource(id: string): Promise<Ok>;
+  reorderAutoRouteSources(ids: string[]): Promise<{ sources: AutoRouteSource[] }>;
+  checkAutoRouteSource(id: string): Promise<{ ok: boolean; reason: string; count: number | null; source: AutoRouteSource | null }>;
+  buildAutoRoute(opts?: { refresh?: boolean }): Promise<AutoRouteBuildResult>;
+  rollbackAutoRoute(version: number): Promise<{ ok: boolean; reason: string }>;
 
   // ── admin: графики истории + здоровье серверов ──
   getStats(days: number): Promise<{ days: number; series: StatsPoint[] }>;

@@ -33,7 +33,7 @@ function logErr(name: string, msg: string): void {
   repo.addJobError('Маршрутизация', `${name}.json: ${msg}`, 'warn');
 }
 
-interface Fetched {
+export interface Fetched {
   status: number;
   body: Buffer;
   etag: string | null;
@@ -42,7 +42,9 @@ interface Fetched {
   tooLarge?: boolean;
 }
 
-async function fetchSource(url: string, etag: string | null, lastModified: string | null): Promise<Fetched> {
+export const ROUTING_MAX_BYTES = MAX_BYTES;
+
+export async function fetchSource(url: string, etag: string | null, lastModified: string | null): Promise<Fetched> {
   const headers: Record<string, string> = { Accept: 'application/json, text/plain, application/octet-stream, */*' };
   if (etag) headers['If-None-Match'] = etag;
   if (lastModified) headers['If-Modified-Since'] = lastModified;

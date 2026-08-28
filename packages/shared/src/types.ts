@@ -307,6 +307,107 @@ export interface RoutingCheckResult {
   content?: string;
 }
 
+// ── AutoRoute: сборка Upstream из многих источников ──────────────────────────
+// Upstream перестал быть «одним файлом с редактором»: это скомпилированный датасет.
+// Много источников → нормализация → слияние по приоритету → версия. Публичный
+// /routing/upstream.json продолжает отдавать привычный {items:[...]}, поэтому уже
+// выданные клиенты ничего не замечают.
+//
+// dataset вынесен отдельным полем (сейчас всегда 'upstream'): позже появятся
+// именованные датасеты (Default / Aggressive / KZ) без переделки схемы.
+
+/** Что означает попадание в список. Направление («в VPN» или «мимо») выбирается
+ *  на сервере режимом Smart Routing; здесь — намерение самого источника. */
+export type RoutingAction = 'vpn' | 'direct' | 'block';
+
+/** Вид правила в нормализованном виде (совпадает с префиксами Xray routing). */
+export type RoutingRuleKind = 'domain' | 'full' | 'keyword' | 'regexp' | 'ip';
+
+/** 'auto' — определить по расширению URL (как раньше). */
+export type AutoRouteSourceFormat = RoutingSourceFormat | 'auto';
+
+export interface AutoRouteSource {
+  id: string;
+  dataset: string;
+  title: string;
+  url: string;
+  format: AutoRouteSourceFormat;
+  /** Формат, который реально применился в последней проверке (auto → разрешённый). */
+  resolvedFormat: RoutingSourceFormat | null;
+  action: RoutingAction;
+  enabled: boolean;
+  /** Меньше = выше в списке = приоритетнее при конфликте. Хранится плотным 0..N-1. */
+  priority: number;
+  lastCheckAt: string | null;
+  lastOkAt: string | null;
+  status: RoutingSyncStatus;
+  statusReason: string;
+  /** Сколько правил дал источник в последнем успешном разборе (last-known-good). */
+  ruleCount: number | null;
+  stats: RoutingSourceStats | null;
+}
+
+export interface AutoRouteSourceInput {
+  title: string;
+  url: string;
+  format?: AutoRouteSourceFormat;
+  action?: RoutingAction;
+  enabled?: boolean;
+}
+
+export interface AutoRouteSourcePatch extends Partial<AutoRouteSourceInput> {
+  priority?: number;
+}
+
+/** Вклад одного источника в конкретную сборку. */
+export interface AutoRouteBuildSource {
+  sourceId: string;
+  title: string;
+  rules: number; // сколько правил дал
+  won: number; // сколько попало в итог (не перебито приоритетнее)
+  conflicts: number; // сколько перебито более приоритетным с ДРУГИМ действием
+}
+
+export interface AutoRouteBuild {
+  version: number;
+  builtAt: string;
+  sha256: string;
+  domains: number;
+  ips: number;
+  added: number;
+  removed: number;
+  conflicts: number;
+  sourcesChanged: number;
+  sources: AutoRouteBuildSource[];
+  /** true — именно эта версия сейчас опубликована на /routing/upstream.json. */
+  published: boolean;
+}
+
+/** Один конфликт: значение пришло из нескольких источников с разным действием. */
+export interface AutoRouteConflict {
+  kind: RoutingRuleKind;
+  value: string;
+  winner: { sourceId: string; title: string; action: RoutingAction };
+  losers: { sourceId: string; title: string; action: RoutingAction }[];
+}
+
+export interface AutoRouteState {
+  dataset: string;
+  sources: AutoRouteSource[];
+  builds: AutoRouteBuild[];
+  /** Версия, опубликованная на публичном URL (null — ещё ни разу не собирали). */
+  publishedVersion: number | null;
+  publicUrl: string;
+}
+
+/** Итог одной пересборки. */
+export interface AutoRouteBuildResult {
+  ok: boolean;
+  reason: string;
+  build: AutoRouteBuild | null;
+  conflicts: AutoRouteConflict[];
+}
+
 export interface LogEntry {
   at: string;
   text: string;

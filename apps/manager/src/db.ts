@@ -176,6 +176,53 @@ CREATE TABLE IF NOT EXISTS routing_files (
   source_stats TEXT
 );
 
+-- AutoRoute: источники, из которых собирается Upstream. Много источников на датасет,
+-- порядок = приоритет (priority 0 — самый приоритетный). Колонка cached хранит
+-- последний УСПЕШНО разобранный набор правил (last-known-good): сборка не должна
+-- падать из-за того, что один источник сейчас недоступен.
+CREATE TABLE IF NOT EXISTS routing_sources (
+  id TEXT PRIMARY KEY,
+  dataset TEXT NOT NULL DEFAULT 'upstream',
+  title TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL,
+  format TEXT NOT NULL DEFAULT 'auto',
+  resolved_format TEXT,
+  action TEXT NOT NULL DEFAULT 'vpn',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  priority INTEGER NOT NULL DEFAULT 0,
+  etag TEXT,
+  last_modified TEXT,
+  last_check_at TEXT,
+  last_ok_at TEXT,
+  status TEXT NOT NULL DEFAULT 'idle',
+  status_reason TEXT NOT NULL DEFAULT '',
+  stats TEXT,
+  cached TEXT,
+  cached_count INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routing_sources_ds ON routing_sources(dataset, priority);
+
+-- История сборок AutoRoute: версия, чем отличается от предыдущей, и полное
+-- содержимое — чтобы «Откатить» возвращал ровно то, что было опубликовано.
+CREATE TABLE IF NOT EXISTS routing_builds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dataset TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  built_at TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  domains INTEGER NOT NULL DEFAULT 0,
+  ips INTEGER NOT NULL DEFAULT 0,
+  added INTEGER NOT NULL DEFAULT 0,
+  removed INTEGER NOT NULL DEFAULT 0,
+  conflicts INTEGER NOT NULL DEFAULT 0,
+  sources_changed INTEGER NOT NULL DEFAULT 0,
+  summary TEXT NOT NULL DEFAULT '[]',
+  rules TEXT NOT NULL DEFAULT '[]',
+  published INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_routing_builds_ver ON routing_builds(dataset, version);
+
 CREATE TABLE IF NOT EXISTS admin_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at TEXT NOT NULL,
@@ -360,6 +407,21 @@ for (const stmt of [
   } catch {
     /* колонка уже есть */
   }
+}
+
+// AutoRoute: прежний одиночный внешний источник Upstream переносим в список
+// источников, чтобы настройка не потерялась при переходе на многоисточниковую
+// сборку. Делается один раз — только пока у датасета нет ни одного источника.
+try {
+  db.prepare(
+    `INSERT INTO routing_sources(id, dataset, title, url, format, action, enabled, priority, created_at)
+     SELECT 'rs_legacy_upstream', 'upstream', 'Прежний внешний источник', source_url, 'auto', 'vpn', 1, 0, ?
+       FROM routing_files
+      WHERE name = 'upstream' AND mode = 'mirror' AND TRIM(source_url) != ''
+        AND NOT EXISTS (SELECT 1 FROM routing_sources WHERE dataset = 'upstream')`,
+  ).run(new Date().toISOString());
+} catch {
+  /* таблиц ещё нет */
 }
 
 // Умная маршрутизация: файл `sites` упразднён — список сайтов ведёт пользователь
