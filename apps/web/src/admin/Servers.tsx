@@ -244,7 +244,7 @@ function SshHardenPanel({ server }: { server: Server }) {
 }
 
 function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
-  const { editServer, showToast, reload, showConfirm } = useApp();
+  const { editServer, showToast, reload, showConfirm, deleteServer } = useApp();
   const [provBusy, setProvBusy] = useState<string | null>(null);
 
   function reinstall() {
@@ -426,6 +426,18 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
             ))}
           </div>
         </Field>
+      </div>
+
+      {/* Маршрутизация — то, ради чего открывают сервер: сразу под названием, без прокрутки. */}
+      <EndpointConfigPanel server={server} />
+
+      {/* Техническая часть — свёрнута: домен и SSH, протоколы, ключи, прокси, установка ПО,
+          порты. Меняется редко; всё, что нужно каждый день, выше. */}
+      <details className="card" style={{ padding: '10px 14px' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>
+          Техническая часть — домен и SSH, протоколы, ключи, прокси, установка ПО, порты
+        </summary>
+      <div className="grid-2" style={{ marginTop: 10 }}>
         <Field label="Домен или IP (VPN-endpoint)"><input className="input mono" value={vpnHost} onChange={(e) => setVpnHost(e.target.value)} /></Field>
         <Field label="SSH-порт"><input className="input" inputMode="numeric" value={sshPort} onChange={(e) => setSshPort(e.target.value.replace(/\D/g, ''))} /></Field>
         <Field label="SSH-пользователь"><input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} /></Field>
@@ -571,8 +583,30 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
       {/* SSH hardening: перевод на вход по ключу */}
       <SshHardenPanel server={server} />
 
-      {/* Пер-серверные настройки конфига (на устройстве) */}
-      <EndpointConfigPanel server={server} />
+        {/* Отвязать — редкое действие: бокс уходит, endpoint (домен, порты, ключи, конфиги) остаётся. */}
+        <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+          <span className="field-label">Отвязать физический сервер</span>
+          <span className="small muted">Домен, порты, ключи и все выданные конфиги сохранятся; SSH-доступ будет очищен. Для переезда на другой бокс используйте «Перенести».</span>
+          <div>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() =>
+                showConfirm({
+                  title: 'Отвязать сервер?',
+                  text: `«${server.name}» будет отвязан, но endpoint (домен ${server.host}, порты, ключи) и все выданные конфиги СОХРАНЯТСЯ. Позже можно подключить новый сервер на тот же домен — старые конфиги снова заработают.`,
+                  confirmLabel: 'Отвязать',
+                  onConfirm: async () => {
+                    await deleteServer(server.id, false);
+                    showToast('Сервер отвязан (endpoint сохранён)');
+                  },
+                })
+              }
+            >
+              Отвязать
+            </button>
+          </div>
+        </div>
+      </details>
 
       <div className="row" style={{ gap: 8 }}>
         <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>
@@ -756,22 +790,6 @@ export function Servers() {
                       }}
                     >
                       {syncing === s.id ? 'Синхронизирую…' : 'Синхронизировать'}
-                    </button>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      onClick={() =>
-                        showConfirm({
-                          title: 'Отвязать сервер?',
-                          text: `«${s.name}» будет отвязан, но endpoint (домен ${s.host}, порты, ключи) и все выданные конфиги СОХРАНЯТСЯ. Позже можно подключить новый сервер на тот же домен — старые конфиги снова заработают.`,
-                          confirmLabel: 'Отвязать',
-                          onConfirm: async () => {
-                            await deleteServer(s.id, false);
-                            showToast('Сервер отвязан (endpoint сохранён)');
-                          },
-                        })
-                      }
-                    >
-                      Отвязать
                     </button>
                     <button
                       className="btn btn-danger-outline btn-sm"
