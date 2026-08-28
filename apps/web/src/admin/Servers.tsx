@@ -137,22 +137,16 @@ function EndpointConfigPanel({ server }: { server: Server }) {
 
       {cfg.profiles !== 'full' ? (
         <>
-          <div className="body small muted" style={{ margin: '6px 0 4px' }}>Умный профиль — откуда список и куда он ведёт:</div>
+          <div className="body small muted" style={{ margin: '6px 0 4px' }}>Как работает умный профиль:</div>
           <div className="chip-row" style={{ marginBottom: 4 }}>
             <Chip
-              label="AutoRoute: список → в VPN, остальное напрямую"
-              active={cfg.smartSource === 'autoroute' && cfg.smartDirection === 'match-vpn'}
+              label="Умная маршрутизация: база AutoRoute → в VPN, остальное напрямую"
+              active={cfg.smartDirection === 'match-vpn'}
               disabled={busy}
               onClick={() => void save({ smartSource: 'autoroute', smartDirection: 'match-vpn' })}
             />
             <Chip
-              label="Свой список → в VPN, остальное напрямую"
-              active={cfg.smartSource === 'local' && cfg.smartDirection === 'match-vpn'}
-              disabled={busy}
-              onClick={() => void save({ smartSource: 'local', smartDirection: 'match-vpn' })}
-            />
-            <Chip
-              label="Обход белых списков: список → напрямую, остальное в VPN"
+              label="Обход белых списков (старый): RU-список → напрямую, остальное в VPN"
               active={cfg.smartDirection === 'match-direct'}
               disabled={busy}
               onClick={() => void save({ smartSource: 'local', smartDirection: 'match-direct' })}
@@ -160,10 +154,8 @@ function EndpointConfigPanel({ server }: { server: Server }) {
           </div>
           <div className="body small muted" style={{ marginBottom: 10 }}>
             {cfg.smartDirection === 'match-direct'
-              ? 'Унаследованный режим: всё идёт через VPN, а список ниже (или встроенный RU-список) — напрямую.'
-              : cfg.smartSource === 'autoroute'
-                ? 'Основной режим. База собирается в разделе AutoRoute; домены ниже дополняют её.'
-                : 'Через VPN идёт только то, что перечислено ниже. Если список пуст — весь трафик напрямую.'}
+              ? 'Всё идёт через VPN, а RU-список (свой ниже или встроенный) — напрямую. Так работали конфиги до AutoRoute.'
+              : 'Основной режим. База собирается в разделе AutoRoute, свои домены ниже дополняют её.'}
           </div>
         </>
       ) : null}

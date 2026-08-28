@@ -232,6 +232,21 @@ export function buildDataset(dataset = DATASET): AutoRouteBuildResult {
   let removed = 0;
   for (const k of prevKeys) if (!nowKeys.has(k)) removed++;
 
+  // Защита публикации. Пустая сборка (все источники недоступны и без кеша) или резко
+  // похудевшая относительно опубликованной — НЕ публикуется: умный профиль с пустым
+  // списком превращает VPN в «всё напрямую» у всех пользователей разом. Прод это
+  // словил на первом же запуске: 4 источника, ни один не скачался, опубликовано 0.
+  if (merged.length === 0) {
+    const reason = 'Ни один источник не дал правил — сборка не опубликована, прежняя версия остаётся.';
+    repo.addJobError('Маршрутизация', `AutoRoute: ${reason}`, 'warn');
+    return { ok: false, reason, build: null, conflicts: [] };
+  }
+  if (prevKeys.size >= 100 && merged.length < prevKeys.size * 0.5) {
+    const reason = `Сборка похудела с ${prevKeys.size} до ${merged.length} правил — не опубликована, прежняя версия остаётся. Проверьте источники.`;
+    repo.addJobError('Маршрутизация', `AutoRoute: ${reason}`, 'warn');
+    return { ok: false, reason, build: null, conflicts: [...conflictsByKey.values()].slice(0, 200) };
+  }
+
   const rulesJson = JSON.stringify(merged);
   const build = repo.insertAutoRouteBuild(dataset, {
     sha256: sha256(rulesJson),

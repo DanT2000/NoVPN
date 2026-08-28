@@ -446,14 +446,18 @@ try {
   /* таблицы ещё нет */
 }
 
-// AutoRoute: источники по умолчанию — «что не работает в России». Добавляются один
+// AutoRoute: источники по умолчанию — «что не работает в России». GitHub-списки идут
+// через зеркало ghfast.top: с хоста панели (107_AppsServer) raw.githubusercontent.com,
+// jsdelivr, statically и gitmirror недоступны (проверено с самой панели), зеркало и
+// antifilter.download — доступны. Прямые github-URL у сидированных источников
+// переписываем на зеркало. Добавляются один
 // раз, только если у датасета ещё нет ни одного источника с таким URL. Порядок =
 // приоритет: курируемый компактный список первым, объёмные — ниже.
 try {
   const DEFAULT_SOURCES: Array<{ id: string; title: string; url: string }> = [
-    { id: 'rs_itdog_inside', title: 'itdoginfo · заблокировано в России', url: 'https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/inside-raw.lst' },
-    { id: 'rs_refilter_domains', title: 'Re:filter · домены', url: 'https://raw.githubusercontent.com/1andrevich/Re-filter-lists/main/domains_all.lst' },
-    { id: 'rs_refilter_ips', title: 'Re:filter · IP-подсети', url: 'https://raw.githubusercontent.com/1andrevich/Re-filter-lists/main/ipsum.lst' },
+    { id: 'rs_itdog_inside', title: 'itdoginfo · заблокировано в России', url: 'https://ghfast.top/https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/inside-raw.lst' },
+    { id: 'rs_refilter_domains', title: 'Re:filter · домены', url: 'https://ghfast.top/https://raw.githubusercontent.com/1andrevich/Re-filter-lists/main/domains_all.lst' },
+    { id: 'rs_refilter_ips', title: 'Re:filter · IP-подсети', url: 'https://ghfast.top/https://raw.githubusercontent.com/1andrevich/Re-filter-lists/main/ipsum.lst' },
     { id: 'rs_antifilter_community', title: 'Antifilter Community · домены', url: 'https://community.antifilter.download/list/domains.lst' },
   ];
   const have = new Set((db.prepare("SELECT url FROM routing_sources WHERE dataset = 'upstream'").all() as Array<{ url: string }>).map((r) => r.url));
@@ -465,6 +469,11 @@ try {
   for (const s of DEFAULT_SOURCES) {
     if (have.has(s.url)) continue;
     ins.run(s.id, s.title, s.url, next++, new Date().toISOString());
+  }
+  // Сидированные источники, оставшиеся на прямом github, — на зеркало (только наши id:
+  // источники, добавленные администратором руками, не трогаем).
+  for (const id of ['rs_legacy_upstream', 'rs_itdog_inside', 'rs_refilter_domains', 'rs_refilter_ips']) {
+    db.prepare("UPDATE routing_sources SET url = REPLACE(url, 'https://raw.githubusercontent.com/', 'https://ghfast.top/https://raw.githubusercontent.com/'), etag = NULL, last_modified = NULL, status = 'idle', status_reason = '' WHERE id = ? AND url LIKE 'https://raw.githubusercontent.com/%'").run(id);
   }
   // Унаследованный источник дублирует itdoginfo по URL — под общим именем он понятнее.
   db.prepare("UPDATE routing_sources SET title = 'itdoginfo · заблокировано в России' WHERE id = 'rs_legacy_upstream' AND title = 'Прежний внешний источник'").run();

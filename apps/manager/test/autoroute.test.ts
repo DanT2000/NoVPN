@@ -265,3 +265,38 @@ test('datFiles: пересборка сбрасывает кеш — DAT сра�
   assert.notDeepEqual(before, after);
   repo.deleteAutoRouteSource(s.id);
 });
+
+test('защита публикации: пустая сборка и резкое похудение НЕ затирают опубликованную версию', async () => {
+  for (const s of repo.listAutoRouteSources()) repo.deleteAutoRouteSource(s.id);
+  const big = repo.addAutoRouteSource({ title: 'Большой', url: 'https://src/big.lst', action: 'vpn' });
+  stubFetch(Array.from({ length: 300 }, (_, i) => `d${i}.example`).join('\n'));
+  await autoroute.refreshSource(big.id);
+  const ok = autoroute.buildDataset();
+  assert.equal(ok.ok, true);
+  const publishedBefore = repo.getPublishedAutoRouteVersion('upstream');
+  const contentBefore = repo.getRoutingContent('upstream');
+
+  // 1) все источники выключены → пустая сборка → отказ, опубликованная версия прежняя
+  repo.updateAutoRouteSource(big.id, { enabled: false });
+  const tiny = repo.addAutoRouteSource({ title: 'Крошечный', url: 'https://src/tiny.lst', action: 'vpn' });
+  stubFetch('one.example\n');
+  await autoroute.refreshSource(tiny.id);
+  repo.updateAutoRouteSource(tiny.id, { enabled: false });
+  const empty = autoroute.buildDataset();
+  assert.equal(empty.ok, false, 'нет включённых источников — не публикуем');
+  assert.equal(repo.getPublishedAutoRouteVersion('upstream'), publishedBefore);
+
+  // 2) только крошечный источник (1 правило вместо 300) → похудение → отказ
+  repo.updateAutoRouteSource(tiny.id, { enabled: true });
+  const shrunk = autoroute.buildDataset();
+  assert.equal(shrunk.ok, false, 'похудение >50% не публикуется');
+  assert.match(shrunk.reason, /похудела/);
+  assert.equal(repo.getPublishedAutoRouteVersion('upstream'), publishedBefore, 'версия не сменилась');
+  assert.equal(repo.getRoutingContent('upstream'), contentBefore, 'содержимое не тронуто');
+
+  // 3) вернули большой — публикуется снова
+  repo.updateAutoRouteSource(big.id, { enabled: true });
+  assert.equal(autoroute.buildDataset().ok, true);
+  repo.deleteAutoRouteSource(big.id);
+  repo.deleteAutoRouteSource(tiny.id);
+});
