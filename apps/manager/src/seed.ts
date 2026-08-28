@@ -46,7 +46,7 @@ function seedRoutingFiles(): void {
        (name, content, version, updated_at, root_type, entry_count, mode, source_url, auto_sync, status, status_reason)
      VALUES (?, ?, 1, ?, 'object', 0, 'local', '', 0, 'idle', '')`,
   );
-  for (const name of ['upstream', 'sites', 'apps']) stmt.run(name, '{\n  "items": []\n}', now);
+  for (const name of ['upstream', 'apps']) stmt.run(name, '{\n  "items": []\n}', now);
 }
 
 export function seedIfEmpty(): void {

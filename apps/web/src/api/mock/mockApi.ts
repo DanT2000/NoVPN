@@ -616,7 +616,7 @@ export const mockApi: ApiClient = {
   // ── умная маршрутизация (in-memory) ──
   async getRoutingFiles() {
     await wait(120);
-    return { files: (['upstream', 'sites', 'apps'] as const).map((n) => routingMeta(n)) };
+    return { files: (['upstream', 'apps'] as const).map((n) => routingMeta(n)) };
   },
   async getRoutingFile(name) {
     await wait(120);
@@ -662,19 +662,18 @@ const DESKTOP_VERSIONS = [{ version: '0.2.5', sizeBytes: 16185753 }];
 const DESKTOP_CFG: { mode: 'auto' | 'pin' | 'manual'; pinnedVersion: string | null } = { mode: 'auto', pinnedVersion: null };
 
 // Демо-состояние трёх файлов для mock-режима.
-const ROUTING: Record<'upstream' | 'sites' | 'apps', {
+const ROUTING: Record<'upstream' | 'apps', {
   content: string; version: number; updatedAt: string; mode: 'local' | 'mirror'; sourceUrl: string;
   autoSync: boolean; lastCheckAt: string | null; lastOkAt: string | null; entryCount: number | null;
 }> = {
   upstream: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
-  sites: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
   apps: { content: '{\n  "items": []\n}', version: 1, updatedAt: new Date().toISOString(), mode: 'local', sourceUrl: '', autoSync: false, lastCheckAt: null, lastOkAt: null, entryCount: 0 },
 };
 function mockFormat(url: string): 'json' | 'lst' | 'txt' | 'srs' {
   const ext = (url.split(/[?#]/)[0] ?? '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   return ext === 'lst' || ext === 'txt' || ext === 'srs' ? ext : 'json';
 }
-function routingMeta(name: 'upstream' | 'sites' | 'apps') {
+function routingMeta(name: 'upstream' | 'apps') {
   const f = ROUTING[name];
   return {
     name, version: f.version, updatedAt: f.updatedAt,

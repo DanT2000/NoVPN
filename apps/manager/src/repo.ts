@@ -958,7 +958,7 @@ export function allDownloadRefs(): Array<{ appId: string; platform: string; name
 }
 
 // ── умная маршрутизация (routing files) ──
-const ROUTING_ORDER: RoutingFileMeta['name'][] = ['upstream', 'sites', 'apps'];
+const ROUTING_ORDER: RoutingFileMeta['name'][] = ['upstream', 'apps'];
 
 function parseSourceStats(s: unknown): RoutingSourceStats | null {
   if (typeof s !== 'string' || !s) return null;

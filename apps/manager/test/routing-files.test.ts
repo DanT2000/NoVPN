@@ -49,13 +49,13 @@ test('diffCounts + normalizeJson', () => {
 });
 
 test('saveRoutingContent: версия растёт только при реальном изменении', () => {
-  const first = repo.saveRoutingContent('sites', '{\n  "items": ["a.ru"]\n}');
+  const first = repo.saveRoutingContent('apps', '{\n  "items": ["a.ru"]\n}');
   assert.equal(first.changed, true);
   const v = first.meta.version;
-  const again = repo.saveRoutingContent('sites', '{\n  "items": ["a.ru"]\n}'); // тот же текст
+  const again = repo.saveRoutingContent('apps', '{\n  "items": ["a.ru"]\n}'); // тот же текст
   assert.equal(again.changed, false);
   assert.equal(again.meta.version, v); // без bump
-  const changed = repo.saveRoutingContent('sites', '{\n  "items": ["a.ru","b.ru"]\n}');
+  const changed = repo.saveRoutingContent('apps', '{\n  "items": ["a.ru","b.ru"]\n}');
   assert.equal(changed.changed, true);
   assert.equal(changed.meta.version, v + 1);
   assert.equal(changed.meta.entryCount, 2);
@@ -91,23 +91,23 @@ test('checkMirror auto: подозрительное сжатие ОТКЛОНЯ
 });
 
 test('checkMirror auto: смена корневой структуры ОТКЛОНЯЕТСЯ', async () => {
-  repo.saveRoutingContent('sites', bigList(50)); // объект {items:[]}
-  repo.saveRoutingSource('sites', { mode: 'mirror', sourceUrl: 'https://src/sites.json', autoSync: true });
-  const before = repo.getRoutingFull('sites')!;
+  repo.saveRoutingContent('apps', bigList(50)); // объект {items:[]}
+  repo.saveRoutingSource('apps', { mode: 'mirror', sourceUrl: 'https://src/apps.json', autoSync: true });
+  const before = repo.getRoutingFull('apps')!;
   stubFetch(200, JSON.stringify(['a', 'b', 'c'])); // массив
-  const r = await checkMirror('sites', { apply: true });
+  const r = await checkMirror('apps', { apply: true });
   assert.equal(r.ok, false);
   assert.equal(r.status, 'rejected');
-  assert.equal(repo.getRoutingFull('sites')!.version, before.version);
+  assert.equal(repo.getRoutingFull('apps')!.version, before.version);
 });
 
 test('checkMirror auto: битый JSON — ошибка, версия не растёт', async () => {
-  const before = repo.getRoutingFull('sites')!;
+  const before = repo.getRoutingFull('apps')!;
   stubFetch(200, '{ broken json,,,');
-  const r = await checkMirror('sites', { apply: true });
+  const r = await checkMirror('apps', { apply: true });
   assert.equal(r.ok, false);
   assert.equal(r.status, 'error');
-  assert.equal(repo.getRoutingFull('sites')!.version, before.version);
+  assert.equal(repo.getRoutingFull('apps')!.version, before.version);
 });
 
 test('checkMirror manual (apply=false): не публикует, возвращает content', async () => {
@@ -164,15 +164,15 @@ test('convertList: нормализация + статистика (пустые
 });
 
 test('checkMirror auto: .lst источник → JSON {items}, статистика сохранена', async () => {
-  repo.saveRoutingContent('sites', '{\n  "items": []\n}');
-  repo.saveRoutingSource('sites', { mode: 'mirror', sourceUrl: 'https://src/list.lst', autoSync: true });
-  const before = repo.getRoutingFull('sites')!;
+  repo.saveRoutingContent('apps', '{\n  "items": []\n}');
+  repo.saveRoutingSource('apps', { mode: 'mirror', sourceUrl: 'https://src/list.lst', autoSync: true });
+  const before = repo.getRoutingFull('apps')!;
   stubFetch(200, 'youtube.com\n# c\nyoutube.com\ndiscord.com\n');
-  const r = await checkMirror('sites', { apply: true });
+  const r = await checkMirror('apps', { apply: true });
   assert.equal(r.ok, true);
   assert.equal(r.status, 'ok');
   assert.equal(r.stats?.format, 'lst');
-  const after = repo.getRoutingFull('sites')!;
+  const after = repo.getRoutingFull('apps')!;
   assert.equal(after.version, before.version + 1);
   assert.equal(after.entryCount, 2); // youtube.com, discord.com (дубль убран)
   assert.deepEqual(JSON.parse(after.content), { items: ['youtube.com', 'discord.com'] });
@@ -193,9 +193,9 @@ test('checkMirror auto: .srs без бинарника → ошибка, вер�
 });
 
 test('sourceFormat в мете определяется по URL; смена URL сбрасывает stats', () => {
-  repo.saveRoutingSource('sites', { mode: 'mirror', sourceUrl: 'https://src/list.txt', autoSync: false });
-  assert.equal(repo.getRoutingFull('sites')!.sourceFormat, 'txt');
-  assert.equal(repo.getRoutingFull('sites')!.sourceStats, null); // сброшено сменой URL
+  repo.saveRoutingSource('apps', { mode: 'mirror', sourceUrl: 'https://src/list.txt', autoSync: false });
+  assert.equal(repo.getRoutingFull('apps')!.sourceFormat, 'txt');
+  assert.equal(repo.getRoutingFull('apps')!.sourceStats, null); // сброшено сменой URL
 });
 
 test('ПУСТОЙ файл + источник-массив: первый синк УСТАНАВЛИВАЕТ тип (не отклоняется)', async () => {

@@ -234,9 +234,14 @@ export interface AppSettings {
 }
 
 // ── Умная маршрутизация (Smart Routing) — управляемые JSON-файлы для NoVPN Desktop ──
-// Три независимых файла. Каждый может управляться локально ИЛИ зеркалить внешний URL.
+// Каждый файл может управляться локально ИЛИ зеркалить внешний URL.
 // Публичные URL панели неизменны: /routing/<name>.json.
-export type RoutingFileName = 'upstream' | 'sites' | 'apps';
+//
+// `sites` убран: список сайтов — это НЕ серверная сущность. Пользователь ведёт его
+// локально в NoVPN Desktop (добавил домен → «через VPN» / «напрямую»), в том числе
+// одним кликом из браузерного расширения. Клиентам sites.json ни разу не отдавался,
+// поэтому обратная совместимость не нужна.
+export type RoutingFileName = 'upstream' | 'apps';
 export type RoutingMode = 'local' | 'mirror';
 /** Состояние последней проверки внешнего источника. */
 export type RoutingSyncStatus = 'idle' | 'ok' | 'nochange' | 'error' | 'rejected';

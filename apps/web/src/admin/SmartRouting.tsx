@@ -9,8 +9,7 @@ import { downloadText } from '../lib/clipboard';
 
 const FILES: { name: RoutingFileName; title: string; blurb: string }[] = [
   { name: 'upstream', title: 'Upstream JSON', blurb: 'Основной список маршрутизации (например, обход блокировок).' },
-  { name: 'sites', title: 'Sites JSON', blurb: 'Правила по сайтам/доменам.' },
-  { name: 'apps', title: 'Apps JSON', blurb: 'Правила по приложениям.' },
+  { name: 'apps', title: 'Apps JSON', blurb: 'Каталог приложений: имена процессов, пути установки, иконки, рекомендуемый маршрут.' },
 ];
 
 function fmtDate(iso: string | null): string {

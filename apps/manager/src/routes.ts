@@ -75,7 +75,7 @@ router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 // ── публично: файлы умной маршрутизации (для NoVPN Desktop) ──
 // Клиентам всегда даётся стабильный URL этой панели, даже когда содержимое —
 // зеркало внешнего источника. Секретов нет, отдаём без авторизации.
-const ROUTING_NAMES = new Set(['upstream', 'sites', 'apps']);
+const ROUTING_NAMES = new Set(['upstream', 'apps']);
 router.get('/routing/:file', (req, res) => {
   const name = String(req.params.file ?? '').replace(/\.json$/i, '');
   if (!ROUTING_NAMES.has(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
@@ -1519,7 +1519,7 @@ router.post('/api/admin/routing/:name/check', requireAdmin, async (req, res) => 
   const name = String(req.params.name);
   if (!repo.getRoutingRow(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
   try {
-    const result = await checkMirror(name as 'upstream' | 'sites' | 'apps', { apply: false });
+    const result = await checkMirror(name as 'upstream' | 'apps', { apply: false });
     res.json(result);
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка проверки.'));
