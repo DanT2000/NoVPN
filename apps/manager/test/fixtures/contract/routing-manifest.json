@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "name": "upstream",
+      "version": 1,
+      "sha256": "3a42d346c00ddcf61ff8b82dfe2cd58419f7fdddc203eaec775dd5582468d937",
+      "bytes": 17,
+      "updatedAt": "2026-08-28T01:52:16.844Z",
+      "url": "http://127.0.0.1:53251/routing/upstream.json"
+    },
+    {
+      "name": "sites",
+      "version": 1,
+      "sha256": "3a42d346c00ddcf61ff8b82dfe2cd58419f7fdddc203eaec775dd5582468d937",
+      "bytes": 17,
+      "updatedAt": "2026-08-28T01:52:13.671Z",
+      "url": "http://127.0.0.1:53251/routing/sites.json"
+    },
+    {
+      "name": "apps",
+      "version": 1,
+      "sha256": "3a42d346c00ddcf61ff8b82dfe2cd58419f7fdddc203eaec775dd5582468d937",
+      "bytes": 17,
+      "updatedAt": "2026-08-28T01:52:16.844Z",
+      "url": "http://127.0.0.1:53251/routing/apps.json"
+    }
+  ]
+}

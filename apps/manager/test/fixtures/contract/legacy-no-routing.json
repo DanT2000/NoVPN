@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "panel": {
+    "name": "NoVPN",
+    "origin": "https://old.example"
+  },
+  "routingResources": {
+    "manifest": "https://old.example/routing/manifest.json",
+    "upstream": "https://old.example/routing/upstream.json",
+    "sites": "https://old.example/routing/sites.json",
+    "apps": "https://old.example/routing/apps.json"
+  },
+  "servers": [
+    {
+      "id": "s_legacy",
+      "host": "legacy.example",
+      "remark": "Старый",
+      "protocols": [
+        "xray"
+      ],
+      "online": true
+    }
+  ]
+}

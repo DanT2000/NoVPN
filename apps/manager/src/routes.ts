@@ -1,6 +1,7 @@
 // Все HTTP-роуты. Пути совпадают с httpApi фронтенда.
 
 import net from 'node:net';
+import crypto from 'node:crypto';
 import { resolve4 } from 'node:dns/promises';
 import express, { Router } from 'express';
 import type { Request } from 'express';
@@ -70,6 +71,10 @@ function reqOrigin(req: { headers: Record<string, unknown>; protocol?: string })
   return host ? `${proto}://${host}` : '';
 }
 
+// Версия контракта панель↔клиент (docs/NOVPN-CLIENT-CONTRACT.md). Major растёт только
+// при несовместимом изменении; клиент с меньшим major обязан деградировать в Smart.
+export const CONTRACT_SCHEMA_VERSION = 1;
+
 // ── health ──
 router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 
@@ -77,15 +82,73 @@ router.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 // Клиентам всегда даётся стабильный URL этой панели, даже когда содержимое —
 // зеркало внешнего источника. Секретов нет, отдаём без авторизации.
 const ROUTING_NAMES = new Set(['upstream', 'sites', 'apps']);
+
+// sha256 содержимого — для manifest'а и сильного ETag. Считаем лениво и помним по
+// (файл, версия): пересчитывать хеш многомегабайтного списка на каждый запрос
+// клиента незачем, а версия меняется ровно тогда, когда меняется содержимое.
+const routingHashCache = new Map<string, { version: number; sha256: string; bytes: number }>();
+function routingDigest(name: string): { version: number; sha256: string; bytes: number; updatedAt: string } | null {
+  const row = repo.getRoutingRow(name);
+  if (!row) return null;
+  const version = Number(row.version ?? 1);
+  const cached = routingHashCache.get(name);
+  if (cached && cached.version === version) return { ...cached, updatedAt: String(row.updated_at ?? '') };
+  const content = String(row.content ?? '');
+  const entry = {
+    version,
+    sha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+    bytes: Buffer.byteLength(content, 'utf8'),
+  };
+  routingHashCache.set(name, entry);
+  return { ...entry, updatedAt: String(row.updated_at ?? '') };
+}
+
+// Манифест списков: один запрос, чтобы понять, что изменилось, вместо трёх условных
+// GET'ов. Регистрируется ДО /routing/:file — иначе его перехватил бы общий обработчик.
+router.get('/routing/manifest.json', (req, res) => {
+  const origin = reqOrigin(req as never);
+  const files = [...ROUTING_NAMES]
+    .map((name) => {
+      const d = routingDigest(name);
+      return d ? { name, version: d.version, sha256: d.sha256, bytes: d.bytes, updatedAt: d.updatedAt, url: `${origin}/routing/${name}.json` } : null;
+    })
+    .filter(Boolean);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=60');
+  res.json({ schemaVersion: CONTRACT_SCHEMA_VERSION, files });
+});
+
 router.get('/routing/:file', (req, res) => {
   const name = String(req.params.file ?? '').replace(/\.json$/i, '');
   if (!ROUTING_NAMES.has(name)) return res.status(404).json(err('not_found', 'Файл не найден.'));
   const content = repo.getRoutingContent(name);
   if (content == null) return res.status(404).json(err('not_found', 'Файл не найден.'));
-  const row = repo.getRoutingRow(name);
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  if (row) res.setHeader('ETag', `W/"v${row.version}"`);
+  const d = routingDigest(name);
+  // Сильный ETag по содержимому: версия растёт и при правках форматирования, а клиенту
+  // важно, изменились ли данные. Last-Modified — второй валидатор для клиентов,
+  // которые умеют только его.
+  const etag = d ? `"${d.sha256}"` : undefined;
+  if (etag) res.setHeader('ETag', etag);
+  if (d?.updatedAt) {
+    const t = Date.parse(d.updatedAt);
+    if (!Number.isNaN(t)) res.setHeader('Last-Modified', new Date(t).toUTCString());
+  }
   res.setHeader('Cache-Control', 'public, max-age=60');
+  // Условный GET: клиент держит last-known-good и не перекачивает неизменившийся список.
+  const inm = req.headers['if-none-match'];
+  if (etag && typeof inm === 'string' && inm.split(',').some((v) => v.trim() === etag)) {
+    return res.status(304).end();
+  }
+  const ims = req.headers['if-modified-since'];
+  if (typeof ims === 'string' && d?.updatedAt) {
+    const since = Date.parse(ims);
+    const mod = Date.parse(d.updatedAt);
+    // Last-Modified округляется до секунды — сравниваем с той же точностью.
+    if (!Number.isNaN(since) && !Number.isNaN(mod) && Math.floor(mod / 1000) * 1000 <= since) {
+      return res.status(304).end();
+    }
+  }
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   return res.send(content);
 });
 
@@ -253,6 +316,70 @@ router.get('/sub/:token/full', (req, res) => {
   }
   if (parts.length === 0) return res.status(404).send(''); // пусто/битое → не отдаём all-direct утечку
   sendUserXrayFull(res, u, parts.length === 1 ? parts[0]! : `[\n${parts.join(',\n')}\n]`);
+});
+
+/**
+ * Метаданные подписки для клиентского приложения (NOVPN-CLIENT-CONTRACT).
+ *
+ * Зачем отдельный эндпоинт, а не /api/public/bootstrap: тот работает по COOKIE-сессии,
+ * которую заводит вход по accessToken (токен личного кабинета). У приложения на руках
+ * только ссылка-подписка с sub-токеном — другим токеном. Поэтому метаданные отдаём под
+ * тем же sub-токеном, которым клиент уже пользуется: заодно клиент всегда спрашивает
+ * ИМЕННО ту панель, чьей подпиской он подключён (у разных провайдеров свои панели).
+ *
+ * Состав servers[] держим 1:1 с агрегированной подпиской /sub/<t>/full — каждому
+ * профилю в приложении соответствует ровно одна запись, иначе матчинг разъедется.
+ * Ключ сопоставления — host: serverId внутри конфига подписки не передаётся, а remark
+ * (имя с флагом) администратор переименовывает.
+ */
+router.get('/sub/:token/meta.json', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  const origin = reqOrigin(req as never);
+  const seen = new Set<string>();
+  const servers: unknown[] = [];
+  for (const e of repo.subscriptionXrayEntries(u.id)) {
+    if (seen.has(e.serverId)) continue;
+    seen.add(e.serverId);
+    const srv = repo.getServer(e.serverId);
+    if (!srv) continue;
+    const cfg = repo.getEndpointConfig(srv.host);
+    const icon = srv.flagEmoji || (srv.country ? srv.country.split(' ')[0] : '') || '';
+    servers.push({
+      id: srv.id,
+      host: srv.host,
+      remark: [icon, srv.name].filter(Boolean).join(' '),
+      protocols: srv.protocols,
+      online: srv.agent === 'online' && srv.endpointOk,
+      subLink: `${origin}/sub/${String(req.params.token)}/server/${srv.id}/full`,
+      routing: {
+        mode: cfg.xrayWhitelist ? 'smart' : 'full',
+        // ВНИМАНИЕ на семантику: false (по умолчанию) — приватные подсети идут НАПРЯМУЮ,
+        // мимо туннеля; true — они идут ЧЕРЕЗ туннель (самохостер добирается до локалки
+        // своего сервера). Это одинаково в обоих режимах.
+        lanAccess: cfg.lanAccess,
+        // Какие прокси-каналы разрешены как АВАРИЙНЫЙ транспорт, если Xray заблокируют.
+        // Это не маршрутизация и не список исключений. null = все доступные.
+        fallbackTypes: cfg.fallbackTypes,
+        // Сколько доменов-исключений задано у этого сервера. В режиме full исключения
+        // не применяются вовсе — счётчик только для отображения.
+        ownExceptions: cfg.xrayWhitelist ? (cfg.whitelistDomains?.length ?? 0) : 0,
+      },
+    });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    schemaVersion: CONTRACT_SCHEMA_VERSION,
+    panel: { name: repo.brandName(), origin },
+    routingResources: {
+      manifest: `${origin}/routing/manifest.json`,
+      upstream: `${origin}/routing/upstream.json`,
+      sites: `${origin}/routing/sites.json`,
+      apps: `${origin}/routing/apps.json`,
+    },
+    servers,
+  });
 });
 
 // Пер-серверная подписка: ОДИН сервер со СВОИМ обходом/политикой (не общий балансир).

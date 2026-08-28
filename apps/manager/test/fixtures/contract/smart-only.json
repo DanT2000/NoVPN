@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "panel": {
+    "name": "NoVPN",
+    "origin": "http://127.0.0.1:53251"
+  },
+  "routingResources": {
+    "manifest": "http://127.0.0.1:53251/routing/manifest.json",
+    "upstream": "http://127.0.0.1:53251/routing/upstream.json",
+    "sites": "http://127.0.0.1:53251/routing/sites.json",
+    "apps": "http://127.0.0.1:53251/routing/apps.json"
+  },
+  "servers": [
+    {
+      "id": "s_ApHwtHLy",
+      "host": "fr.example.test",
+      "remark": "🇫🇷 Франция",
+      "protocols": [
+        "xray"
+      ],
+      "online": false,
+      "subLink": "http://127.0.0.1:53251/sub/K2v4AQzbHY9e2wZC3_NDIB1j/server/s_ApHwtHLy/full",
+      "routing": {
+        "mode": "smart",
+        "lanAccess": false,
+        "fallbackTypes": null,
+        "ownExceptions": 3
+      }
+    }
+  ]
+}
