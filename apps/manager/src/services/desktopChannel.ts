@@ -18,7 +18,13 @@ import * as repo from '../repo.js';
 
 const PUBKEY_B64 = 'mAKrDKVxw35ZXElNCksRYgzEmzESGvfXMx5Zbc2oCUw=';
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex'); // DER-префикс SPKI ed25519
-const CENTRAL_SOURCES = [
+// Порядок важен. С прод-хоста панели GitHub напрямую НЕДОСТУПЕН (та же причина, по
+// которой источники AutoRoute ходят через ghfast.top), поэтому зеркало GitHub стоит
+// первым — иначе выборка падала на второй источник, а это САМА панель: она читала
+// собственную старую версию и «обновление» никогда не приезжало (0.2.6 висела в
+// репозитории, а панель отдавала 0.2.5).
+export const CENTRAL_SOURCES = [
+  'https://ghfast.top/https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop',
   'https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop',
   'https://vpn.appswire.ru/desktop',
 ];

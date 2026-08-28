@@ -91,3 +91,19 @@ test('publish + listVersions + currentManifest', () => {
   const vs = dc.listVersions();
   assert.ok(vs.some((v) => v.version === manifest.version));
 });
+
+// Инцидент 28.08.2026: релиз 0.2.6 лежал в репозитории, а панель продолжала отдавать
+// 0.2.5. С прод-хоста GitHub недоступен напрямую (та же причина, по которой источники
+// AutoRoute ходят через ghfast.top), выборка падала на следующий источник — а это САМА
+// панель: она читала собственную старую версию и молча отвечала «изменений нет».
+test('источники зеркала: рабочее зеркало GitHub впереди, своя панель — последней', () => {
+  const src = dc.CENTRAL_SOURCES;
+  assert.ok(src.length >= 2);
+  assert.match(src[0]!, /ghfast\.top/, 'первым — зеркало, доступное с прод-хоста');
+  assert.ok(
+    src.every((s) => s.endsWith('/desktop')),
+    'каждый источник — база, к которой дописывается /latest.json и /novpn.exe',
+  );
+  const own = src.findIndex((s) => s.includes('vpn.appswire.ru'));
+  assert.equal(own, src.length - 1, 'собственная панель — только последний запасной вариант');
+});
