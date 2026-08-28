@@ -17,6 +17,33 @@ export const REALITY_SNI = 'cdn.dodostatic.net';
 export const REALITY_FP = 'edge';
 export const REALITY_SPX = '/';
 
+/** Генератор server.json Xray при установке (python3; argv: SNI, privateKey, shortId).
+ *  Вынесен в константу, чтобы тест прогнал его настоящим python и зафиксировал контракт
+ *  с клиентами: minClientVer для mihomo, sniffing, api-inbound для статистики. */
+export const XRAY_SERVER_JSON_PY = `import json,sys
+sni,priv,sid=sys.argv[1],sys.argv[2],sys.argv[3]
+cfg={"log":{"loglevel":"warning"},
+ # Статистика по клиентам (трафик/активность) — панель читает через api statsquery.
+ "stats":{},
+ "api":{"tag":"api","services":["StatsService"]},
+ "policy":{"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}},
+           "system":{"statsInboundUplink":True,"statsInboundDownlink":True}},
+ "inbounds":[{"listen":"0.0.0.0","port":443,"protocol":"vless","tag":"vless-reality",
+   "settings":{"clients":[],"decryption":"none"},
+   # minClientVer: mihomo (движок NoVPN Desktop) шлёт версию REALITY-клиента 1.8.2, а Xray
+   # ≥ 26.7.11 без явного minClientVer требует ≥ 26.3.27 и молча отвергает его
+   # («REALITY authentication failed», mihomo#2967 — wontfix). Xray-клиенты (Happ, v2rayNG,
+   # Amnezia) от этого не зависят. Предупреждение Xray про GFW к нам не относится.
+   "streamSettings":{"network":"tcp","security":"reality",
+     "realitySettings":{"show":False,"dest":sni+":443","xver":0,"minClientVer":"1.8.2",
+       "serverNames":[sni],"privateKey":priv,"shortIds":[sid]}},
+   "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]}},
+   {"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door",
+    "settings":{"address":"127.0.0.1"},"tag":"api"}],
+ "outbounds":[{"protocol":"freedom","tag":"direct"}],
+ "routing":{"rules":[{"type":"field","inboundTag":["api"],"outboundTag":"api"}]}}
+print(json.dumps(cfg,indent=2))`;
+
 function creds(serverId: string) {
   const s = getServerSsh(serverId);
   if (!s) throw new Error('Сервер не найден.');
@@ -218,25 +245,7 @@ if [ "$WANT_XRAY" = "1" ]; then
   REALITY_PUB=$(docker run --rm teddysun/xray xray x25519 -i "$REALITY_PRIV" | grep -iE 'public' | grep -oE '[A-Za-z0-9_/+-]{40,}' | head -1)
   [ -z "$SHORT_ID" ] && SHORT_ID=$(openssl rand -hex 8)
   python3 - "$SNI" "$REALITY_PRIV" "$SHORT_ID" > /opt/amnezia/xray/server.json <<'PY'
-import json,sys
-sni,priv,sid=sys.argv[1],sys.argv[2],sys.argv[3]
-cfg={"log":{"loglevel":"warning"},
- # Статистика по клиентам (трафик/активность) — панель читает через api statsquery.
- "stats":{},
- "api":{"tag":"api","services":["StatsService"]},
- "policy":{"levels":{"0":{"statsUserUplink":True,"statsUserDownlink":True}},
-           "system":{"statsInboundUplink":True,"statsInboundDownlink":True}},
- "inbounds":[{"listen":"0.0.0.0","port":443,"protocol":"vless","tag":"vless-reality",
-   "settings":{"clients":[],"decryption":"none"},
-   "streamSettings":{"network":"tcp","security":"reality",
-     "realitySettings":{"show":False,"dest":sni+":443","xver":0,
-       "serverNames":[sni],"privateKey":priv,"shortIds":[sid]}},
-   "sniffing":{"enabled":True,"destOverride":["http","tls","quic"]}},
-   {"listen":"127.0.0.1","port":10085,"protocol":"dokodemo-door",
-    "settings":{"address":"127.0.0.1"},"tag":"api"}],
- "outbounds":[{"protocol":"freedom","tag":"direct"}],
- "routing":{"rules":[{"type":"field","inboundTag":["api"],"outboundTag":"api"}]}}
-print(json.dumps(cfg,indent=2))
+${XRAY_SERVER_JSON_PY}
 PY
   docker rm -f amnezia-xray >/dev/null 2>&1 || true
   docker run -d --name amnezia-xray --restart always -p ${xrayPort}:443 -v /opt/amnezia/xray:/opt/amnezia/xray teddysun/xray xray run -c /opt/amnezia/xray/server.json >/dev/null
@@ -507,6 +516,9 @@ export async function sshResyncDevices(
 import json
 p="/opt/amnezia/xray/server.json"
 c=json.load(open(p))
+# Серверы, поставленные до появления minClientVer в шаблоне (см. установку выше):
+# «Синхронизировать» доводит их до актуального конфига, иначе NoVPN Desktop не подключится.
+c["inbounds"][0]["streamSettings"]["realitySettings"]["minClientVer"]="1.8.2"
 cl=c["inbounds"][0]["settings"]["clients"]
 ex={x.get("id") for x in cl}
 for l in open("/tmp/novpn-xray-clients"):
@@ -606,6 +618,8 @@ import json,sys
 uuid,email=sys.argv[1],sys.argv[2]
 p='/opt/amnezia/xray/server.json'
 c=json.load(open(p))
+# Тот же minClientVer, что в шаблоне установки: старый сервер лечится при первом же выпуске.
+c['inbounds'][0]['streamSettings']['realitySettings']['minClientVer']='1.8.2'
 cl=c['inbounds'][0]['settings']['clients']
 cl.append({'id':uuid,'flow':'xtls-rprx-vision','email':email,'level':0})
 seen=set()

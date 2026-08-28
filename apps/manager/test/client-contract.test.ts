@@ -90,8 +90,35 @@ const getJson = async (p: string, headers: Record<string, string> = {}) => {
   const r = await fetch(`${base}${p}`, { headers });
   return { status: r.status, headers: r.headers, body: r.status === 304 ? null : await r.json() };
 };
-const saveFixture = (name: string, value: unknown) =>
-  fs.writeFileSync(path.join(FIXTURES, `${name}.json`), JSON.stringify(value, null, 2) + '\n');
+// Фикстуры лежат в git: всё случайное (порт тест-сервера, id серверов, токен подписки,
+// метки времени) заменяем на стабильные значения, иначе каждый прогон — новый diff.
+// Замена сквозная по файлу, поэтому связи (профиль ↔ ссылка ↔ meta.json) сохраняются.
+const stableFixture = (json: string): string => {
+  const ids = new Map<string, string>();
+  return json
+    .replace(/http:\/\/127\.0\.0\.1:\d+/g, 'https://panel.example')
+    .replace(/\/sub\/[A-Za-z0-9_-]{16,}\//g, '/sub/FIXTURE-TOKEN/')
+    // id сервера (s_ + 8 символов nanoid) встречается и голым, и в profileId «s_x:full», и в URL.
+    .replace(/(?<![A-Za-z0-9_-])s_(?!legacy(?![A-Za-z0-9_-])|fixture)[A-Za-z0-9_-]{8}(?![A-Za-z0-9_-])/g, (m) => {
+      if (!ids.has(m)) ids.set(m, `s_fixture${ids.size + 1}`);
+      return ids.get(m)!;
+    })
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, '2026-08-28T00:00:00.000Z');
+};
+const saveFixture = (name: string, value: unknown) => {
+  let v: any = value;
+  if (v && Array.isArray(v.profiles)) {
+    // Порядок профилей — не часть контракта (клиент сопоставляет по profileId); в файле
+    // фиксируем канонический (host, smart→full), иначе случайные id серверов тасуют массив.
+    const profiles = [...v.profiles].sort(
+      (a: any, b: any) =>
+        String(a.host).localeCompare(String(b.host)) ||
+        (a.routing?.mode === 'full' ? 1 : 0) - (b.routing?.mode === 'full' ? 1 : 0),
+    );
+    v = { ...v, profiles };
+  }
+  fs.writeFileSync(path.join(FIXTURES, `${name}.json`), stableFixture(JSON.stringify(v, null, 2)) + '\n');
+};
 
 // ── meta.json ────────────────────────────────────────────────────────────────
 

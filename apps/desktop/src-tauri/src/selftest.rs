@@ -11,6 +11,31 @@ pub fn requested() -> bool {
     std::env::args().any(|a| a == "--selftest")
 }
 
+/// Известные причины отказа туннеля по логу mihomo → человеческая подсказка в отчёт.
+pub fn diagnose_engine_log(log: &str) -> Option<&'static str> {
+    if log.contains("REALITY authentication failed") {
+        // mihomo представляется REALITY-клиентом 1.8.2; Xray ≥ 26.7.11 без minClientVer
+        // его отвергает (mihomo#2967, wontfix). Лечится на сервере, не в клиенте.
+        return Some(
+            "сервер отверг REALITY-рукопожатие: Xray ≥ 26.7.11 без minClientVer не принимает mihomo — \
+             в панели у сервера нажмите «Синхронизировать» (проставит minClientVer=1.8.2)",
+        );
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diagnose_engine_log;
+
+    #[test]
+    fn reality_rejection_is_explained() {
+        let log = "time=\"…\" level=warning msg=\"[TCP] dial T error: REALITY authentication failed\"";
+        assert!(diagnose_engine_log(log).unwrap().contains("minClientVer"));
+        assert!(diagnose_engine_log("level=info msg=\"ok\"").is_none());
+    }
+}
+
 fn line(ok: bool, name: &str, detail: impl AsRef<str>) {
     println!("[{}] {name}: {}", if ok { "ПРОШЁЛ" } else { "ПРОВАЛ" }, detail.as_ref());
 }
@@ -140,6 +165,15 @@ pub async fn run() {
         }
         _ => {
             check!(false, "разделение трафика", format!("direct={:?} vpn={:?}", direct.err(), via_vpn.err()));
+            // Причину падения туннеля движок пишет только в свой лог — вытаскиваем её в отчёт,
+            // иначе «vpn=timeout» не отличить от отказа сервера.
+            let log = std::fs::read_to_string(dir.join(core::LOG_NAME)).unwrap_or_default();
+            if let Some(hint) = diagnose_engine_log(&log) {
+                println!("    диагноз: {hint}");
+            }
+            for line in log.lines().rev().filter(|l| l.contains("level=error") || l.contains("level=warning")).take(3) {
+                println!("    движок: {line}");
+            }
         }
     }
 

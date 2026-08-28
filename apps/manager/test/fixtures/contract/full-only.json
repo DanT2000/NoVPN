@@ -2,19 +2,19 @@
   "schemaVersion": 1,
   "panel": {
     "name": "NoVPN",
-    "origin": "http://127.0.0.1:58705"
+    "origin": "https://panel.example"
   },
   "routingResources": {
-    "manifest": "http://127.0.0.1:58705/routing/manifest.json",
-    "upstream": "http://127.0.0.1:58705/routing/upstream.json",
-    "apps": "http://127.0.0.1:58705/routing/apps.json",
-    "geosite": "http://127.0.0.1:58705/routing/autoroute/geosite.dat",
-    "geoip": "http://127.0.0.1:58705/routing/autoroute/geoip.dat"
+    "manifest": "https://panel.example/routing/manifest.json",
+    "upstream": "https://panel.example/routing/upstream.json",
+    "apps": "https://panel.example/routing/apps.json",
+    "geosite": "https://panel.example/routing/autoroute/geosite.dat",
+    "geoip": "https://panel.example/routing/autoroute/geoip.dat"
   },
   "profiles": [
     {
-      "profileId": "s_v1iRsqiw:full",
-      "serverId": "s_v1iRsqiw",
+      "profileId": "s_fixture1:full",
+      "serverId": "s_fixture1",
       "host": "home.example.test",
       "remark": "🇷🇺 Дом · Полный VPN",
       "recommended": false,
@@ -22,7 +22,7 @@
         "xray"
       ],
       "online": false,
-      "subLink": "http://127.0.0.1:58705/sub/RS5frSwrnGHTBrDAaoiWrVM2/server/s_v1iRsqiw/full?profile=full",
+      "subLink": "https://panel.example/sub/FIXTURE-TOKEN/server/s_fixture1/full?profile=full",
       "routing": {
         "mode": "full",
         "lanAccess": false,
