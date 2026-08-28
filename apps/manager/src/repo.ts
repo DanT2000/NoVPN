@@ -792,6 +792,27 @@ export function setEndpointConfig(rawHost: string, patch: Partial<{ xrayWhitelis
 function withEndpoint(s: Server): Server {
   s.ports = getEndpointPorts(s.host);
   s.legacyPorts = getLegacyPorts(s.host);
+  // «Свои исключения» считаем по ЯВНО заданному списку сервера: getEndpointConfig
+  // подставляет глобальный, когда своего нет, и по нему счётчик был бы враньём.
+  const own = db.prepare('SELECT whitelist_domains FROM server_keys WHERE domain = ?').get(domainKey(s.host)) as
+    | { whitelist_domains?: string | null }
+    | undefined;
+  let ownExceptions = 0;
+  if (own?.whitelist_domains) {
+    try {
+      const a = JSON.parse(own.whitelist_domains);
+      if (Array.isArray(a)) ownExceptions = a.length;
+    } catch {
+      ownExceptions = 0;
+    }
+  }
+  const cfg = getEndpointConfig(s.host);
+  s.routing = {
+    mode: cfg.xrayWhitelist ? 'smart' : 'full',
+    lanAccess: cfg.lanAccess,
+    fallbackTypes: cfg.fallbackTypes,
+    ownExceptions,
+  };
   return s;
 }
 
@@ -963,7 +984,7 @@ export function allDownloadRefs(): Array<{ appId: string; platform: string; name
 }
 
 // ── умная маршрутизация (routing files) ──
-const ROUTING_ORDER: RoutingFileMeta['name'][] = ['upstream', 'apps'];
+const ROUTING_ORDER: RoutingFileMeta['name'][] = ['upstream', 'sites', 'apps'];
 
 function parseSourceStats(s: unknown): RoutingSourceStats | null {
   if (typeof s !== 'string' || !s) return null;

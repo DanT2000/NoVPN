@@ -424,12 +424,15 @@ try {
   /* таблиц ещё нет */
 }
 
-// Умная маршрутизация: файл `sites` упразднён — список сайтов ведёт пользователь
-// локально в NoVPN Desktop (в т.ч. одним кликом из расширения), это не серверная
-// сущность. Клиентам sites.json не отдавался, поэтому просто убираем строку, чтобы
-// /routing/sites.json не оставался висеть и не путал.
+// Восстановление файла `sites` после его кратковременного удаления: строку сносила
+// миграция, а NoVPN Desktop читает /routing/sites.json — без строки публичный URL
+// отдавал 404. Создаём пустой файл, если его нет; содержимое админ вернёт из
+// источника или бэкапа. Существующую строку не трогаем.
 try {
-  db.prepare("DELETE FROM routing_files WHERE name = 'sites'").run();
+  db.prepare("INSERT INTO routing_files(name, content, version, updated_at) VALUES('sites', ?, 1, ?) ON CONFLICT(name) DO NOTHING").run(
+    '{\n  "items": []\n}',
+    new Date().toISOString(),
+  );
 } catch {
   /* таблицы ещё нет */
 }

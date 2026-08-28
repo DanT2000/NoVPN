@@ -66,6 +66,23 @@ export interface Server {
   recommended: boolean;
   /** Версия установленного агента. */
   agentVersion?: string | null;
+  /** Сводка маршрутизации этого сервера — чтобы режим был виден на карточке, а не
+   *  только внутри формы «Изменить». Подробности правит EndpointConfigPanel. */
+  routing?: ServerRoutingSummary;
+}
+
+/** Как этот сервер выдаёт конфиги. `smart` — умная маршрутизация (список идёт мимо
+ *  туннеля), `full` — полный туннель без исключений. Хранится как xray_whitelist
+ *  в server_keys: это ровно та же настройка, просто названная по-человечески. */
+export type ServerRoutingMode = 'smart' | 'full';
+
+export interface ServerRoutingSummary {
+  mode: ServerRoutingMode;
+  lanAccess: boolean;
+  /** null = разрешены все доступные запасные каналы. */
+  fallbackTypes: ('https' | 'http' | 'socks')[] | null;
+  /** Сколько доменов-исключений задано ИМЕННО у этого сервера (0 — берётся общий список). */
+  ownExceptions: number;
 }
 
 export interface User {
@@ -237,11 +254,10 @@ export interface AppSettings {
 // Каждый файл может управляться локально ИЛИ зеркалить внешний URL.
 // Публичные URL панели неизменны: /routing/<name>.json.
 //
-// `sites` убран: список сайтов — это НЕ серверная сущность. Пользователь ведёт его
-// локально в NoVPN Desktop (добавил домен → «через VPN» / «напрямую»), в том числе
-// одним кликом из браузерного расширения. Клиентам sites.json ни разу не отдавался,
-// поэтому обратная совместимость не нужна.
-export type RoutingFileName = 'upstream' | 'apps';
+// `sites` остаётся: NoVPN Desktop читает /routing/sites.json наравне с upstream и
+// apps. Файл кратко убирали как «клиентскую, а не серверную сущность», но клиент на
+// него опирается — ломать URL без согласованной с клиентом миграции нельзя.
+export type RoutingFileName = 'upstream' | 'sites' | 'apps';
 export type RoutingMode = 'local' | 'mirror';
 /** Состояние последней проверки внешнего источника. */
 export type RoutingSyncStatus = 'idle' | 'ok' | 'nochange' | 'error' | 'rejected';

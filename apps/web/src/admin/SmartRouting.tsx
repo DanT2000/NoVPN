@@ -10,7 +10,8 @@ import { downloadText } from '../lib/clipboard';
 
 const FILES: { name: RoutingFileName; title: string; blurb: string }[] = [
   // Upstream сюда не входит: им управляет AutoRoute (сборка из многих источников),
-  // а не одиночный редактор файла. Apps — обычный управляемый каталог.
+  // а не одиночный редактор файла. Остальные — обычные управляемые файлы.
+  { name: 'sites', title: 'Sites JSON', blurb: 'Правила по сайтам/доменам. Читается NoVPN Desktop по постоянному адресу /routing/sites.json.' },
   { name: 'apps', title: 'Apps JSON', blurb: 'Каталог приложений: имена процессов, пути установки, иконки, рекомендуемый маршрут.' },
 ];
 

@@ -110,6 +110,27 @@ function EndpointConfigPanel({ server }: { server: Server }) {
         в одной стране один список обхода, в другой — другой.
       </div>
 
+      <div className="body small muted" style={{ margin: '0 0 4px' }}>Режим выдачи:</div>
+      <div className="chip-row" style={{ marginBottom: 6 }}>
+        <Chip
+          label="Умная маршрутизация"
+          active={cfg.xrayWhitelist !== false}
+          disabled={busy}
+          onClick={() => void save({ xrayWhitelist: true } as Partial<EndpointConfigView>)}
+        />
+        <Chip
+          label="Полный VPN"
+          active={cfg.xrayWhitelist === false}
+          disabled={busy}
+          onClick={() => void save({ xrayWhitelist: false } as Partial<EndpointConfigView>)}
+        />
+      </div>
+      <div className="body small muted" style={{ marginBottom: 10 }}>
+        {cfg.xrayWhitelist !== false
+          ? 'Список ниже идёт напрямую, всё остальное — через VPN. Обычный режим для всех пользователей.'
+          : 'Весь трафик идёт через VPN, исключений нет. Выдавайте только там, где это действительно нужно: список доменов ниже в этом режиме не применяется.'}
+      </div>
+
       <div className="chip-row" style={{ marginBottom: 6 }}>
         <Chip label={cfg.lanAccess ? 'Доступ в локалку: вкл' : 'Доступ в локалку: выкл'} active={cfg.lanAccess} disabled={busy} onClick={() => void save({ lanAccess: !cfg.lanAccess })} />
       </div>
@@ -636,6 +657,32 @@ export function Servers() {
                   <Metric label="Пользователи" value={String(s.users)} />
                   <Metric label="Синхронизация" value={rel(s.lastSyncAt)} />
                 </div>
+
+                {/* Сводка маршрутизации: видна сразу, без захода в «Изменить» —
+                    именно эти настройки раньше терялись в глубине формы. */}
+                {s.routing ? (
+                  <div
+                    className="row-between"
+                    style={{ gap: 12, flexWrap: 'wrap', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border-inner)' }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div className="eyebrow" style={{ marginBottom: 4 }}>Маршрутизация</div>
+                      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                        <b style={{ fontSize: 14, color: s.routing.mode === 'full' ? 'var(--amber-fg)' : 'var(--text-primary)' }}>
+                          {s.routing.mode === 'full' ? 'Полный VPN' : 'Умная маршрутизация'}
+                        </b>
+                        <span className="small muted">
+                          {s.routing.ownExceptions > 0
+                            ? `свои исключения: ${s.routing.ownExceptions}`
+                            : 'исключения: общий список'}
+                          {' · '}LAN: {s.routing.lanAccess ? 'вкл' : 'выкл'}
+                          {' · '}запасные: {s.routing.fallbackTypes === null ? 'все' : s.routing.fallbackTypes.length ? s.routing.fallbackTypes.join(', ').toUpperCase() : 'нет'}
+                        </span>
+                      </div>
+                    </div>
+                    <button className="btn btn-outline btn-sm" onClick={() => setEditing(s.id)}>Настроить</button>
+                  </div>
+                ) : null}
 
                 {/* Футер */}
                 <div
