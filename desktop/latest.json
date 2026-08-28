@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "67955377d0c49f7e432fb8bc3c04f0a8769f5730c40a4c745e7ba8e1dca9b609",
-  "signature": "ny+P2MGYXDWf8kkCDwgvwDcRkaCVuA1uDMlJALDuuBFT3hQZRCyxjInKI60n4jTAhTyG/rTXr3slqd4WWK50AQ==",
-  "sizeBytes": 16185753,
-  "notes": "Новая иконка; смена папки установки не ломает запуск; свой DNS; реальные счётчики списков."
+  "sha256": "f7c9bba22930e52c416e0448c06f6b1440f900bf11890123cb6822e1ecbdfad5",
+  "signature": "6r4eJcMLJhk3VUq+O/5gxR1/0jb8Xiv+JcURtGzctm/lrHOrLM3XF8n20JmQGyPO2vJmtCPvxICnsWUE+8hjDg==",
+  "sizeBytes": 16461443,
+  "notes": "Умная маршрутизация: Telegram в туннеле, конфиг на гео-базах; диагноз отказа REALITY в самопроверке"
 }
