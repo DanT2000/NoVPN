@@ -1211,6 +1211,13 @@ export function listAutoRouteSources(dataset = 'upstream'): AutoRouteSource[] {
     rowToAutoRouteSource,
   );
 }
+/** Датасеты, которыми управляет AutoRoute (у которых есть хотя бы один источник).
+ *  По ним ходит часовое автообновление. */
+export function listAutoRouteDatasets(): string[] {
+  return (db.prepare('SELECT DISTINCT dataset FROM routing_sources ORDER BY dataset').all() as Array<{ dataset: string }>).map(
+    (r) => r.dataset,
+  );
+}
 export function getAutoRouteSourceRow(id: string): any | null {
   return db.prepare('SELECT * FROM routing_sources WHERE id = ?').get(id) ?? null;
 }

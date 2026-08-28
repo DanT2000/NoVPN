@@ -3,6 +3,7 @@ import { seedIfEmpty } from './seed.js';
 import { createApp } from './app.js';
 import { startSyncLoop } from './services/sync.js';
 import { startRoutingSyncLoop } from './services/routingSync.js';
+import { startAutoRouteLoop } from './services/autoroute.js';
 import { seedDesktopDir, startDesktopMirrorLoop } from './services/desktopChannel.js';
 import { startBot, notifyAdmin } from './services/telegram.js';
 import * as repo from './repo.js';
@@ -73,6 +74,7 @@ app.listen(config.port, () => {
   console.log(`[NoVPN] панель слушает :${config.port}`);
   startSyncLoop();
   startRoutingSyncLoop();
+  startAutoRouteLoop();
   startDesktopMirrorLoop();
   // Бот запускается best-effort: его сбой не должен помешать старту панели.
   setTimeout(() => {

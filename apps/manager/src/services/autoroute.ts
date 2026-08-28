@@ -262,6 +262,13 @@ export function buildDataset(dataset = DATASET): AutoRouteBuildResult {
   }
 
   const rulesJson = JSON.stringify(merged);
+  // Сборка байт-в-байт совпала с опубликованной — новой версии не заводим. Иначе часовой
+  // автосинк плодил бы версию в час на ровном месте: история сборок превращается в шум,
+  // а клиенты по manifest'у видели бы «обновление» там, где ничего не изменилось.
+  const publishedNow = repo.listAutoRouteBuilds(dataset).find((b) => b.published);
+  if (publishedNow && publishedNow.sha256 === sha256(rulesJson)) {
+    return { ok: true, reason: 'Изменений нет — версия прежняя.', build: publishedNow, conflicts: [...conflictsByKey.values()].slice(0, 200) };
+  }
   const build = repo.insertAutoRouteBuild(dataset, {
     sha256: sha256(rulesJson),
     domains,
@@ -451,4 +458,42 @@ export async function refreshAllAndBuild(dataset = DATASET): Promise<AutoRouteBu
     }
   }
   return buildDataset(dataset);
+}
+
+// ── автообновление ────────────────────────────────────────────────────────────
+//
+// Часовое зеркало (routingSync) обслуживает ТОЛЬКО старые одноисточниковые файлы и
+// датасеты AutoRoute из выборки исключает — иначе затирало бы результат сборки. Из-за
+// этого у AutoRoute автообновления не было вовсе: база стояла до следующего нажатия
+// кнопки, и «подгружает недостающее само» не работало. Здесь — собственный цикл.
+let autoRouteRunning = false;
+
+/** Один проход автообновления по всем датасетам, у которых есть источники. */
+export async function autoRouteTick(): Promise<void> {
+  if (autoRouteRunning) return; // прошлый проход ещё идёт (источники бывают медленные)
+  autoRouteRunning = true;
+  try {
+    for (const dataset of repo.listAutoRouteDatasets()) {
+      try {
+        const res = await refreshAllAndBuild(dataset);
+        // Отказ публикации (пустая/похудевшая сборка) уже попал в журнал ошибок внутри
+        // buildDataset — здесь не дублируем, пишем только реальные обновления.
+        if (res.ok && res.build && !/Изменений нет/.test(res.reason)) {
+          repo.addLog(`AutoRoute: автообновление — ${res.reason}`);
+        }
+      } catch (e) {
+        repo.addJobError('Маршрутизация', `AutoRoute: автообновление не прошло — ${e instanceof Error ? e.message : 'сбой'}`, 'warn');
+      }
+    }
+  } finally {
+    autoRouteRunning = false;
+  }
+}
+
+export function startAutoRouteLoop(intervalMs = 3_600_000): void {
+  const t = setInterval(() => void autoRouteTick(), intervalMs);
+  t.unref?.();
+  // Первый проход — через минуту после старта: панель успевает подняться, и он не
+  // сталкивается с зеркальным синком (тот стартует на 15-й секунде).
+  setTimeout(() => void autoRouteTick(), 60_000).unref?.();
 }

@@ -241,6 +241,31 @@ test('subscriptionRules: только action=vpn, префиксы Xray, CIDR о
   repo.deleteAutoRouteSource(direct.id);
 });
 
+// «AutoRoute сам подгружает изменения» — до этого не работало: часовой цикл обслуживал
+// только старые зеркала и датасеты AutoRoute из выборки исключал, поэтому база стояла
+// до следующего нажатия кнопки.
+test('автообновление: проходит по источникам, публикует изменения и НЕ плодит версии впустую', async () => {
+  const s = repo.addAutoRouteSource({ title: 'Живой', url: 'https://src/live.lst', action: 'vpn' });
+  stubFetch('a.example\nb.example\n');
+  await autoroute.refreshSource(s.id);
+  autoroute.buildDataset();
+  const v1 = repo.getPublishedAutoRouteVersion('upstream');
+  assert.ok(repo.listAutoRouteDatasets().includes('upstream'), 'датасет виден автообновлению');
+
+  // Источник не изменился → проход не должен создавать новую версию.
+  stubFetch('a.example\nb.example\n');
+  await autoroute.autoRouteTick();
+  assert.equal(repo.getPublishedAutoRouteVersion('upstream'), v1, 'без изменений версия прежняя');
+
+  // Источник пополнился → проход обязан подхватить и опубликовать.
+  stubFetch('a.example\nb.example\nc.example\n');
+  await autoroute.autoRouteTick();
+  const v2 = repo.getPublishedAutoRouteVersion('upstream');
+  assert.ok(v2! > v1!, 'изменение источника публикуется автоматически');
+  assert.ok(autoroute.subscriptionRules().domains.includes('domain:c.example'), 'новое правило доехало до подписки');
+  repo.deleteAutoRouteSource(s.id);
+});
+
 test('geoTagRules: конфиг для клиента с DAT — только ссылки на теги, без базы', () => {
   const g = autoroute.geoTagRules();
   assert.deepEqual(g.domains, ['geosite:novpn']);
