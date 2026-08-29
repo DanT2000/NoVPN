@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "9d38bd1492d6225e52f9fd416f35ed2d9fe96b1d5614931ef79199c5203b46fe",
-  "signature": "WWQgmKBSjjX4a5nMpVT8BECM3ajVaAmyLwHXi/CGQHzOciSjkVoHAGGBdkLf2z7PVUTAARaOUf33G6yRdm5vDQ==",
-  "sizeBytes": 16528601,
-  "notes": "Предупреждение о другом активном VPN; браузеры определяются по-настоящему; GitHub идёт целиком напрямую"
+  "sha256": "7c3f98060f037c1952b432f11c14a31ad9cac491a0d4c24a1be2836080abef38",
+  "signature": "jyoeGtI+7BYfce7mw0xR5tYvTdXt9f7xzwIV6WEVKi/51P4fVhyz9DqPrvVS5IRevP6uMAsrOK9wIp5njkHVDQ==",
+  "sizeBytes": 16530698,
+  "notes": "Возврат с полного VPN на умный по таймеру сервера; правило сайта можно выключить; в настройке предлагаются только найденные приложения; при обновлении не мигает консоль"
 }
