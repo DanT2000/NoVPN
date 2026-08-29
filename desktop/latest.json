@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "8818e22dfa179e5ec5f2b50b0e41e9854013e6d67f52e78fddf415a5aaf4b05e",
-  "signature": "CyM7Mnwvn9JO5G+hd/R7cvZVh6qhNlbq+N2OfvzAzaCZfZtTE9R+clqmNg4kgufIOpsGbEYR5D8anSm5SYCzCg==",
-  "sizeBytes": 16461518,
-  "notes": "Установщик не падает в папке без прав на запись и больше не заводит автозапуск сам; список маршрутизации обновляется сразу при возврате к окну"
+  "sha256": "de1379f902ce235db672d5f162e28995658d0a5ea7cbed38c3568346cae2b955",
+  "signature": "TwphhmSVaMbbkOS13sCt7emcwIwURzxAkVvV5WULuDBHUUAWVUJDj5STM7jK+Hn/KmmG43Gd8nY87JcfbJ7KCw==",
+  "sizeBytes": 16527024,
+  "notes": "Своя иконка у скачиваемого файла; установщик ждёт освобождения файлов и не заводит автозапуск сам; ставится в доступную папку; список маршрутизации обновляется сразу"
 }

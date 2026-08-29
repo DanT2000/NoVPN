@@ -343,6 +343,73 @@ fi
 openp(){ pr="\${2:-tcp}"; if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qiw active; then ufw allow "$1"/"$pr" >/dev/null 2>&1 || true; fi; iptables -C INPUT -p "$pr" --dport "$1" -j ACCEPT 2>/dev/null || iptables -I INPUT -p "$pr" --dport "$1" -j ACCEPT 2>/dev/null || true; }
 [ "$WANT_XRAY" = "1" ] && openp ${xrayPort} tcp
 [ "$WANT_AWG" = "1" ] && openp ${awgPort} udp
+
+# Страница проверки связи на 8081. Зачем: когда человек говорит «не подключается»,
+# первый вопрос — доходит ли вообще его сеть до сервера. Прокси и VPN-порты для этого
+# не годятся (прокси отвечает 407, а браузер показывает пустоту), поэтому отдельная
+# страница: открылась — адрес доступен, режут протокол; не открылась — провайдер
+# блокирует сам адрес. Отдаёт ОДИН статичный ответ, ничего не проксирует и не читает
+# с диска. Порт 8081, а не 80: 80 нужен свободным для выпуска сертификатов.
+mkdir -p /opt/novpn-check
+cat > /opt/novpn-check/server.py <<'PYCHK'
+#!/usr/bin/env python3
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import datetime
+
+PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Связь есть</title><style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1115;color:#e8eaed;
+font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;text-align:center}}
+.c{{padding:32px}} .ok{{font-size:64px;line-height:1;color:#3ddc84}} h1{{font-size:22px;margin:14px 0 6px}}
+.m{{color:#9aa1ad;font-size:14px}} code{{background:#1e222b;padding:2px 8px;border-radius:6px}}
+</style></head><body><div class="c">
+<div class="ok">&#10003;</div><h1>Связь с сервером есть</h1>
+<p class="m">Ваш адрес: <code>{ip}</code></p>
+<p class="m">Время сервера: {t} UTC</p>
+<p class="m">Раз эта страница открылась, сеть до сервера доходит.</p>
+</div></body></html>"""
+
+class H(BaseHTTPRequestHandler):
+    server_version = "check"
+    sys_version = ""
+    def _send(self):
+        ip = self.headers.get("X-Forwarded-For") or self.client_address[0]
+        body = PAGE.format(ip=ip, t=datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+    do_GET = do_POST = do_HEAD = _send
+    def log_message(self, *a):
+        pass
+
+ThreadingHTTPServer(("0.0.0.0", 8081), H).serve_forever()
+PYCHK
+cat > /etc/systemd/system/novpn-check.service <<'UNITCHK'
+[Unit]
+Description=NoVPN: страница проверки связи (8081)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/novpn-check/server.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+UNITCHK
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable --now novpn-check >/dev/null 2>&1 || true
+systemctl restart novpn-check >/dev/null 2>&1 || true
+openp 8081 tcp
+
 echo INSTALL_DONE`;
 }
 
