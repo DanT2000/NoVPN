@@ -125,6 +125,6 @@ export const DEFAULT_APPS: AppClient[] = [
     enabled: true,
     icon: null,
     urlScheme: null,
-    platforms: [{ platform: 'Windows', url: 'https://raw.githubusercontent.com/DanT2000/NoVPN/main/desktop/vpn.exe' }],
+    platforms: [{ platform: 'Windows', url: '/desktop/novpn.exe' }],
   },
 ];

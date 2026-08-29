@@ -81,6 +81,9 @@ export function downloadUrl(filename: string, url: string): void {
  *  Без этого openUrl уходит на относительный путь вместо сайта. */
 export function normalizeUrl(u: string): string {
   const t = u.trim();
+  // Путь от корня («/desktop/novpn.exe») ведёт на саму панель — его дописывать нечем:
+  // так ссылка одинаково верна и на боевой панели, и на любой другой копии.
+  if (t.startsWith('/')) return t;
   return /^https?:\/\//i.test(t) ? t : `https://${t}`;
 }
 

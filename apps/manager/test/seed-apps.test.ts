@@ -22,7 +22,9 @@ test('NoVPN Desktop есть после первичного сида (xray, Win
   assert.ok(d, 'novpn-desktop присутствует');
   assert.deepEqual(d!.compat, ['xray']);
   const win = d!.platforms.find((p) => p.platform === 'Windows');
-  assert.match(win?.url ?? '', /desktop\/vpn\.exe/);
+  // Файл канала обновлений на самой панели. Раньше здесь стоял github-путь на vpn.exe:
+  // файл переименован в novpn.exe, ссылка отдавала 404, да и github открывается не у всех.
+  assert.equal(win?.url, '/desktop/novpn.exe');
 });
 
 test('миграция добивает NoVPN Desktop в уже засеянный каталог', () => {

@@ -658,6 +658,30 @@ try {
   }
 }
 
+// Ссылка «скачать» у нашего приложения вела на raw.githubusercontent.com/.../desktop/vpn.exe.
+// Файл давно называется novpn.exe (эта ссылка отдавала 404), да и GitHub у части людей
+// не открывается — качать надо с самой панели, где лежит подписанный релиз канала
+// обновлений. Каталог хранится в БД, из кода он не обновится, поэтому чиним запись здесь.
+try {
+  const row = db.prepare("SELECT data FROM app_clients WHERE id = 'novpn-desktop'").get() as { data: string } | undefined;
+  if (row) {
+    const app = JSON.parse(row.data) as { platforms?: Array<{ platform: string; url?: string | null }> };
+    let changed = false;
+    for (const p of app.platforms ?? []) {
+      if (typeof p.url === 'string' && /raw\.githubusercontent\.com\/.*\/desktop\/(vpn|novpn)\.exe$/.test(p.url)) {
+        p.url = '/desktop/novpn.exe';
+        changed = true;
+      }
+    }
+    if (changed) {
+      db.prepare("UPDATE app_clients SET data = ? WHERE id = 'novpn-desktop'").run(JSON.stringify(app));
+      console.log('[migrate] ссылка на NoVPN Desktop переведена на канал обновлений панели');
+    }
+  }
+} catch {
+  /* таблицы ещё нет */
+}
+
 export function getSetting<T>(key: string, fallback: T): T {
   const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
   if (!row) return fallback;
