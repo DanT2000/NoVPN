@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "7c3f98060f037c1952b432f11c14a31ad9cac491a0d4c24a1be2836080abef38",
-  "signature": "jyoeGtI+7BYfce7mw0xR5tYvTdXt9f7xzwIV6WEVKi/51P4fVhyz9DqPrvVS5IRevP6uMAsrOK9wIp5njkHVDQ==",
-  "sizeBytes": 16530698,
-  "notes": "Возврат с полного VPN на умный по таймеру сервера; правило сайта можно выключить; в настройке предлагаются только найденные приложения; при обновлении не мигает консоль"
+  "sha256": "0d6c207fd28c2c98c787bedb3cd43a0b8da2a25812371d077936f726db24bb30",
+  "signature": "lCUDPjzxCo6bMYCMeGBcrG2VxupPLdGRK1qqKVWso1xb6Xn8O+xF/DEy27nw3vu1Q3SKB0x33qAsxUFH+kw/CA==",
+  "sizeBytes": 16532137,
+  "notes": "Тумблер умной маршрутизации без лишних вопросов; когда сервер задал срок — видно, через сколько она включится сама"
 }

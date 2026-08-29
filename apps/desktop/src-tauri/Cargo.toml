@@ -1,6 +1,6 @@
 [package]
 name = "novpn-desktop"
-version = "0.3.0"
+version = "0.3.1"
 description = "NoVPN Desktop"
 # Из authors собирается поле CompanyName в свойствах exe: без него Windows показывает
 # пустого издателя (и в окне SmartScreen тоже). Подпись это не заменяет, но врать нечем.

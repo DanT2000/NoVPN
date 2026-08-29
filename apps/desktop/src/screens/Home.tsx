@@ -18,7 +18,6 @@ const BTN: Record<string, string> = {
 
 export function Home() {
   const { s, go, goRouting, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, fullAvailable, selectedNode } = useStore();
-  const [fullHint, setFullHint] = useState(false);
   const [admin, setAdmin] = useState(true);
   useEffect(() => {
     if (inTauri) void isElevated().then(setAdmin);
@@ -34,6 +33,10 @@ export function Home() {
   // Чужой туннель, поднятый одновременно с нашим, забирает маршрут по умолчанию —
   // интернет пропадает целиком, и понять причину со стороны невозможно. Проверяем при
   // появлении окна и раз в 15 секунд: фоновому webview таймеры душат, одного мало.
+  // Срок возврата задаёт сервер (meta.routing.fullTimeoutHours); 0 — не возвращать.
+  const fullTimeoutHours = selectedNode?.profileId
+    ? (s.meta?.profiles.find((p) => p.profileId === selectedNode.profileId)?.fullTimeoutHours ?? 0)
+    : 0;
   const [conflicts, setConflicts] = useState<string[]>([]);
   useEffect(() => {
     let stop = false;
@@ -101,39 +104,30 @@ export function Home() {
         </div>
       </div>
 
-      {/* Тумблер один и всегда на месте (контракт, раздел 1): ВКЛ — умная, ВЫКЛ — «Полный
-          VPN». Выключить можно ТОЛЬКО если сервер выдал полный профиль; иначе тумблер
-          заперт, а вместо него — ссылка с объяснением. Свободно «гнать всё в туннель»
-          из умных данных клиент не имеет права. */}
+      {/* Один тумблер: ВКЛ — умная маршрутизация, ВЫКЛ — полный VPN. Выключить можно
+          только если сервер выдал полный профиль. Никаких «нужен полный VPN?» — если
+          сервер его не даёт, тумблера просто нет, и объяснять человеку нечего.
+          Когда у сервера задан срок возврата, пишем, когда режим сам выключится. */}
       <div className="card" style={{ marginTop: 20, padding: '15px 16px' }}>
         <div className="row-between">
           <div>
             <div className="t-name">Умная маршрутизация</div>
             <div className="t-note" style={{ marginTop: 3 }}>
-              {!fullAvailable
+              {!fullAvailable || s.smartRouting
                 ? 'Через VPN идёт только нужное'
-                : s.smartRouting
-                  ? 'Через VPN идёт только нужное · рекомендуется'
-                  : 'Полный VPN: весь трафик идёт через туннель'}
+                : 'Выключена: весь трафик идёт через туннель'}
             </div>
           </div>
           {fullAvailable ? (
             <Toggle on={s.smartRouting} onChange={setSmartRouting} ariaLabel="Умная маршрутизация" />
-          ) : (
-            <button className="link-btn" onClick={() => setFullHint((v) => !v)}>
-              Нужен полный VPN?
-            </button>
-          )}
+          ) : null}
         </div>
-        {!fullAvailable && fullHint ? (
-          <div className="t-note" style={{ marginTop: 10 }}>
-            Полный VPN появляется, только если его выдал ваш провайдер — тогда здесь будет переключатель.
-            Для постоянного полного туннеля без умной маршрутизации есть AmneziaWG.
-          </div>
-        ) : null}
         {fullAvailable && !s.smartRouting ? (
           <div className="t-note" style={{ marginTop: 10, color: 'var(--amber-fg)' }}>
-            Без умной маршрутизации российские сайты тоже пойдут через VPN, а трафик расходуется быстрее.
+            Российские сайты тоже пойдут через VPN, а трафик расходуется быстрее.
+            {fullTimeoutHours > 0
+              ? ` Через ${fullTimeoutHours < 1 ? `${Math.round(fullTimeoutHours * 60)} мин` : count(fullTimeoutHours, 'час', 'часа', 'часов')} умная маршрутизация включится сама.`
+              : ''}
           </div>
         ) : null}
       </div>
