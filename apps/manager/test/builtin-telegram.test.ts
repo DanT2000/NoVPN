@@ -61,6 +61,10 @@ test('GitHub идёт целиком напрямую, а Copilot — через
   // утащило бы его напрямую и сломало.
   assert.ok(!DIRECT_DOMAINS.includes('githubusercontent.com'), 'суффикс целиком брать нельзя');
   assert.ok(!DIRECT_DOMAINS.some((d) => d.includes('copilot')), 'Copilot напрямую не пускаем');
+  // И он должен быть ВСТРОЕННЫМ: в базе он есть, но не влезал в потолок 24 000 доменов —
+  // проходил `api.githubcopilot.com`, а сам `githubcopilot.com` уже нет.
+  assert.ok(OPENAI_DOMAINS.includes('githubcopilot.com'), 'Copilot обязан пережить потолок');
+  assert.equal(builtinRules().find((r) => r.value === 'githubcopilot.com')!.action, 'vpn');
   const rules = builtinRules();
   const gh = rules.filter((r) => DIRECT_DOMAINS.includes(r.value));
   assert.ok(gh.length > 0);

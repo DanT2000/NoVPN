@@ -78,6 +78,12 @@ export const OPENAI_DOMAINS: string[] = [
   // ИИ-помощники обязаны идти через туннель — разделить их по имени процесса нельзя,
   // расширения работают внутри того же Code.exe. Значит, разделяем по доменам.
   'cursor.com',
+  // Copilot В БАЗЕ есть, но не влезал в потолок 24 000 доменов телефонного конфига:
+  // `api.githubcopilot.com` проходил, а сам `githubcopilot.com` — уже нет. Та же
+  // ловушка, что была с Telegram. Встроенные правила идут первыми и потолок их не режет.
+  'githubcopilot.com',
+  'copilot-proxy.githubusercontent.com',
+  'copilot-telemetry.githubusercontent.com',
 ];
 
 /** Домены, которые обязаны идти НАПРЯМУЮ, даже если внешний список считает иначе.
