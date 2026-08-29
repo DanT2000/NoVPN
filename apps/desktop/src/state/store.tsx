@@ -25,6 +25,7 @@ import {
   vpnConnect,
   vpnDisconnect,
   vpnReload,
+  explainDomain,
 } from '../lib/tauri';
 import type { MetaResult, ServerLists } from '../lib/tauri';
 import type {
@@ -206,6 +207,9 @@ interface Ctx {
   removeSite: (id: string) => void;
   /** Выключить/включить правило, не удаляя его. */
   toggleSite: (id: string) => void;
+  /** Почему домен идёт туда, куда идёт: прогоняем его по тем же правилам, что
+   *  уходят в движок. Нужно, когда сайт ведёт себя не так, как ожидалось. */
+  explainDomain: (domain: string) => Promise<{ route: string; reason: string; matched: string } | null>;
 
   toggleList: (id: string) => void;
   syncNow: () => void;
@@ -241,7 +245,7 @@ function titleFromDomain(d: string): string {
     Порядок важности задаётся составом, а не сортировкой: то, что человек выбрал
     сам, уходит отдельным списком и попадает в конфиг выше любых подгруженных
     правил. Иначе список российских сервисов молча отменял бы его выбор. */
-function rulesOf(s: State, srv: ServerLists | null) {
+export function rulesOf(s: State, srv: ServerLists | null) {
   const on = s.apps.filter((a) => a.enabled);
   const listsOn = (id: string) => s.lists.find((l) => l.id === id)?.enabled !== false;
   // Выключенное правило остаётся в списке, но в конфиг не идёт.
@@ -828,6 +832,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         );
       },
       removeSite: (id) => setS((x) => ({ ...x, sites: x.sites.filter((v) => v.id !== id) })),
+      explainDomain: (domain) => explainDomain(domain, rulesOf(s, srv)),
       toggleSite: (id) =>
         setS((x) => ({
           ...x,

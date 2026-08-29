@@ -401,9 +401,61 @@ function SitesTab() {
         </button>
       ))}
 
+      <DomainCheck />
+
       {edit ? <SiteDialog site={edit} onClose={() => setEdit(null)} /> : null}
       {adding ? <AddSiteDialog onClose={() => setAdding(false)} /> : null}
     </>
+  );
+}
+
+/** «Почему этот сайт пошёл не туда». Владелец просил лог решений — но лог не отвечает
+    на этот вопрос: он огромный и не называет сработавшее правило. Здесь человек вводит
+    адрес и сразу видит маршрут и причину. Проверка идёт по тем же правилам, что уходят
+    в движок, поэтому ответ совпадает с поведением, а не «примерно похож». */
+function DomainCheck() {
+  const { explainDomain } = useStore();
+  const [q, setQ] = useState('');
+  const [res, setRes] = useState<{ route: string; reason: string; matched: string } | null>(null);
+
+  const check = () => {
+    const d = q.trim();
+    if (!d) return;
+    void explainDomain(d).then(setRes);
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 18, padding: '14px 15px' }}>
+      <div className="t-name">Проверить сайт</div>
+      <div className="t-note" style={{ marginTop: 3, marginBottom: 10 }}>
+        Не понимаете, почему сайт открывается не так — введите его адрес.
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          className="input mono"
+          style={{ flex: 1 }}
+          placeholder="example.com"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') check();
+          }}
+        />
+        <button className="btn btn-secondary btn-sm" onClick={check} disabled={!q.trim()}>
+          Проверить
+        </button>
+      </div>
+      {res ? (
+        <div className="t-note" style={{ marginTop: 10 }}>
+          <b style={{ color: res.route === 'vpn' ? 'var(--acc)' : 'var(--text-primary)' }}>
+            {res.route === 'vpn' ? 'Идёт через VPN' : 'Идёт напрямую'}
+          </b>
+          {' — '}
+          {res.reason}
+          {res.matched ? <span className="mono"> ({res.matched})</span> : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

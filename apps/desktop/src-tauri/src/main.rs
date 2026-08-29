@@ -152,6 +152,7 @@ fn main() {
             cmds::open_engine_log,
             cmds::vpn_conflicts,
             cmds::browsers_installed,
+            cmds::explain_domain,
             cmds::state_load,
             cmds::state_save,
         ])

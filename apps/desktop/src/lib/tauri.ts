@@ -240,6 +240,16 @@ export interface InstalledBrowser {
   path: string;
 }
 
+export interface DomainVerdict {
+  route: 'vpn' | 'direct' | string;
+  reason: string;
+  matched: string;
+}
+
+/** Почему домен идёт туда, куда идёт. Прогоняется по тем же правилам, что и движок. */
+export const explainDomain = (domain: string, rules: RulesPayload) =>
+  call<DomainVerdict>('explain_domain', { domain, rules });
+
 /** Браузеры, которые РЕАЛЬНО стоят на компьютере (реестр StartMenuInternet).
  *  Раньше список был выдуман: Яндекс значился найденным на любой машине. */
 export const browsersInstalled = () => call<InstalledBrowser[]>('browsers_installed');

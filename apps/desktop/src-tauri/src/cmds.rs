@@ -638,6 +638,13 @@ pub fn open_url(url: String) -> Result<(), String> {
     }
 }
 
+/// Почему домен идёт туда, куда идёт: прогоняем его по тем же правилам, что уходят
+/// в движок, и называем сработавшее. Правила приходят от интерфейса — он их и строит.
+#[tauri::command]
+pub fn explain_domain(domain: String, rules: RulesIn) -> crate::explain::Verdict {
+    crate::explain::explain(&domain, &rules.into())
+}
+
 /// Браузеры, которые РЕАЛЬНО установлены на компьютере.
 #[tauri::command]
 pub fn browsers_installed() -> Vec<crate::browsers::Browser> {

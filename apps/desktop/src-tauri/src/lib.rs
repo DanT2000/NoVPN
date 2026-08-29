@@ -9,6 +9,7 @@ pub mod elevate;
 pub mod host;
 pub mod lists;
 pub mod browsers;
+pub mod explain;
 pub mod meta;
 pub mod netcheck;
 pub mod proxy;

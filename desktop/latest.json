@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "d488384e85e3e4b90e9c72066123165e2b305f42cd47aeb9bcf17811b25c7a83",
-  "signature": "O3W6KaugbEXcJTt2/ILNxvEzwM3E8tlv1PNCMAhmtEhL423SiuFgAIKCk9aEAnVH5t9SjIuL5/6JRuQl/U39BA==",
-  "sizeBytes": 16531263,
-  "notes": "Маршруты по умолчанию: GitHub Desktop, Docker и редактор кода — напрямую, их ИИ-помощники остаются в туннеле; Steam получил недостающие процессы"
+  "sha256": "d92c55ac9514d80b4ef3806798ff4d38674f7ecc21a084084fcec6ba54c54085",
+  "signature": "4ghip8PHRLr16pn4c25X7PROjP443KD10TrTp7rvY54AL3amAPP8kJ4OFLzbBJhGh963RR0xJV4O49U59p0eCg==",
+  "sizeBytes": 16537013,
+  "notes": "Проверка сайта: покажет, идёт он через VPN или напрямую и какое правило сработало"
 }
