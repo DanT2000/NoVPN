@@ -36,6 +36,12 @@
     "openai.org",
     "featuregates.org",
     "statsigapi.net",
+    "github.com",
+    "githubusercontent.com",
+    "githubassets.com",
+    "github.io",
+    "ghcr.io",
+    "githubcopilot.com",
     "blocked.example",
     "full:exact.example",
     "10.10.0.0/16"

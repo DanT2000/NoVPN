@@ -236,7 +236,9 @@ test('subscriptionRules: только action=vpn, префиксы Xray, CIDR о
     ['10.0.0.0/8'],
   );
   assert.equal(sub.truncated, false);
-  assert.equal(sub.total, 3 + BUILTIN_VALUES.size, 'direct-правила в подписку не идут');
+  // total считает только «в VPN»: встроенные «напрямую» (GitHub) сюда не входят.
+  const builtinVpn = builtinRules().filter((r) => r.action === 'vpn').length;
+  assert.equal(sub.total, 3 + builtinVpn, 'direct-правила в подписку не идут');
   assert.ok(autoroute.SUBSCRIPTION_CAP >= 10_000);
   repo.deleteAutoRouteSource(vpn.id);
   repo.deleteAutoRouteSource(direct.id);
@@ -265,6 +267,23 @@ test('автообновление: проходит по источникам, 
   assert.ok(v2! > v1!, 'изменение источника публикуется автоматически');
   assert.ok(autoroute.subscriptionRules().domains.includes('domain:c.example'), 'новое правило доехало до подписки');
   repo.deleteAutoRouteSource(s.id);
+});
+
+// Встроенное «напрямую» обязано перекрывать внешний источник: иначе GitHub так и
+// останется разорванным между двумя маршрутами.
+test('встроенное «напрямую» побеждает источник, который тянет тот же домен в VPN', async () => {
+  for (const s of repo.listAutoRouteSources()) repo.deleteAutoRouteSource(s.id);
+  const src = repo.addAutoRouteSource({ title: 'Тянет github в VPN', url: 'https://src/gh.lst', action: 'vpn' });
+  stubFetch('github.com\napi.github.com\nother.example\n');
+  await autoroute.refreshSource(src.id);
+  const res = autoroute.buildDataset();
+  assert.equal(res.ok, true, res.reason);
+
+  const sub = autoroute.subscriptionRules();
+  assert.ok(!sub.domains.includes('domain:github.com'), 'github.com в VPN не уехал');
+  assert.ok(sub.directDomains.includes('domain:github.com'), 'github.com среди исключений «напрямую»');
+  assert.ok(sub.domains.includes('domain:other.example'), 'остальное из источника не пострадало');
+  repo.deleteAutoRouteSource(src.id);
 });
 
 test('geoTagRules: конфиг для клиента с DAT — только ссылки на теги, без базы', () => {

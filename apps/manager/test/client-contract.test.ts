@@ -201,13 +201,15 @@ test('подписка: умный профиль = список AutoRoute + с�
   const full = sub.find((c) => c.meta.novpn.profileId === `${bothId}:full`);
   assert.ok(smart && full, 'оба профиля сервера присутствуют в подписке');
   // умный: доменное правило ведёт в прокси, терминальное — direct
-  const listRule = smart.routing.rules.find((r: any) => r.domain);
+  // Первым доменным правилом идут исключения «напрямую» (встроенный GitHub) —
+  // основной список выбираем по назначению, а не «первый попавшийся».
+  const listRule = smart.routing.rules.find((r: any) => r.domain && r.outboundTag !== 'direct');
   assert.ok(listRule, 'доменное правило есть');
   assert.equal(listRule.outboundTag, 'proxy-t0-0', 'список идёт В VPN (match-vpn)');
   assert.ok(listRule.domain.includes('domain:blocked.example'), 'домен из AutoRoute');
   assert.ok(listRule.domain.includes('full:exact.example'), 'вид full сохранён');
   assert.ok(listRule.domain.includes('domain:x.ru'), 'свой домен сервера дополняет список');
-  const ipRule = smart.routing.rules.find((r: any) => r.ip && !r.ip.includes('127.0.0.0/8'));
+  const ipRule = smart.routing.rules.find((r: any) => r.ip && r.outboundTag !== 'direct');
   assert.ok(ipRule && ipRule.ip.includes('10.10.0.0/16'), 'CIDR из AutoRoute — тоже в VPN');
   const last = smart.routing.rules[smart.routing.rules.length - 1];
   assert.equal(last.outboundTag, 'direct', 'всё остальное — напрямую');
@@ -225,8 +227,10 @@ test('подписка: умный профиль = список AutoRoute + с�
 test('Telegram: обязательные подсети и домены в умном профиле, потолок их не режет', async () => {
   const sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
   const smart = sub.find((c) => c.meta.novpn.profileId === bothId);
-  const listRule = smart.routing.rules.find((r: any) => r.domain);
-  const ipRule = smart.routing.rules.find((r: any) => r.ip && !r.ip.includes('127.0.0.0/8'));
+  // Первым доменным правилом идут исключения «напрямую» (встроенный GitHub) —
+  // основной список выбираем по назначению, а не «первый попавшийся».
+  const listRule = smart.routing.rules.find((r: any) => r.domain && r.outboundTag !== 'direct');
+  const ipRule = smart.routing.rules.find((r: any) => r.ip && r.outboundTag !== 'direct');
   // Мессенджер ходит в дата-центры по голым IP, без DNS и SNI: доменные правила его не ловят.
   for (const cidr of ['149.154.160.0/20', '91.108.4.0/22', '91.108.56.0/22'])
     assert.ok(ipRule.ip.includes(cidr), `подсеть Telegram ${cidr} обязана быть в правилах`);
@@ -271,7 +275,7 @@ test('Happ получает конфиг на тегах DAT + заголово�
   // отказ старта, поэтому ему по-прежнему уходит встроенный список и никаких заголовков.
   const plain = await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'v2rayNG/1.9.0' } });
   const plainSmart = (JSON.parse(await plain.text()) as any[]).find((c) => c.meta.novpn.profileId === bothId);
-  const plainRule = plainSmart.routing.rules.find((r2: any) => r2.domain);
+  const plainRule = plainSmart.routing.rules.find((r2: any) => r2.domain && r2.outboundTag !== 'direct');
   assert.ok(plainRule.domain.includes('domain:blocked.example'), 'список на месте');
   assert.ok(!plainRule.domain.includes('geosite:novpn'));
   assert.equal(plain.headers.get('routing'), null, 'чужим клиентам заголовок не шлём');
@@ -284,7 +288,9 @@ test('Happ получает конфиг на тегах DAT + заголово�
   );
   const off = await fetch(`${base}/sub/${subToken}/full?rules=inline`, { headers: { 'user-agent': 'Happ/3.13.0' } });
   const offSmart = (JSON.parse(await off.text()) as any[]).find((c) => c.meta.novpn.profileId === bothId);
-  assert.ok(offSmart.routing.rules.find((r2: any) => r2.domain).domain.includes('domain:blocked.example'));
+  assert.ok(
+    offSmart.routing.rules.find((r2: any) => r2.domain && r2.outboundTag !== 'direct').domain.includes('domain:blocked.example'),
+  );
 });
 
 test('умная маршрутизация выключена на сервере → только полный профиль; включена → оба у любого пользователя', async () => {

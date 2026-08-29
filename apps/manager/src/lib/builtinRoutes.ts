@@ -76,11 +76,39 @@ export const OPENAI_DOMAINS: string[] = [
   'statsigapi.net',
 ];
 
+/** Домены, которые обязаны идти НАПРЯМУЮ, даже если внешний список считает иначе.
+ *
+ *  GitHub. Внешние списки заворачивают в VPN только ЧАСТЬ его хозяйства
+ *  (`api.github.com` и Copilot), а `github.com`, `raw.githubusercontent.com`,
+ *  `release-assets.githubusercontent.com`, `codeload` остаются напрямую. Получается
+ *  разрыв: клиент авторизуется в API с адреса VPN, а файлы тянет со своего — GitHub
+ *  Desktop и git начинают вести себя странно, и владелец видит «GitHub нормально не
+ *  работает». Разрыв вреднее любого из двух направлений, поэтому сводим ВСЁ к одному:
+ *  напрямую, потому что в России GitHub открывается и без туннеля.
+ *
+ *  Встроенные правила идут первыми в сборке и побеждают в конфликтах, так что это
+ *  перекрывает внешний список. Кому провайдер GitHub всё-таки режет — заводит свой
+ *  источник с действием «в VPN» и ставит его выше. */
+export const DIRECT_DOMAINS: string[] = [
+  'github.com',
+  'githubusercontent.com',
+  'githubassets.com',
+  'github.io',
+  'ghcr.io',
+  'githubcopilot.com',
+];
+
+/** Встроенное правило: то же, что у источника, плюс собственное действие. */
+export interface BuiltinRule extends ParsedRule {
+  action: 'vpn' | 'direct';
+}
+
 /** Правила в порядке приоритета: подсети первыми — они и есть смысл списка. */
-export function builtinRules(): ParsedRule[] {
+export function builtinRules(): BuiltinRule[] {
   return [
-    ...TELEGRAM_CIDRS.map((v) => ({ kind: 'ip' as const, value: v })),
-    ...TELEGRAM_DOMAINS.map((v) => ({ kind: 'domain' as const, value: v })),
-    ...OPENAI_DOMAINS.map((v) => ({ kind: 'domain' as const, value: v })),
+    ...TELEGRAM_CIDRS.map((v) => ({ kind: 'ip' as const, value: v, action: 'vpn' as const })),
+    ...TELEGRAM_DOMAINS.map((v) => ({ kind: 'domain' as const, value: v, action: 'vpn' as const })),
+    ...OPENAI_DOMAINS.map((v) => ({ kind: 'domain' as const, value: v, action: 'vpn' as const })),
+    ...DIRECT_DOMAINS.map((v) => ({ kind: 'domain' as const, value: v, action: 'direct' as const })),
   ];
 }

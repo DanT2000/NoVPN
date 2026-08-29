@@ -150,6 +150,8 @@ fn main() {
             cmds::open_url,
             cmds::open_config_dir,
             cmds::open_engine_log,
+            cmds::vpn_conflicts,
+            cmds::browsers_installed,
             cmds::state_load,
             cmds::state_save,
         ])

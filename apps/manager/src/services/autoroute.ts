@@ -187,7 +187,7 @@ export function buildDataset(dataset = DATASET): AutoRouteBuildResult {
   for (const r of builtin) {
     const key = ruleKey(r);
     if (winners.has(key)) continue;
-    winners.set(key, { k: r.kind, v: r.value, a: 'vpn', s: BUILTIN_SOURCE_ID });
+    winners.set(key, { k: r.kind, v: r.value, a: r.action, s: BUILTIN_SOURCE_ID });
     builtinEntry.won++;
   }
 

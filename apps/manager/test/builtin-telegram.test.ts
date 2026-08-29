@@ -15,7 +15,7 @@ process.env.DATABASE_PATH = path.join(tmp, 'database.sqlite');
 process.env.ENCRYPTION_KEY = '0'.repeat(64);
 process.env.SESSION_SECRET = 'test';
 
-const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, OPENAI_DOMAINS, builtinRules } = await import('../src/lib/builtinRoutes.js');
+const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, OPENAI_DOMAINS, DIRECT_DOMAINS, builtinRules } = await import('../src/lib/builtinRoutes.js');
 const { parseRuleLine } = await import('../src/lib/routingRules.js');
 const repo = await import('../src/repo.js');
 
@@ -46,6 +46,22 @@ test('ChatGPT: добиваем пробелы, но общую капчу Cloud
   // у российских сайтов, которые идут напрямую.
   assert.ok(!OPENAI_DOMAINS.includes('challenges.cloudflare.com'));
   assert.ok(builtinRules().some((r) => r.kind === 'domain' && r.value === 'openai.org'));
+});
+
+// Внешние списки заворачивают в VPN только ЧАСТЬ GitHub (api.github.com и Copilot),
+// а github.com и githubusercontent.com оставляют напрямую. Клиент авторизуется в API
+// с адреса VPN, а файлы тянет со своего — «GitHub нормально не работает». Разрыв вреднее
+// любого из направлений, поэтому сводим всё к одному.
+test('GitHub идёт целиком напрямую, а не половинками', () => {
+  for (const d of ['github.com', 'githubusercontent.com', 'ghcr.io'])
+    assert.ok(DIRECT_DOMAINS.includes(d), `${d} должен быть в прямых`);
+  const rules = builtinRules();
+  const gh = rules.filter((r) => DIRECT_DOMAINS.includes(r.value));
+  assert.ok(gh.length > 0);
+  assert.ok(gh.every((r) => r.action === 'direct'), 'все github-правила — «напрямую»');
+  // Telegram при этом остаётся в VPN: действия не перепутаны.
+  assert.equal(rules.find((r) => r.value === 't.me')!.action, 'vpn');
+  assert.equal(rules.find((r) => r.value === '149.154.160.0/20')!.action, 'vpn');
 });
 
 test('все встроенные правила разбираются нашим же разборщиком', () => {

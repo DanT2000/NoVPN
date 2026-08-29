@@ -4,19 +4,19 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
 import { Toggle } from '../components/ui';
-import { BROWSERS } from '../mock/browsers';
+import { lookOf } from '../mock/browsers';
 import {
   autostartGet,
   autostartSync,
   inTauri,
   openConfigDir,
   openEngineLog,
-  openUrl,
   updateCheck,
   updateInstall,
   vpnPort,
+  browsersInstalled,
 } from '../lib/tauri';
-import type { UpdateInfo } from '../lib/tauri';
+import type { InstalledBrowser, UpdateInfo } from '../lib/tauri';
 import { IconChevron, IconRefresh } from '../components/icons';
 import type { Theme, UiScale } from '../state/types';
 
@@ -152,6 +152,12 @@ function AdvancedSettings() {
 }
 
 export function Settings() {
+  // Список установленных браузеров приходит из оболочки; null — ещё не спросили.
+  const [browsers, setBrowsers] = useState<InstalledBrowser[] | null>(null);
+  useEffect(() => {
+    void browsersInstalled().then((v) => setBrowsers(v ?? []));
+  }, []);
+
   const { s, setSetting, setSmartRouting, openQuickSetup, go, fullAvailable } = useStore();
   const [advOpen, setAdvOpen] = useState(false);
   const [upd, setUpd] = useState<{ state: 'idle' | 'checking' | 'done' | 'installing'; info?: UpdateInfo; error?: string }>({ state: 'idle' });
@@ -250,28 +256,29 @@ export function Settings() {
         Позволяет прямо на сайте выбрать, как он ходит — через VPN или напрямую. Правило
         сразу попадает в ваш список здесь.
       </div>
-      {BROWSERS.map((b) => (
-        <div key={b.id} className="item">
-          <span className="avatar" style={{ background: `${b.color}28`, color: b.color }}>
-            {b.name.charAt(0)}
-          </span>
-          <span className="item-main">
-            <span className="item-name">{b.name}</span>
-            <span className="item-meta">{b.found ? (b.installed ? 'Расширение установлено' : 'Найден') : 'Не найден'}</span>
-          </span>
-          <span className="item-tail">
-            {b.found ? (
-              <button
-                className="btn btn-sm btn-secondary"
-                disabled={b.installed}
-                onClick={() => void openUrl(b.store)}
-              >
-                {b.installed ? 'Готово' : 'Установить'}
-              </button>
-            ) : null}
-          </span>
-        </div>
-      ))}
+      {browsers === null ? (
+        <div className="item"><span className="item-main"><span className="item-meta">Смотрим, что установлено…</span></span></div>
+      ) : browsers.length === 0 ? (
+        <div className="item"><span className="item-main"><span className="item-meta">Браузеров не нашли</span></span></div>
+      ) : (
+        browsers.map((b) => (
+          <div key={b.id} className="item">
+            <span className="avatar" style={{ background: `${lookOf(b.id).color}28`, color: lookOf(b.id).color }}>
+              {b.name.charAt(0)}
+            </span>
+            <span className="item-main">
+              <span className="item-name">{b.name}</span>
+              <span className="item-meta">Найден</span>
+            </span>
+          </div>
+        ))
+      )}
+      {/* Расширения в магазинах ещё нет — не показываем кнопку, которая ведёт в никуда. */}
+      <div className="hint" style={{ marginTop: 10 }}>
+        Расширение пока ставится вручную: распакуйте архив, откройте в браузере страницу
+        расширений, включите «Режим разработчика» и нажмите «Загрузить распакованное
+        расширение». Пошагово — в инструкции на сайте.
+      </div>
 
       <div className="section-label">Обновления</div>
       <div className="card" style={{ padding: '15px 16px' }}>

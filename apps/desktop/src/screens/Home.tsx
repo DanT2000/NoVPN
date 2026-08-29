@@ -7,7 +7,7 @@ import { RouteFork } from '../components/RouteFork';
 import { Banner, STATE_INFO, StatusDot, Toggle } from '../components/ui';
 import { IconChevron } from '../components/icons';
 import { count } from '../lib/plural';
-import { inTauri, isElevated, relaunchElevated } from '../lib/tauri';
+import { inTauri, isElevated, relaunchElevated, vpnConflicts } from '../lib/tauri';
 
 const BTN: Record<string, string> = {
   connect: 'Запустить',
@@ -31,6 +31,32 @@ export function Home() {
   // массу и добавляем только РУЧНЫЕ сайты (source!=='list'), чтобы не считать
   // одни и те же дважды.
   const manualVpnSites = s.sites.filter((v) => v.route === 'vpn' && v.source !== 'list').length;
+  // Чужой туннель, поднятый одновременно с нашим, забирает маршрут по умолчанию —
+  // интернет пропадает целиком, и понять причину со стороны невозможно. Проверяем при
+  // появлении окна и раз в 15 секунд: фоновому webview таймеры душат, одного мало.
+  const [conflicts, setConflicts] = useState<string[]>([]);
+  useEffect(() => {
+    let stop = false;
+    const check = () => {
+      if (document.visibilityState !== 'visible') return;
+      void vpnConflicts()
+        .then((v) => {
+          if (!stop) setConflicts(v ?? []); // вне Tauri команда возвращает null
+        })
+        .catch(() => {
+          /* посмотреть не вышло — молчим: это подсказка, а не проверка доступа */
+        });
+    };
+    check();
+    const id = window.setInterval(check, 15000);
+    window.addEventListener('focus', check);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+      window.removeEventListener('focus', check);
+    };
+  }, []);
+
   const listRules = s.lists.filter((l) => l.id !== 'apps' && l.enabled).reduce((n, l) => n + l.rules, 0);
   const totalSites = listRules + manualVpnSites;
 
@@ -149,6 +175,13 @@ export function Home() {
             ? 'Через VPN идут и программы (Discord, Telegram), не только браузеры'
             : 'Через VPN идут браузеры и то, что уважает системный прокси'}
         </div>
+        {conflicts.length > 0 ? (
+          <div className="notice notice-amber" style={{ marginTop: 12 }}>
+            Обнаружен другой активный VPN: {conflicts.join(', ')}. Два туннеля сразу забирают
+            маршрут по умолчанию каждый на себя — интернет может пропасть совсем. Отключите один
+            из них.
+          </div>
+        ) : null}
         {s.settings.tunnel && !admin ? (
           <div className="notice notice-amber" style={{ marginTop: 12 }}>
             <div className="row-between">

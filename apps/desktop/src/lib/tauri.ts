@@ -232,6 +232,21 @@ export interface BrowserRule {
   route: 'vpn' | 'direct';
 }
 
+export interface InstalledBrowser {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/** Браузеры, которые РЕАЛЬНО стоят на компьютере (реестр StartMenuInternet).
+ *  Раньше список был выдуман: Яндекс значился найденным на любой машине. */
+export const browsersInstalled = () => call<InstalledBrowser[]>('browsers_installed');
+
+/** Чужие VPN-туннели, поднятые прямо сейчас (пустой список — конфликтов нет).
+ *  Два туннеля одновременно забирают маршрут по умолчанию каждый на себя, и интернет
+ *  пропадает совсем — человеку это надо сказать, а не оставлять гадать. */
+export const vpnConflicts = () => call<string[]>('vpn_conflicts');
+
 /** Правила, добавленные кнопкой в браузере. */
 export const browserRules = () => call<BrowserRule[]>('browser_rules');
 

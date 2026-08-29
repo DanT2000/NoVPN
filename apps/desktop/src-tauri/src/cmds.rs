@@ -638,6 +638,18 @@ pub fn open_url(url: String) -> Result<(), String> {
     }
 }
 
+/// Браузеры, которые РЕАЛЬНО установлены на компьютере.
+#[tauri::command]
+pub fn browsers_installed() -> Vec<crate::browsers::Browser> {
+    crate::browsers::installed()
+}
+
+/// Чужие VPN-туннели, поднятые прямо сейчас. Пустой список — конфликтов нет.
+#[tauri::command]
+pub fn vpn_conflicts() -> Vec<String> {
+    crate::netcheck::foreign_tunnels()
+}
+
 #[tauri::command]
 pub fn open_engine_log() -> Result<(), String> {
     let log = store::engine_dir().join(core::LOG_NAME);

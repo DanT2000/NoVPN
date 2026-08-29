@@ -1,19 +1,23 @@
-/* Браузеры, найденные на компьютере. Заглушка: настоящее определение — работа
-   оболочки, а не интерфейса. */
+/* Что показывать про браузер: цвет плашки и куда вести за расширением.
+   САМ СПИСОК больше не выдумываем — установленные браузеры отдаёт оболочка
+   (команда browsers_installed, реестр StartMenuInternet). Раньше здесь стояла
+   заглушка, где Chrome, Edge и Яндекс всегда числились найденными: владелец
+   справедливо возмутился, что «найден Яндекс», которого у него нет. */
 
-export interface BrowserInfo {
-  id: string;
-  name: string;
+export interface BrowserLook {
   color: string;
-  found: boolean;
-  installed: boolean;
-  /** Страница расширения в магазине браузера. */
+  /** Страница расширения в магазине. Пусто — там его ещё нет, ставится вручную. */
   store: string;
 }
 
-export const BROWSERS: BrowserInfo[] = [
-  { id: 'chrome', name: 'Chrome', color: '#4285F4', found: true, installed: false, store: 'https://chromewebstore.google.com/' },
-  { id: 'edge', name: 'Edge', color: '#0F8FE9', found: true, installed: false, store: 'https://microsoftedge.microsoft.com/addons' },
-  { id: 'yandex', name: 'Яндекс Браузер', color: '#FC3F1D', found: true, installed: false, store: 'https://chromewebstore.google.com/' },
-  { id: 'firefox', name: 'Firefox', color: '#FF7139', found: false, installed: false, store: 'https://addons.mozilla.org/' },
-];
+export const BROWSER_LOOK: Record<string, BrowserLook> = {
+  chrome: { color: '#4285F4', store: '' },
+  edge: { color: '#0F8FE9', store: '' },
+  yandex: { color: '#FC3F1D', store: '' },
+  firefox: { color: '#FF7139', store: '' },
+  opera: { color: '#FF1B2D', store: '' },
+  brave: { color: '#FB542B', store: '' },
+  vivaldi: { color: '#EF3939', store: '' },
+};
+
+export const lookOf = (id: string): BrowserLook => BROWSER_LOOK[id] ?? { color: '#8a94a6', store: '' };
