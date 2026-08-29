@@ -66,6 +66,10 @@ export function renderDownloadPage(opts: {
   .bbtn{display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--bd);
         border-radius:12px;padding:11px 16px;font-size:14px;font-weight:600;color:var(--tx);text-decoration:none}
   .bbtn.off{color:var(--mut);cursor:default}
+  .tshoot{margin-top:26px;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px 16px}
+  .tshoot summary{cursor:pointer;font-weight:600}
+  .tshoot p{margin:10px 0;font-size:14px;color:var(--mut)}
+  .tshoot a{color:var(--acc)}
   .bbtn em{font-style:normal;font-size:11px;color:var(--mut);background:var(--card2);border-radius:6px;padding:1px 6px}
 </style></head><body>
 <div class="wrap">
@@ -85,6 +89,24 @@ export function renderDownloadPage(opts: {
       </div>
     </div>
   </div>
+
+  <details class="tshoot">
+    <summary>Установщик пишет «не удалось»?</summary>
+    <p>
+      Приложению нужен системный компонент Windows — <b>Microsoft Edge WebView2 Runtime</b>.
+      На Windows 10 и 11 он есть изначально, но его можно удалить вместе с браузером или
+      «чистилкой» системы: тогда установка обрывается ошибкой.
+    </p>
+    <p>
+      Поставьте его с сайта Microsoft и запустите наш установщик заново:
+      <a href="https://developer.microsoft.com/microsoft-edge/webview2/" target="_blank" rel="noopener">developer.microsoft.com/microsoft-edge/webview2</a>
+      (раздел «Evergreen Standalone Installer», разрядка x64).
+    </p>
+    <p>
+      Если приложение уже стояло, перед повторной установкой закройте его через значок в
+      трее — открытые файлы установщик перезаписать не сможет.
+    </p>
+  </details>
 
   <h2>Расширение для браузера</h2>
   <p class="note">Расширению нужно установленное приложение NoVPN для Windows.</p>
