@@ -172,6 +172,24 @@ fn smart_off_sends_everything_through_tunnel() {
 }
 
 #[test]
+fn smart_off_still_bypasses_local_names() {
+    // Полный VPN не должен рвать доступ к локальной сети по ИМЕНИ: обход локалки
+    // (.local и свои домены) применяется и в полном режиме — это LAN, не утечка.
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
+    let p = parse(&link).unwrap();
+    let rules = Rules {
+        smart: false,
+        bypass_local: true,
+        custom_local: vec!["nas.home".into()],
+        ..Default::default()
+    };
+    let cfg = build_config(&p, &rules, Some("Точка"), Ports::default());
+    assert!(cfg.contains("MATCH,NoVPN"), "всё прочее — в туннель");
+    assert!(cfg.contains("DOMAIN-SUFFIX,local,DIRECT"), "локальный суффикс .local — напрямую");
+    assert!(cfg.contains("DOMAIN-SUFFIX,nas.home,DIRECT"), "свой локальный домен — напрямую");
+}
+
+#[test]
 fn selected_server_goes_first_in_group() {
     let raw = format!(
         "vless://{UUID}@a.example:443?security=reality&pbk=K#Первый\n\
@@ -457,7 +475,7 @@ fn upstream_grammar_becomes_mihomo_rules() {
 }
 
 #[test]
-fn full_profile_is_fail_close_without_domain_exceptions() {
+fn full_profile_has_no_list_exceptions_but_keeps_local() {
     let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
     let p = parse(&link).unwrap();
     let rules = Rules {
@@ -472,9 +490,14 @@ fn full_profile_is_fail_close_without_domain_exceptions() {
     let cfg = build_config(&p, &rules, Some("Точка"), Ports::default());
     assert!(cfg.contains("MATCH,NoVPN"), "всё в туннель");
     assert!(!cfg.contains("MATCH,DIRECT"), "fail-close: никакого DIRECT-умолчания");
-    for leak in ["gosuslugi.ru", "ya.ru", "openai.com", "DOMAIN-SUFFIX,corp,DIRECT", "DOMAIN-SUFFIX,corp.example,DIRECT"] {
-        assert!(!cfg.contains(leak), "в полном профиле нет доменных исключений: {leak}");
+    // Исключений из списков и правил человека в полном профиле нет (это были бы
+    // утечки мимо туннеля).
+    for leak in ["gosuslugi.ru", "ya.ru", "openai.com"] {
+        assert!(!cfg.contains(leak), "в полном профиле нет доменных исключений из списков: {leak}");
     }
+    // А вот локальную сеть по ИМЕНИ полный режим не рвёт: обход локалки применяется.
+    assert!(cfg.contains("DOMAIN-SUFFIX,corp,DIRECT"), "локальный суффикс .corp — напрямую");
+    assert!(cfg.contains("DOMAIN-SUFFIX,corp.example,DIRECT"), "свой локальный домен — напрямую");
     // Приватные подсети при lanAccess=false — напрямую и в полном профиле.
     assert!(cfg.contains("IP-CIDR,192.168.0.0/16,DIRECT"));
 }
