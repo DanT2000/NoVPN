@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "d92c55ac9514d80b4ef3806798ff4d38674f7ecc21a084084fcec6ba54c54085",
-  "signature": "4ghip8PHRLr16pn4c25X7PROjP443KD10TrTp7rvY54AL3amAPP8kJ4OFLzbBJhGh963RR0xJV4O49U59p0eCg==",
-  "sizeBytes": 16537013,
-  "notes": "Проверка сайта: покажет, идёт он через VPN или напрямую и какое правило сработало"
+  "sha256": "467f0d37821882b29a8be6c865e933c843621c8997aa58f6b0d94cb4d986de7b",
+  "signature": "jrG5orHKTdgKCbJxIySZJtxrcGpWqEVmm4HnnJ+gxq5o5mBb9DSJ/vkHxnkiCmf5qy5Y9tR97yByE8FUQ9RZAg==",
+  "sizeBytes": 16536537,
+  "notes": "Логотипы браузеров в настройках; понятный текст про возврат с полного VPN по таймеру; подсказка обновляться через приложение"
 }
