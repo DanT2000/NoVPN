@@ -151,6 +151,32 @@ export function renderDownloadPage(opts: {
   <h2>Расширение для браузера</h2>
   <p class="note">Расширению нужно установленное приложение NoVPN для Windows.</p>
   <div class="browsers">${browsers}</div>
+
+  <details class="tshoot">
+    <summary>Магазин пишет «не найдено»? Поставьте вручную — это пара минут</summary>
+    <p>
+      Расширение ещё проходит проверку в магазинах. Пока его можно поставить из файла —
+      браузер это умеет и без магазина.
+    </p>
+    <p><b>Chrome, Edge, Яндекс Браузер:</b></p>
+    <ol>
+      <li>Скачать архив: <a href="/extension/novpn-extension-chrome.zip">novpn-extension-chrome.zip</a>
+        и распаковать в постоянную папку — если её удалить, расширение пропадёт.</li>
+      <li>Открыть страницу расширений: <code>chrome://extensions</code> (в Edge —
+        <code>edge://extensions</code>, в Яндексе — <code>browser://tune</code> &rarr; «Расширения»).</li>
+      <li>Включить <b>Режим разработчика</b> — переключатель справа сверху.</li>
+      <li>Нажать <b>Загрузить распакованное расширение</b> и выбрать распакованную папку.</li>
+      <li>Значок появится на панели. Приложение NoVPN должно быть запущено.</li>
+    </ol>
+    <p><b>Firefox:</b></p>
+    <ol>
+      <li>Скачать <a href="/extension/novpn-extension-firefox.zip">novpn-extension-firefox.zip</a>.</li>
+      <li>Открыть <code>about:debugging#/runtime/this-firefox</code>.</li>
+      <li>Нажать <b>Загрузить временное дополнение</b> и выбрать скачанный файл.</li>
+      <li>Firefox снимает такие дополнения при перезапуске — до публикации в каталоге это
+        нормально.</li>
+    </ol>
+  </details>
 </div>
 </body></html>`;
 }

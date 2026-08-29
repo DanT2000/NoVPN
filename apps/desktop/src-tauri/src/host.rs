@@ -161,6 +161,9 @@ pub fn run() {
 /// поэтому он одинаков и при разработке, и после публикации в магазине.
 pub const EXTENSION_ID: &str = "fcigljflnglmclncmdjmbfppppaoeech";
 pub const HOST_NAME: &str = "ru.appswire.novpn";
+/// Firefox опознаёт расширение не по chrome-extension://, а по идентификатору из
+/// `browser_specific_settings.gecko.id`, и держит хосты в своей ветке реестра.
+pub const FIREFOX_EXTENSION_ID: &str = "novpn@appswire.ru";
 
 /// Прописывает хост в браузерах. Вызывается при каждом запуске: путь к
 /// исполняемому файлу меняется при обновлении, и запись должна за ним следовать.
@@ -178,26 +181,41 @@ pub fn register() -> Result<(), String> {
         "allowed_origins": [format!("chrome-extension://{EXTENSION_ID}/")],
     });
 
+    // У Firefox манифест отличается: расширение перечисляется в allowed_extensions
+    // по своему gecko-идентификатору, а не по chrome-extension://.
+    let manifest_ff = json!({
+        "name": HOST_NAME,
+        "description": "NoVPN",
+        "path": exe.to_string_lossy(),
+        "type": "stdio",
+        "allowed_extensions": [FIREFOX_EXTENSION_ID],
+    });
+
     let dir = store::dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("native-host.json");
     std::fs::write(&path, serde_json::to_string_pretty(&manifest).unwrap_or_default())
         .map_err(|e| format!("Не удалось записать манифест хоста: {e}"))?;
+    let path_ff = dir.join("native-host-firefox.json");
+    std::fs::write(&path_ff, serde_json::to_string_pretty(&manifest_ff).unwrap_or_default())
+        .map_err(|e| format!("Не удалось записать манифест хоста Firefox: {e}"))?;
 
-    // Каждый браузер держит свою ветку, но манифест у всех один и тот же.
+    // Каждый браузер держит свою ветку. У семейства Chromium манифест общий,
+    // Firefox получает свой.
     let branches = [
-        r"Software\Google\Chrome\NativeMessagingHosts",
-        r"Software\Microsoft\Edge\NativeMessagingHosts",
-        r"Software\Yandex\YandexBrowser\NativeMessagingHosts",
-        r"Software\Chromium\NativeMessagingHosts",
+        (r"Software\Google\Chrome\NativeMessagingHosts", &path),
+        (r"Software\Microsoft\Edge\NativeMessagingHosts", &path),
+        (r"Software\Yandex\YandexBrowser\NativeMessagingHosts", &path),
+        (r"Software\Chromium\NativeMessagingHosts", &path),
+        (r"Software\Mozilla\NativeMessagingHosts", &path_ff),
     ];
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    for branch in branches {
+    for (branch, manifest_path) in branches {
         let full = format!(r"{branch}\{HOST_NAME}");
         // Отсутствие браузера — не ошибка: ветка просто создаётся впрок и
         // сработает, если его поставят позже.
         if let Ok((key, _)) = hkcu.create_subkey_with_flags(&full, KEY_WRITE) {
-            let _ = key.set_value("", &path.to_string_lossy().to_string());
+            let _ = key.set_value("", &manifest_path.to_string_lossy().to_string());
         }
     }
     Ok(())
