@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "467f0d37821882b29a8be6c865e933c843621c8997aa58f6b0d94cb4d986de7b",
-  "signature": "jrG5orHKTdgKCbJxIySZJtxrcGpWqEVmm4HnnJ+gxq5o5mBb9DSJ/vkHxnkiCmf5qy5Y9tR97yByE8FUQ9RZAg==",
-  "sizeBytes": 16536537,
-  "notes": "Логотипы браузеров в настройках; понятный текст про возврат с полного VPN по таймеру; подсказка обновляться через приложение"
+  "sha256": "1ac1578f333f488bd3331ad136c09775ec7fa88a0252a6854fa438a6b70ba4b9",
+  "signature": "/aoO19gqk0rbEhDdATXE6MeC/dxk1nRltPzqTlbjz+uJRmf/VHl6NWRSHqrPcvx+i7SiPe3kRXCclhOfZcbHCA==",
+  "sizeBytes": 16530740,
+  "notes": "Значок VPN теперь висит у часов, а не в скрытых значках. Работают «Подключаться автоматически» и «Обновляться автоматически». Точнее определяется другой активный VPN. Стабильнее YouTube/Google на умной маршрутизации. Исправлена подсказка «почему сайт пошёл не туда»."
 }
