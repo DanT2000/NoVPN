@@ -33,6 +33,9 @@
     "dns.google.com",
     "dns.google",
     "firebaseremoteconfig.googleapis.com",
+    "openai.org",
+    "featuregates.org",
+    "statsigapi.net",
     "blocked.example",
     "full:exact.example",
     "10.10.0.0/16"

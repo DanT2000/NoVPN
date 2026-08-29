@@ -4,8 +4,8 @@
     {
       "name": "upstream",
       "version": 2,
-      "sha256": "8937919bff7cc4087b3020727ab76c31d3bd7b3b7c1a235f9db680bfbf07f5d6",
-      "bytes": 796,
+      "sha256": "5a7c4afdb0554e9cf5d86b275469409ed2b2e3407203372418d7c8cb48e2beb0",
+      "bytes": 860,
       "updatedAt": "2026-08-28T00:00:00.000Z",
       "url": "https://panel.example/routing/upstream.json"
     },
@@ -20,8 +20,8 @@
     {
       "name": "geosite",
       "version": 1,
-      "sha256": "6767f9329e6a8c4485e1f6d0810a112eee058cc312223ac0da520093344a8fea",
-      "bytes": 403,
+      "sha256": "cde0d4b301286a9040e0a6c82ba5eb3ed0f9956f5f38fd32ce2194bdf3cca0fe",
+      "bytes": 461,
       "updatedAt": "2026-08-28T00:00:00.000Z",
       "url": "https://panel.example/routing/autoroute/geosite.dat"
     },

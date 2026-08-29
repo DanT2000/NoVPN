@@ -15,7 +15,9 @@ process.env.SESSION_SECRET = 'test';
 process.env.SINGBOX_BIN = path.join(tmp, 'no-such-sing-box');
 
 const { parseRuleLine, parseSource } = await import('../src/lib/routingRules.js');
-const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, BUILTIN_SOURCE_ID } = await import('../src/lib/builtinRoutes.js');
+const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, BUILTIN_SOURCE_ID, builtinRules } = await import('../src/lib/builtinRoutes.js');
+// Встроенные правила есть в КАЖДОЙ сборке — из точных сверок их вычитаем.
+const BUILTIN_VALUES = new Set(builtinRules().map((r) => r.value));
 const repo = await import('../src/repo.js');
 const { seedIfEmpty } = await import('../src/seed.js');
 const autoroute = await import('../src/services/autoroute.js');
@@ -101,9 +103,8 @@ test('сборка: верхний источник побеждает в кон
   assert.equal(res.conflicts[0]!.losers.length, 1, 'источник с ТЕМ ЖЕ действием в проигравшие не попал');
 
   // опубликованное содержимое = объединение без дублей (плюс встроенные правила)
-  const builtin = new Set<string>([...TELEGRAM_CIDRS, ...TELEGRAM_DOMAINS]);
   const published = JSON.parse(repo.getRoutingContent('upstream') ?? '{}') as { items: string[] };
-  assert.deepEqual(published.items.filter((i) => !builtin.has(i)).sort(), ['only-mid.ru', 'only-top.ru', 'shared.ru']);
+  assert.deepEqual(published.items.filter((i) => !BUILTIN_VALUES.has(i)).sort(), ['only-mid.ru', 'only-top.ru', 'shared.ru']);
 });
 
 test('приоритет меняется перестановкой — победитель конфликта меняется без повторного скачивания', () => {
@@ -228,14 +229,14 @@ test('subscriptionRules: только action=vpn, префиксы Xray, CIDR о
   await autoroute.refreshSource(direct.id);
   autoroute.buildDataset();
   const sub = autoroute.subscriptionRules();
-  const fromSources = sub.domains.filter((d) => !TELEGRAM_DOMAINS.includes(d.replace(/^\w+:/, '')));
+  const fromSources = sub.domains.filter((d) => !BUILTIN_VALUES.has(d.replace(/^\w+:/, '')));
   assert.deepEqual(fromSources.sort(), ['domain:blocked.ru', 'full:exact.ru']);
   assert.deepEqual(
     sub.ips.filter((i) => !TELEGRAM_CIDRS.includes(i)),
     ['10.0.0.0/8'],
   );
   assert.equal(sub.truncated, false);
-  assert.equal(sub.total, 3 + TELEGRAM_CIDRS.length + TELEGRAM_DOMAINS.length, 'direct-правила в подписку не идут');
+  assert.equal(sub.total, 3 + BUILTIN_VALUES.size, 'direct-правила в подписку не идут');
   assert.ok(autoroute.SUBSCRIPTION_CAP >= 10_000);
   repo.deleteAutoRouteSource(vpn.id);
   repo.deleteAutoRouteSource(direct.id);
@@ -354,7 +355,7 @@ test('встроенные правила Telegram: первые в сборке
   const res = autoroute.buildDataset();
   assert.equal(res.ok, true, res.reason);
   const stats = res.build!.sources.find((s: { sourceId: string }) => s.sourceId === BUILTIN_SOURCE_ID);
-  assert.ok(stats && stats.won === TELEGRAM_CIDRS.length + TELEGRAM_DOMAINS.length, 'встроенные видны отдельным источником в статистике сборки');
+  assert.ok(stats && stats.won === BUILTIN_VALUES.size, 'встроенные видны отдельным источником в статистике сборки');
 
   const sub = autoroute.subscriptionRules();
   assert.equal(sub.truncated, true, 'потолок реально сработал');

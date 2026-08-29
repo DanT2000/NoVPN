@@ -64,10 +64,23 @@ export const TELEGRAM_DOMAINS: string[] = [
   'firebaseremoteconfig.googleapis.com',
 ];
 
+/** ChatGPT/OpenAI: домены, которых нет ни в одном внешнем списке, а без них сервис
+ *  ведёт себя так, будто «у вас другой IP». Основные (`openai.com`, `chatgpt.com`)
+ *  приходят из базы и покрывают поддомены суффиксом — здесь только пробелы.
+ *  `challenges.cloudflare.com` СЮДА НЕ ДОБАВЛЕН намеренно: он общий для тысяч сайтов,
+ *  и завернув его в туннель, мы сломали бы проверку у российских сайтов, которые идут
+ *  напрямую (их капча решалась бы с зарубежного адреса). */
+export const OPENAI_DOMAINS: string[] = [
+  'openai.org',
+  'featuregates.org',
+  'statsigapi.net',
+];
+
 /** Правила в порядке приоритета: подсети первыми — они и есть смысл списка. */
 export function builtinRules(): ParsedRule[] {
   return [
     ...TELEGRAM_CIDRS.map((v) => ({ kind: 'ip' as const, value: v })),
     ...TELEGRAM_DOMAINS.map((v) => ({ kind: 'domain' as const, value: v })),
+    ...OPENAI_DOMAINS.map((v) => ({ kind: 'domain' as const, value: v })),
   ];
 }

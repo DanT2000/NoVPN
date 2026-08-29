@@ -15,7 +15,7 @@ process.env.DATABASE_PATH = path.join(tmp, 'database.sqlite');
 process.env.ENCRYPTION_KEY = '0'.repeat(64);
 process.env.SESSION_SECRET = 'test';
 
-const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, builtinRules } = await import('../src/lib/builtinRoutes.js');
+const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, OPENAI_DOMAINS, builtinRules } = await import('../src/lib/builtinRoutes.js');
 const { parseRuleLine } = await import('../src/lib/routingRules.js');
 const repo = await import('../src/repo.js');
 
@@ -36,6 +36,16 @@ test('встроенные домены: резервные точки вход�
   for (const d of ['dns.google.com', 'dns.google', 'firebaseremoteconfig.googleapis.com'])
     assert.ok(TELEGRAM_DOMAINS.includes(d), `резервная точка входа ${d} потеряна`);
   for (const d of ['t.me', 'telegram.org', 'telesco.pe']) assert.ok(TELEGRAM_DOMAINS.includes(d));
+});
+
+test('ChatGPT: добиваем пробелы, но общую капчу Cloudflare в туннель не тащим', () => {
+  // Основные домены приходят из внешней базы суффиксом, здесь — только то, чего там нет.
+  for (const d of ['openai.org', 'featuregates.org', 'statsigapi.net'])
+    assert.ok(OPENAI_DOMAINS.includes(d), `пробел ${d} не закрыт`);
+  // challenges.cloudflare.com общий для тысяч сайтов: в туннеле он ломал бы проверку
+  // у российских сайтов, которые идут напрямую.
+  assert.ok(!OPENAI_DOMAINS.includes('challenges.cloudflare.com'));
+  assert.ok(builtinRules().some((r) => r.kind === 'domain' && r.value === 'openai.org'));
 });
 
 test('все встроенные правила разбираются нашим же разборщиком', () => {
