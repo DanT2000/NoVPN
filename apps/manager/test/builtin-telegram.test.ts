@@ -53,9 +53,14 @@ test('ChatGPT: добиваем пробелы, но общую капчу Cloud
 // а github.com и githubusercontent.com оставляют напрямую. Клиент авторизуется в API
 // с адреса VPN, а файлы тянет со своего — «GitHub нормально не работает». Разрыв вреднее
 // любого из направлений, поэтому сводим всё к одному.
-test('GitHub идёт целиком напрямую, а не половинками', () => {
-  for (const d of ['github.com', 'githubusercontent.com', 'ghcr.io'])
+test('GitHub идёт целиком напрямую, а Copilot — через VPN', () => {
+  for (const d of ['github.com', 'raw.githubusercontent.com', 'release-assets.githubusercontent.com', 'ghcr.io'])
     assert.ok(DIRECT_DOMAINS.includes(d), `${d} должен быть в прямых`);
+  // Ключевая тонкость: НЕ весь githubusercontent.com суффиксом. На его поддоменах живёт
+  // Copilot, он в России заблокирован и обязан идти через VPN — широкое правило
+  // утащило бы его напрямую и сломало.
+  assert.ok(!DIRECT_DOMAINS.includes('githubusercontent.com'), 'суффикс целиком брать нельзя');
+  assert.ok(!DIRECT_DOMAINS.some((d) => d.includes('copilot')), 'Copilot напрямую не пускаем');
   const rules = builtinRules();
   const gh = rules.filter((r) => DIRECT_DOMAINS.includes(r.value));
   assert.ok(gh.length > 0);

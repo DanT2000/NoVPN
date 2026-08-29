@@ -74,6 +74,10 @@ export const OPENAI_DOMAINS: string[] = [
   'openai.org',
   'featuregates.org',
   'statsigapi.net',
+  // Редактор кода мы отправили напрямую (см. DIRECT_DOMAINS и пресеты приложений), а его
+  // ИИ-помощники обязаны идти через туннель — разделить их по имени процесса нельзя,
+  // расширения работают внутри того же Code.exe. Значит, разделяем по доменам.
+  'cursor.com',
 ];
 
 /** Домены, которые обязаны идти НАПРЯМУЮ, даже если внешний список считает иначе.
@@ -91,11 +95,16 @@ export const OPENAI_DOMAINS: string[] = [
  *  источник с действием «в VPN» и ставит его выше. */
 export const DIRECT_DOMAINS: string[] = [
   'github.com',
-  'githubusercontent.com',
   'githubassets.com',
   'github.io',
   'ghcr.io',
-  'githubcopilot.com',
+  // Именно эти хосты, а НЕ весь githubusercontent.com суффиксом: на его поддоменах
+  // живёт Copilot (copilot-proxy, copilot-telemetry), а он в России заблокирован и
+  // обязан идти через VPN. Широкое правило утащило бы его напрямую и сломало.
+  'raw.githubusercontent.com',
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+  'avatars.githubusercontent.com',
 ];
 
 /** Встроенное правило: то же, что у источника, плюс собственное действие. */
