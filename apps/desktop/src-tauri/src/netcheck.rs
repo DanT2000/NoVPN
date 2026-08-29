@@ -24,14 +24,30 @@ const VPN_HINTS: &[&str] = &[
     "windscribe", "warp", "tailscale", "zerotier", "vpn", "tun",
 ];
 
-/// Индексы интерфейсов, у которых есть маршрут по умолчанию.
+/// Префиксы, которыми туннель забирает маршрут по умолчанию. Кроме честного
+/// `0.0.0.0/0` это ПАРА `0.0.0.0/1` + `128.0.0.0/1`: WireGuard/OpenVPN часто
+/// перекрывают дефолт именно ей (она приоритетнее /0 и «поверх» существующего
+/// шлюза), не трогая саму запись `0.0.0.0/0` — без этих префиксов такой чужой
+/// туннель остался бы незамеченным, а интернет бы уже пропал.
+const DEFAULT_PREFIXES: &[&str] = &["0.0.0.0/0", "0.0.0.0/1", "128.0.0.0/1"];
+
+/// Индексы интерфейсов, у которых есть маршрут по умолчанию. Префикс сверяем как
+/// ЦЕЛЫЙ токен (а не подстрокой), иначе `10.0.0.0/1` или `128.0.0.0/1` ложно
+/// матчили бы `0.0.0.0/1`. Индекс — следующий за префиксом столбец.
 pub fn parse_default_route_indexes(routes: &str) -> Vec<u32> {
     let mut out = Vec::new();
     for line in routes.lines() {
-        let Some(rest) = line.split("0.0.0.0/0").nth(1) else { continue };
-        let Some(idx) = rest.split_whitespace().next().and_then(|s| s.parse::<u32>().ok()) else { continue };
-        if !out.contains(&idx) {
-            out.push(idx);
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        for (i, t) in toks.iter().enumerate() {
+            if !DEFAULT_PREFIXES.contains(t) {
+                continue;
+            }
+            if let Some(idx) = toks.get(i + 1).and_then(|s| s.parse::<u32>().ok()) {
+                if !out.contains(&idx) {
+                    out.push(idx);
+                }
+            }
+            break; // одна строка маршрута — один префикс
         }
     }
     out
@@ -152,6 +168,31 @@ mod tests {
     fn no_conflict_when_we_are_alone() {
         let routes = "Нет  Вручную  0  0.0.0.0/0  7  192.168.2.1\nНет  Вручную  0  0.0.0.0/0  32  198.18.0.2\n";
         assert!(conflicts_from(routes, IFACES).is_empty());
+    }
+
+    #[test]
+    fn split_default_tunnel_is_detected() {
+        // WireGuard/OpenVPN перекрывают дефолт парой 0.0.0.0/1 + 128.0.0.0/1,
+        // не создавая 0.0.0.0/0. Такой чужой туннель обязан считаться конфликтом.
+        let routes = "\
+Нет  Вручную  0  0.0.0.0/0     7   192.168.2.1
+Нет  Вручную  0  0.0.0.0/1     40  10.9.0.1
+Нет  Вручную  0  128.0.0.0/1   40  10.9.0.1
+";
+        let ifaces = "\
+Идх  Мет  MTU   Состояние  Имя
+ 7   25   1500  connected  Ethernet
+40   5    1420  connected  WireGuard Tunnel
+";
+        assert_eq!(parse_default_route_indexes(routes), vec![7, 40]);
+        assert_eq!(conflicts_from(routes, ifaces), vec!["WireGuard Tunnel"]);
+    }
+
+    #[test]
+    fn narrower_half_prefix_is_not_confused() {
+        // 10.0.0.0/1 не должен ложно совпасть с 0.0.0.0/1 (сверка целым токеном).
+        let routes = "Нет  Вручную  0  10.0.0.0/1  40  10.9.0.1\n";
+        assert!(parse_default_route_indexes(routes).is_empty());
     }
 
     #[test]

@@ -26,6 +26,8 @@ import {
   vpnDisconnect,
   vpnReload,
   explainDomain,
+  updateCheck,
+  updateInstall,
 } from '../lib/tauri';
 import type { MetaResult, ServerLists } from '../lib/tauri';
 import type {
@@ -426,6 +428,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .then((r) => {
               setSrv(r);
               applyListCounts(r);
+            })
+            .catch(() => null);
+        }
+        // Автопроверка обновления приложения при запуске. Тумблер обещает
+        // «Обновляться автоматически» — если на GitHub есть свежая подписанная
+        // версия, тихо её ставим. updateInstall без обновления ничего не делает,
+        // так что обычный запуск это не трогает.
+        const autoUpdApp = saved?.settings?.autoUpdateApp ?? true;
+        if (autoUpdApp) {
+          void updateCheck()
+            .then((info) => {
+              if (info.available) void updateInstall().catch(() => null);
             })
             .catch(() => null);
         }
@@ -885,6 +899,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
     };
   }, [s, nav, error, reconnecting, srv, later, clearTimers, applyMeta]);
+
+  // Автоподключение при запуске. Тумблер «Подключаться автоматически» обещает
+  // поднять VPN сразу после старта — ждём, пока восстановится подписка и выбор
+  // сервера, и один раз за сеанс дёргаем connect. Гвард не даёт повторов при
+  // последующих рендерах и не мешает ручному «Отключить».
+  const autoConnected = useRef(false);
+  useEffect(() => {
+    if (!inTauri || autoConnected.current) return;
+    if (!s.settings.autoconnect) return;
+    if (s.subscription.status !== 'active' || !s.serverId) return;
+    if (s.conn !== 'off') return;
+    if (s.meta?.denied) return;
+    autoConnected.current = true;
+    api.connect();
+  }, [s.settings.autoconnect, s.subscription.status, s.serverId, s.conn, s.meta, api]);
 
   return <C.Provider value={api}>{children}</C.Provider>;
 }

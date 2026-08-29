@@ -190,16 +190,21 @@ export function buildWhitelistXrayConfig(
   // база и так идёт напрямую, там такое правило было бы пустым звуком.
   const exDomains = matchVpn && !disableWhitelist ? normalizeWhitelistRoutes(opts.directRoutes?.domains ?? []) : [];
   const exIps = matchVpn && !disableWhitelist ? (opts.directRoutes?.ips ?? []).filter(Boolean) : [];
-  const whitelistRules = [
+  // Что уходит direct БЕЗУСЛОВНО и раньше списка: явные исключения + приватные адреса.
+  // Их QUIC не трогаем — они и так вне туннеля, UDP по прямому каналу стабилен.
+  const directPrefix = [
     ...(exDomains.length ? [{ type: 'field', outboundTag: 'direct', domain: exDomains }] : []),
     ...(exIps.length ? [{ type: 'field', outboundTag: 'direct', ip: exIps }] : []),
-    ...(disableWhitelist || !wlRoutes.length ? [] : [{ type: 'field', ...listTarget, domain: wlRoutes }]),
-    ...(disableWhitelist || !ipRoutes.length ? [] : [{ type: 'field', ...listTarget, ip: ipRoutes }]),
     // Приватные/локальные адреса. По умолчанию (lanAccess=false) — напрямую (клиент
     // держит свою локалку сам, приватные адреса не уходят в туннель). При lanAccess=true
     // это правило УБИРАЕМ: приватные адреса пойдут через прокси/туннель к серверу — так
     // самохостер добирается до локальной сети СВОЕГО сервера (дома) через VPN.
     ...(lanAccess ? [] : [{ type: 'field', outboundTag: 'direct', ip: PRIVATE_IPS }]),
+  ];
+  // Правила самого списка (куда его вести) и торренты.
+  const listRules = [
+    ...(disableWhitelist || !wlRoutes.length ? [] : [{ type: 'field', ...listTarget, domain: wlRoutes }]),
+    ...(disableWhitelist || !ipRoutes.length ? [] : [{ type: 'field', ...listTarget, ip: ipRoutes }]),
     // Торренты — мимо VPN (при disableWhitelist тоже убираем: никаких исключений).
     // В match-vpn база и так direct — отдельное правило не нужно.
     ...(disableWhitelist || matchVpn ? [] : [{ type: 'field', outboundTag: 'direct', protocol: ['bittorrent'] }]),
@@ -210,9 +215,17 @@ export function buildWhitelistXrayConfig(
   const meta: Record<string, unknown> = { serverDescription: remarks, ...(opts.novpn ? { novpn: opts.novpn } : {}) };
   // QUIC (UDP/443) через прокси-цепочку нестабилен: YouTube/Google-сервисы «зависают»,
   // т.к. браузер открыл QUIC, а UDP по VLESS/прокси теряется, и отката на TCP не происходит.
-  // Блокируем UDP/443 → браузер сразу падает на надёжный HTTP/2 (TCP). RU-домены уже ушли
-  // direct правилами выше, их QUIC этот блок не затрагивает (порядок правил: whitelist → quic).
+  // Блокируем UDP/443 → браузер сразу падает на надёжный HTTP/2 (TCP).
   const quicBlock = { type: 'field', outboundTag: 'block', network: 'udp', port: 443 };
+  // Место блока зависит от режима. Терминальное правило (rest) уводит трафик:
+  // match-vpn → direct, match-direct/полный → в туннель. Блокировать QUIC надо
+  // ПЕРЕД тем правилом, что заворачивает трафик в прокси, иначе UDP/443 успеет
+  // уйти туннелем: в match-vpn это правила VPN-списка (список → прокси), поэтому
+  // блок встаёт после direct-исключений, но перед списком; в остальных режимах
+  // туннель — это терминальный rest, и блок правильно стоит после whitelist.
+  const coreRules = matchVpn
+    ? [...directPrefix, quicBlock, ...listRules]
+    : [...directPrefix, ...listRules, quicBlock];
   // Терминальный аварийный fallback балансировщиков. В обычном режиме — 'direct' (все
   // каналы мертвы → остаёмся в сети напрямую, осознанный компромисс). В полном туннеле
   // (disableWhitelist) пользователь ЯВНО выбрал «весь трафик через VPN» — падать в direct
@@ -222,7 +235,7 @@ export function buildWhitelistXrayConfig(
   // Один тир (только Xray или только прокси) — без аварийного переключения между тирами.
   if (tiers.length <= 1) {
     const tier0 = tiers[0] ?? [];
-    const rules: Array<Record<string, unknown>> = [...whitelistRules, quicBlock];
+    const rules: Array<Record<string, unknown>> = [...coreRules];
     const cfg: Record<string, unknown> = {
       remarks,
       meta,
@@ -250,7 +263,7 @@ export function buildWhitelistXrayConfig(
   // следующий тир (loopback возвращает трафик через dokodemo-инбаунд), и так до SOCKS,
   // а если все мертвы — напрямую. observatory следит за живостью тиров.
   const n = tiers.length;
-  const rules: Array<Record<string, unknown>> = [...whitelistRules, quicBlock];
+  const rules: Array<Record<string, unknown>> = [...coreRules];
   const balancers: Array<Record<string, unknown>> = [];
   for (let i = 1; i < n; i++) {
     inbounds.push({

@@ -455,9 +455,13 @@ router.get('/sub/:token/full', (req, res) => {
   const parts: string[] = [];
   for (const e of entries) {
     const srv = repo.getServer(e.serverId);
+    // Устройство на уже удалённом сервере пропускаем — ровно как meta.json ниже
+    // (`if (!srv) continue`). Иначе /full отдал бы лишний конфиг, которого нет в
+    // meta.profiles[], и матчинг профилей на клиенте разъехался бы на один.
+    if (!srv) continue;
     // Один конфиг на ПРОФИЛЬ: сервер с обоими режимами даёт два — умный первым,
     // «Полный VPN» вторым (если разрешён пользователю). Порядок 1:1 с meta.profiles[].
-    for (const profile of srv ? profilesFor(u, srv) : (['smart'] as const)) {
+    for (const profile of profilesFor(u, srv)) {
       const json = buildUserXrayFull(u, [e.link], srv, overQuota, profile, geoDat);
       if (json) parts.push(json);
     }

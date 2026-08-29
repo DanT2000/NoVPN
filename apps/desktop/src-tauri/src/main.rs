@@ -95,6 +95,69 @@ fn process_alive(_pid: u32) -> bool {
     false
 }
 
+/// Windows 11 по умолчанию прячет значки новых приложений в «переполнение»
+/// (стрелка ^), а не держит у часов. Telegram и Amnezia висят на виду, потому
+/// что помечают свой значок как «продвинутый» в реестре — делаем так же.
+///
+/// Запись значка заводит оболочка, и только после первого показа Shell_NotifyIcon,
+/// поэтому на самом первом запуске ждём её появления с несколькими повторами; на
+/// последующих запусках запись уже есть и промоутится сразу.
+#[cfg(windows)]
+fn promote_tray_icon() {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+    use winreg::RegKey;
+
+    const ROOT: &str = r"Control Panel\NotifyIconSettings";
+
+    // По этому пути оболочка привязывает значок к приложению.
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let exe_str = exe.to_string_lossy().to_lowercase();
+
+    std::thread::spawn(move || {
+        // До ~8 секунд ждём, пока оболочка заведёт запись нашего значка.
+        for attempt in 0..16 {
+            std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 {
+                800
+            } else {
+                500
+            }));
+            let Ok(root) =
+                RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(ROOT, KEY_READ)
+            else {
+                continue;
+            };
+            let mut promoted = false;
+            // Каждый значок — подраздел с числовым именем; ExecutablePath в нём
+            // указывает на приложение. Находим наши записи и ставим IsPromoted = 1.
+            for name in root.enum_keys().flatten() {
+                let Ok(sub) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(
+                    format!(r"{ROOT}\{name}"),
+                    KEY_READ | KEY_WRITE,
+                ) else {
+                    continue;
+                };
+                let path: Result<String, _> = sub.get_value("ExecutablePath");
+                if path.map(|p| p.to_lowercase() == exe_str).unwrap_or(false) {
+                    let current: u32 = sub.get_value("IsPromoted").unwrap_or(0);
+                    if current != 1 {
+                        let _ = sub.set_value("IsPromoted", &1u32);
+                    }
+                    promoted = true;
+                }
+            }
+            // Нашли и пометили — дальше ждать нечего.
+            if promoted {
+                break;
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn promote_tray_icon() {}
+
 fn main() {
     // Chrome запускает нас же как хост нативных сообщений — тогда окна нет,
     // а есть разговор по stdin/stdout.
@@ -213,6 +276,9 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // Держим значок у часов, а не в скрытом переполнении.
+            promote_tray_icon();
 
             Ok(())
         })

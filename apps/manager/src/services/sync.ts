@@ -324,17 +324,27 @@ export async function syncAllServers(): Promise<void> {
           /* сервер недоступен — повторим */
         }
       }
-      // Предупреждение ДО отключения: осталось меньше 10% лимита. Ключ напоминания
-      // хранится в настройках, чтобы не написать дважды об одном и том же остатке —
-      // счётчик обновляется каждую минуту, иначе человек получил бы поток сообщений.
+      // Предупреждение ДО отключения: осталось меньше 10% лимита. Пишем не на
+      // каждые 0.1 ГБ (иначе при лимите 100–200 ГБ человек получил бы сотню
+      // сообщений за один спуск), а на переходах через грубые ПОРОГИ остатка.
+      // Ключ хранит последний порог, о котором предупредили.
+      const LOW_THRESHOLDS = [10, 5, 2, 1]; // проценты остатка, от мягкого к срочному
       for (const u of repo.listUsersLowOnTraffic(0.1)) {
         const key = `low-traffic:${u.id}:${u.limitGb}`;
-        const alreadyAt = getSetting<number>(key, 0);
-        // Повторяем, только если человек перешагнул ещё один процент остатка.
         const leftGb = Math.max(0, u.limitGb - u.usedGb);
-        const bucket = Math.floor(leftGb * 10); // шаг 0.1 ГБ
-        if (alreadyAt === bucket + 1) continue;
-        setSetting(key, bucket + 1);
+        const leftPct = u.limitGb > 0 ? (leftGb / u.limitGb) * 100 : 0;
+        // Самый низкий (самый срочный) уже пройденный порог.
+        const crossed = LOW_THRESHOLDS.filter((t) => leftPct <= t);
+        const level = crossed.length ? crossed[crossed.length - 1]! : null;
+        if (level === null) continue; // ещё выше 10% — в норме сюда не попадём
+        const stored = getSetting<number>(key, 0);
+        const fresh = stored === 0; // ещё ни разу не предупреждали в этом цикле
+        const moreUrgent = level < stored; // опустились к более срочному порогу
+        // Остаток снова поднялся выше 5% — счётчик обнулился по тарифу, начинаем
+        // цикл предупреждений заново (иначе после сброса человек их не получал бы).
+        const cycledBack = !fresh && level >= 10 && stored < 10;
+        if (!fresh && !moreUrgent && !cycledBack) continue;
+        setSetting(key, level);
         await notifyUser(
           u.id,
           `Трафик заканчивается: осталось ${leftGb.toFixed(1)} ГБ из ${u.limitGb} ГБ.

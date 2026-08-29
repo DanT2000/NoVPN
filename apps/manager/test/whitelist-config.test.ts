@@ -184,6 +184,28 @@ test('match-vpn (умная маршрутизация): список → В т�
   assert.ok(cfg.routing.rules.some((r: any) => r.network === 'udp' && r.port === 443), 'QUIC-блок остаётся');
 });
 
+test('match-vpn: QUIC-блок стоит ПЕРЕД правилом VPN-списка (туннелируемый UDP/443 глушится → TCP), но ниже прямых исключений', () => {
+  const cfg = JSON.parse(
+    buildWhitelistXrayConfig([LINK], 'NoVPN', [], '', ['blocked.example'], false, false, {
+      direction: 'match-vpn',
+      directRoutes: { domains: ['maps.example'] },
+    }),
+  );
+  const rules = cfg.routing.rules;
+  const quicIdx = rules.findIndex((r: any) => r.outboundTag === 'block' && r.network === 'udp' && r.port === 443);
+  const listIdx = rules.findIndex((r: any) => r.domain && (r.outboundTag === 'proxy-t0-0' || r.balancerTag));
+  assert.ok(quicIdx >= 0 && listIdx >= 0, 'есть и QUIC-блок, и правило списка');
+  assert.ok(
+    quicIdx < listIdx,
+    'QUIC-блок обязан идти ДО правила VPN-списка — иначе UDP/443 к домену из списка уходит туннелем (тот самый «YouTube зависает»)',
+  );
+  // Прямые исключения (и приватные адреса) остаются ВЫШЕ блока — их QUIC мы не трогаем.
+  const exIdx = rules.findIndex((r: any) => r.outboundTag === 'direct' && r.domain);
+  const privIdx = rules.findIndex((r: any) => r.outboundTag === 'direct' && r.ip);
+  assert.ok(exIdx >= 0 && exIdx < quicIdx, 'direct-исключения выше QUIC-блока (их UDP/443 остаётся)');
+  assert.ok(privIdx >= 0 && privIdx < quicIdx, 'приватные адреса выше QUIC-блока');
+});
+
 test('match-vpn с пустым списком НЕ подставляет RU-дефолт (это было бы наоборот)', () => {
   const cfg = JSON.parse(buildWhitelistXrayConfig([LINK], 'NoVPN', [], '', [], false, false, { direction: 'match-vpn' }));
   assert.ok(!cfg.routing.rules.some((r: any) => r.domain), 'доменных правил нет');

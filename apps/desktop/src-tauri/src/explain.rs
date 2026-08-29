@@ -9,7 +9,7 @@
 //! Порядок обязан совпадать с генератором конфига. Если он разойдётся, объяснение
 //! начнёт врать — а это хуже, чем его отсутствие: человек будет искать поломку не там.
 
-use crate::core::Rules;
+use crate::core::{Rules, LOCAL_DOMAINS};
 use serde::Serialize;
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -44,25 +44,28 @@ pub fn explain(host_raw: &str, r: &Rules) -> Verdict {
         return v("vpn", "Умная маршрутизация выключена: весь трафик идёт через VPN", "");
     }
 
-    // 2. Локальные имена — раньше всего, если человек оставил их напрямую.
-    if r.bypass_local {
-        for suffix in ["local", "lan", "home", "internal", "intranet"] {
-            if host_matches_suffix(&host, suffix) {
-                return v("direct", "Локальное имя сети идёт напрямую", suffix);
-            }
-        }
-        for d in &r.custom_local {
-            if host_matches_suffix(&host, &d.to_lowercase()) {
-                return v("direct", "Ваш локальный домен идёт напрямую", d);
-            }
-        }
-    }
-
-    // 3. Правила человека — важнее любых списков.
+    // 2. Решение человека — раньше всего. В движке правила пользователя стоят
+    //    ВЫШЕ широких локальных суффиксов (иначе «через VPN» для myhost.corp
+    //    перебивался бы обходом), поэтому и здесь порядок обязан быть таким же.
     for d in &r.user_domains {
         if host_matches_suffix(&host, &d.domain.to_lowercase()) {
             let route = if d.vpn { "vpn" } else { "direct" };
             return v(route, "Ваше правило для этого сайта", &d.domain);
+        }
+    }
+
+    // 3. Обход локальной сети (широкие DIRECT-суффиксы) — после явного выбора.
+    //    Список берём из единого источника движка, а не дублируем руками.
+    if r.bypass_local {
+        for suffix in LOCAL_DOMAINS {
+            if host_matches_suffix(&host, suffix) {
+                return v("direct", "Локальное имя сети идёт напрямую", suffix);
+            }
+        }
+    }
+    for d in &r.custom_local {
+        if host_matches_suffix(&host, &d.to_lowercase()) {
+            return v("direct", "Ваш локальный домен идёт напрямую", d);
         }
     }
 
@@ -122,6 +125,19 @@ mod tests {
         r.user_domains = vec![DomainRule { domain: "openai.com".into(), vpn: false }];
         let v = explain("chat.openai.com", &r);
         assert_eq!(v.route, "direct");
+        assert!(v.reason.contains("Ваше правило"), "{}", v.reason);
+    }
+
+    #[test]
+    fn user_rule_beats_local_bypass() {
+        // Порядок как в движке: правило человека стоит ВЫШE широкого локального
+        // суффикса. «printer.home → через VPN» при включённом обходе локалки
+        // должно давать VPN, а не DIRECT по суффиксу home.
+        let mut r = base();
+        r.bypass_local = true;
+        r.user_domains = vec![DomainRule { domain: "printer.home".into(), vpn: true }];
+        let v = explain("printer.home", &r);
+        assert_eq!(v.route, "vpn");
         assert!(v.reason.contains("Ваше правило"), "{}", v.reason);
     }
 

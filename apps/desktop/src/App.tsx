@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { StoreProvider, useStore } from './state/store';
 import { applyTheme } from './lib/theme';
 import { Titlebar } from './components/Titlebar';
@@ -37,12 +37,26 @@ function Shell() {
     void syncCloseToTray(s.settings.tray);
   }, [s.settings.tray]);
 
-  // Переключение из меню трея.
+  // Переключение из меню трея. Подписываемся ОДИН раз, а актуальные
+  // live/connect/disconnect читаем через ref: иначе слушатель пересоздавался бы
+  // на каждый рендер, а асинхронный listen мог утечь мимо cleanup (заглушка
+  // снималась раньше, чем резолвился настоящий unlisten) — и клики из трея
+  // срабатывали бы разом на нескольких накопленных обработчиках.
+  const trayToggle = useRef<() => void>(() => {});
+  trayToggle.current = () => (live ? disconnect() : connect());
   useEffect(() => {
+    let active = true;
     let stop = () => {};
-    void onTrayToggle(() => (live ? disconnect() : connect())).then((f) => (stop = f));
-    return () => stop();
-  }, [live, connect, disconnect]);
+    void onTrayToggle(() => trayToggle.current()).then((f) => {
+      // Успели отписаться до резолва listen — снимаем слушатель сразу.
+      if (active) stop = f;
+      else f();
+    });
+    return () => {
+      active = false;
+      stop();
+    };
+  }, []);
 
   // До конца онбординга нижней панели нет: уходить с этого пути некуда,
   // пока подписка не подключена.
