@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "044372437bb008fa90d804951c8bae10192798f480d9e0f313eac8a732fd3e29",
-  "signature": "S+O2E6FdYAkOvwPJgcaKeULX8WblznfdawepmhVOabUM9Fz7J7J9xVUMrwgag+ijX1QltjgYGXCKW1w719rBDw==",
-  "sizeBytes": 16533825,
-  "notes": "Первичный мини-гид по главному экрану после ввода конфига. Плюс улучшения предыдущей версии: значок VPN у часов, авто-подключение и авто-обновление, точнее ловится другой активный VPN, стабильнее YouTube на умной маршрутизации."
+  "sha256": "066fb2ce7cd2514249c12deef6c09634a052c492d679edb52dc571a3eec24078",
+  "signature": "ybmxEmwLGXq2z7nAm5FcP1BfdWZNGUoYdslZaRMp0b56TLGb0q7Cqbwe+brrqD6WIKIGxesLA5ubCNS4qwi7BA==",
+  "sizeBytes": 16533431,
+  "notes": "В полном VPN локальная сеть остаётся напрямую, если включена настройка «Локальная сеть — напрямую» (доступ к NAS/принтеру по имени работает и в полном режиме)."
 }
