@@ -98,6 +98,12 @@ export function renderDownloadPage(opts: {
     </div>
   </div>
 
+  <p class="note" style="margin-top:14px">
+    <b>Уже пользуетесь NoVPN?</b> Обновляйтесь прямо в приложении: «Настройки» →
+    «Обновления» → «Обновить». Тогда старая версия закроется сама, без ошибок. Скачивать
+    установщик заново нужно только для первой установки.
+  </p>
+
   <details class="tshoot">
     <summary>Windows не даёт установить или удаляет файл</summary>
     <p>

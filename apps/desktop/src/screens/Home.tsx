@@ -16,6 +16,15 @@ const BTN: Record<string, string> = {
   none: 'Подключение…',
 };
 
+/** «полчаса» / «час» / «2 часа» — понятная человеку длительность таймера возврата. */
+function fmtTimeout(hours: number): string {
+  if (hours < 1) {
+    const m = Math.round(hours * 60);
+    return m === 30 ? 'полчаса' : count(m, 'минуту', 'минуты', 'минут');
+  }
+  return Number.isInteger(hours) ? count(hours, 'час', 'часа', 'часов') : `${hours} ч`;
+}
+
 export function Home() {
   const { s, go, goRouting, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, fullAvailable, selectedNode } = useStore();
   const [admin, setAdmin] = useState(true);
@@ -115,7 +124,9 @@ export function Home() {
             <div className="t-note" style={{ marginTop: 3 }}>
               {!fullAvailable || s.smartRouting
                 ? 'Через VPN идёт только нужное'
-                : 'Выключена: весь трафик идёт через туннель'}
+                : fullTimeoutHours > 0
+                  ? `Полный VPN. Вернётся на умную маршрутизацию через ${fmtTimeout(fullTimeoutHours)}`
+                  : 'Полный VPN: весь трафик идёт через туннель'}
             </div>
           </div>
           {fullAvailable ? (
@@ -126,7 +137,7 @@ export function Home() {
           <div className="t-note" style={{ marginTop: 10, color: 'var(--amber-fg)' }}>
             Российские сайты тоже пойдут через VPN, а трафик расходуется быстрее.
             {fullTimeoutHours > 0
-              ? ` Через ${fullTimeoutHours < 1 ? `${Math.round(fullTimeoutHours * 60)} мин` : count(fullTimeoutHours, 'час', 'часа', 'часов')} умная маршрутизация включится сама.`
+              ? ` Ничего делать не нужно — через ${fmtTimeout(fullTimeoutHours)} умная маршрутизация включится автоматически.`
               : ''}
           </div>
         ) : null}

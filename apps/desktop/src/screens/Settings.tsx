@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
 import { Toggle } from '../components/ui';
 import { lookOf } from '../mock/browsers';
+import { BROWSER_ICON } from '../mock/browserIcons';
 import {
   autostartGet,
   autostartSync,
@@ -263,9 +264,13 @@ export function Settings() {
       ) : (
         browsers.map((b) => (
           <div key={b.id} className="item">
-            <span className="avatar" style={{ background: `${lookOf(b.id).color}28`, color: lookOf(b.id).color }}>
-              {b.name.charAt(0)}
-            </span>
+            {BROWSER_ICON[b.id] ? (
+              <img src={BROWSER_ICON[b.id]} alt="" width={26} height={26} style={{ borderRadius: 6 }} />
+            ) : (
+              <span className="avatar" style={{ background: `${lookOf(b.id).color}28`, color: lookOf(b.id).color }}>
+                {b.name.charAt(0)}
+              </span>
+            )}
             <span className="item-main">
               <span className="item-name">{b.name}</span>
               <span className="item-meta">Найден</span>
