@@ -9,6 +9,31 @@
   ReadRegStr $R8 HKCU "Software\NoVPN\NoVPN" ""
   WriteRegStr HKCU "Software\NoVPN" "PrevDir" $R8
 
+  ; -- Папка, в которую нельзя писать --------------------------------------
+  ; Установщик берёт путь из реестра прошлой установки (RestorePreviousInstallLocation
+  ; в шаблоне) и перекрывает им пользовательскую папку по умолчанию. У тех, кто когда-то
+  ; ставил старую версию в «C:\Program Files\NoVPN», в реестре остаётся именно этот путь,
+  ; а ставимся мы теперь ДЛЯ ПОЛЬЗОВАТЕЛЯ, без прав администратора: распаковка падает с
+  ; «невозможно открыть файл для записи», и человек упирается в стену. Проверяем папку
+  ; на запись и, если писать некуда, уводим установку в пользовательскую.
+  ClearErrors
+  CreateDirectory "$INSTDIR"
+  FileOpen $R7 "$INSTDIR\.novpn-write-test" w
+  IfErrors novpn_dir_bad
+    FileClose $R7
+    Delete "$INSTDIR\.novpn-write-test"
+    Goto novpn_dir_ok
+  novpn_dir_bad:
+    DetailPrint "В «$INSTDIR» нет прав на запись — ставим в «$LOCALAPPDATA\${PRODUCTNAME}»"
+    StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
+    CreateDirectory "$INSTDIR"
+    ; ОБЯЗАТЕЛЬНО: SetOutPath в шаблоне стоит СТРОКОЙ ВЫШЕ этого хука, и она уже
+    ; запомнила прежнюю папку. Без повторного вызова файлы распакуются туда же,
+    ; куда мы писать не можем (проверено: в новую папку попадал только
+    ; деинсталлятор, а приложения не было вовсе).
+    SetOutPath "$INSTDIR"
+  novpn_dir_ok:
+
   ; Перед установкой поверх — гасим работающие процессы, иначе NSIS не сможет
   ; перезаписать exe и dll, которые они держат открытыми (taskkill по имени
   ; гасит и старую копию из другой папки).
@@ -33,20 +58,16 @@
   novpn_moved_done:
   DeleteRegValue HKCU "Software\NoVPN" "PrevDir"
 
-  ; ── Автозапуск ─────────────────────────────────────────────────────────
-  ; Если ключ Run уже есть — ЧИНИМ путь на новую папку (мог смениться). Если
-  ; ключа нет — создаём только при первой установке (нет настроек и нет задачи):
-  ; при обновлении/переустановке не навязываем автозапуск против воли человека.
+  ; -- Автозапуск ---------------------------------------------------------
+  ; Если ключ Run уже есть — ЧИНИМ путь на новую папку (мог смениться при переносе).
+  ; САМИ автозапуск НЕ заводим. Раньше заводили при первой установке, и это выходило
+  ; боком дважды: человек не просил запуск вместе с Windows, а для антивируса связка
+  ; «неподписанный exe в AppData + ключ Run, созданный установщиком» — признак
+  ; закрепления в системе (Defender: Behavior:Win32/Persistence.A!ml, файл блокируется
+  ; и установка перестаёт проходить). Автозапуск включается в настройках приложения.
   ReadRegStr $R9 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NoVPN"
-  StrCmp $R9 "" novpn_run_maybe 0
+  StrCmp $R9 "" novpn_run_done 0
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NoVPN" '"$INSTDIR\${MAINBINARYNAME}.exe"'
-    Goto novpn_run_done
-  novpn_run_maybe:
-    IfFileExists "$APPDATA\NoVPN\state.json" novpn_run_done 0
-      nsExec::ExecToStack 'schtasks /Query /TN "NoVPN Autostart"'
-      Pop $R9
-      StrCmp $R9 "0" novpn_run_done 0
-        WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "NoVPN" '"$INSTDIR\${MAINBINARYNAME}.exe"'
   novpn_run_done:
 !macroend
 

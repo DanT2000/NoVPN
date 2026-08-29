@@ -1,6 +1,6 @@
 [package]
 name = "novpn-desktop"
-version = "0.2.6"
+version = "0.2.7"
 description = "NoVPN Desktop"
 edition = "2021"
 

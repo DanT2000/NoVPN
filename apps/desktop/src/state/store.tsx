@@ -474,9 +474,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     void tick();
     const id = window.setInterval(tick, 1500);
+    // Правило добавляют в БРАУЗЕРЕ, то есть окно приложения в этот момент скрыто, а
+    // фоновому webview движок душит таймеры (Chromium — до раза в минуту). Поэтому
+    // одного интервала мало: список «не обновлялся», пока не вернёшься к окну и не
+    // потыкаешь вкладки. Перечитываем сразу, как только окно снова видно.
+    const wake = () => {
+      if (document.visibilityState === 'visible') void tick();
+    };
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', wake);
     return () => {
       stop = true;
       window.clearInterval(id);
+      window.removeEventListener('focus', wake);
+      document.removeEventListener('visibilitychange', wake);
     };
   }, []);
 
