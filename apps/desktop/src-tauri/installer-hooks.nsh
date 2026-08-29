@@ -40,6 +40,26 @@
   nsExec::Exec 'taskkill /F /IM ${MAINBINARYNAME}.exe /T'
   nsExec::Exec 'taskkill /F /IM mihomo.exe'
   Sleep 800
+
+  ; taskkill возвращает управление РАНЬШЕ, чем система закрывает дескрипторы файлов
+  ; (движок держит и wintun.dll, и свой exe). Из-за этого распаковка падала с
+  ; «невозможно открыть файл для записи: Прервать / Повтор / Пропустить». Ждём, пока
+  ; главный файл реально станет доступен на запись — до 10 секунд, дальше идём как есть.
+  StrCpy $R6 0
+  novpn_wait_free:
+    IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 novpn_free
+    ClearErrors
+    FileOpen $R5 "$INSTDIR\${MAINBINARYNAME}.exe" a
+    IfErrors novpn_locked 0
+      FileClose $R5
+      Goto novpn_free
+  novpn_locked:
+    IntOp $R6 $R6 + 1
+    IntCmp $R6 20 novpn_free novpn_sleep novpn_free
+  novpn_sleep:
+    Sleep 500
+    Goto novpn_wait_free
+  novpn_free:
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
