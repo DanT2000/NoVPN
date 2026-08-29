@@ -27,7 +27,8 @@
         "mode": "full",
         "lanAccess": false,
         "fallbackTypes": null,
-        "ownExceptions": 0
+        "ownExceptions": 0,
+        "fullTimeoutHours": 0
       }
     }
   ]

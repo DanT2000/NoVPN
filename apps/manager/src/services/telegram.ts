@@ -284,6 +284,21 @@ export async function notifyAdmin(text: string, opts: { key?: string; minGapMs?:
   }
 }
 
+/** Личное уведомление пользователю. Молча ничего не делает, если бот выключен или
+ *  человек не привязал Telegram: уведомление — приятное дополнение, а не операция,
+ *  ради которой стоит ронять фоновую задачу. */
+export async function notifyUser(userId: string, text: string): Promise<boolean> {
+  try {
+    if (!getToken() || !repo.getTelegram()?.enabled) return false;
+    const chatId = repo.getTelegramChatId(userId);
+    if (!chatId) return false;
+    await tgApi('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true }, undefined, AbortSignal.timeout(15000));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function broadcastToLinked(text: string): Promise<{ total: number; sent: number; failed: number; aborted: boolean }> {
   const body = text.trim();
   if (!body) throw new Error('Пустое сообщение.');

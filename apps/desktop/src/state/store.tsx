@@ -107,6 +107,7 @@ function toMetaState(r: MetaResult): MetaState {
       recommended: !!p.recommended,
       mode: p.routing?.mode === 'full' ? 'full' : 'smart',
       lanAccess: !!p.routing?.lanAccess,
+      fullTimeoutHours: Math.max(0, Number(p.routing?.fullTimeoutHours ?? 0) || 0),
     })),
     denied: r.denied ? { kind: r.denied.kind, message: r.denied.message } : null,
     unsupported: !!r.unsupported,
@@ -203,6 +204,8 @@ interface Ctx {
   setSiteRoute: (id: string, r: Route) => void;
   addSite: (domain: string, route: Route) => void;
   removeSite: (id: string) => void;
+  /** Выключить/включить правило, не удаляя его. */
+  toggleSite: (id: string) => void;
 
   toggleList: (id: string) => void;
   syncNow: () => void;
@@ -241,7 +244,8 @@ function titleFromDomain(d: string): string {
 function rulesOf(s: State, srv: ServerLists | null) {
   const on = s.apps.filter((a) => a.enabled);
   const listsOn = (id: string) => s.lists.find((l) => l.id === id)?.enabled !== false;
-  const from = (src: SiteRule['source']) => s.sites.filter((v) => v.source === src);
+  // Выключенное правило остаётся в списке, но в конфиг не идёт.
+  const from = (src: SiteRule['source']) => s.sites.filter((v) => v.source === src && v.enabled !== false);
 
   // Браузер важнее окна: человек нажимал кнопку последним и прямо на сайте.
   const seen = new Set<string>();
@@ -490,6 +494,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', wake);
     };
   }, []);
+
+  /* ── Возврат с полного VPN на умный ────────────────────
+     Человек включает полный режим «на разок» и забывает — дальше весь его трафик
+     идёт через сервер. Сервер сам этого не исправит: он отдаёт два конфига и не
+     знает, каким пользуются. Поэтому срок задаёт панель (meta.routing.
+     fullTimeoutHours), а исполняем мы. 0 — не возвращать.
+
+     Момент включения держим в ref, а не в состоянии: это факт текущего сеанса,
+     переживать перезапуск ему незачем — после запуска отсчёт начинается заново. */
+  const fullSince = useRef<number | null>(null);
+  useEffect(() => {
+    if (effectiveSmart(s)) {
+      fullSince.current = null;
+      return;
+    }
+    if (fullSince.current === null) fullSince.current = Date.now();
+    const hours = nodeFor(s)?.profileId
+      ? (s.meta?.profiles.find((p) => p.profileId === nodeFor(s)!.profileId)?.fullTimeoutHours ?? 0)
+      : 0;
+    if (!hours) return;
+    const left = fullSince.current + hours * 3600_000 - Date.now();
+    const id = window.setTimeout(() => {
+      fullSince.current = null;
+      setS((x) => ({ ...x, smartRouting: true }));
+    }, Math.max(1000, left));
+    return () => window.clearTimeout(id);
+  }, [s.smartRouting, s.serverId, s.meta]);
 
   /* ── Здоровье движка и автопереподключение ─────────────
      Движок может упасть, а сервер — стать недоступным. Пока «Подключено», тихо
@@ -797,6 +828,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         );
       },
       removeSite: (id) => setS((x) => ({ ...x, sites: x.sites.filter((v) => v.id !== id) })),
+      toggleSite: (id) =>
+        setS((x) => ({
+          ...x,
+          sites: x.sites.map((v) => (v.id === id ? { ...v, enabled: v.enabled === false } : v)),
+        })),
 
       toggleList: (id) =>
         setS((x) => ({

@@ -374,6 +374,10 @@ for (const stmt of [
   'ALTER TABLE server_keys ADD COLUMN smart_direction TEXT',
   // Источник списка умного профиля: 'autoroute' (сборка) или 'local' (свой список). NULL = autoroute.
   'ALTER TABLE server_keys ADD COLUMN smart_source TEXT',
+  // Через сколько ЧАСОВ полный VPN сам возвращается на умный (0/NULL — не возвращать).
+  // Дробные допустимы: 0.5 — полчаса. Исполняет приложение NoVPN, сервер лишь отдаёт
+  // значение: он не знает, каким из двух конфигов человек пользуется.
+  'ALTER TABLE server_keys ADD COLUMN full_timeout_hours REAL',
   // Подмена DNS (FakeDNS) в умном профиле. Нужна там, где домена в трафике не видно —
   // TLS с зашифрованным SNI (ECH), не-HTTP протоколы: без неё такие соединения
   // маршрутизируются только по IP. NULL/0 = выключено (поведение по умолчанию).

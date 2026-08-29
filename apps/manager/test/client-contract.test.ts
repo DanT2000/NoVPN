@@ -161,6 +161,33 @@ test('meta.json: профили — умный первым (recommended), по�
   saveFixture('full-only', { ...body, profiles: [body.profiles.find((p: any) => p.profileId === `${fullId}:full`)] });
 });
 
+// Три варианта профилей и тайм-аут возврата: человек включает полный режим «на разок»
+// и забывает, а сервер сам этого не исправит — он отдаёт два конфига и не знает, каким
+// пользуются. Поэтому срок задаёт панель, а исполняет приложение.
+test('сервер отдаёт три варианта профилей и срок возврата с полного на умный', async () => {
+  // Только умный: полного профиля человек не получает вовсе.
+  repo.setEndpointConfig(bothHost, { profiles: 'smart' });
+  let { body } = await getJson(`/sub/${subToken}/meta.json`);
+  let ids = body.profiles.filter((p: any) => p.serverId === bothId).map((p: any) => p.profileId);
+  assert.deepEqual(ids, [bothId], 'только умный профиль');
+  let sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
+  assert.ok(!sub.some((c) => c.meta.novpn.profileId === `${bothId}:full`), 'полного конфига нет в подписке');
+
+  // Оба + срок возврата.
+  repo.setEndpointConfig(bothHost, { profiles: 'both', fullTimeoutHours: 2.5 });
+  ({ body } = await getJson(`/sub/${subToken}/meta.json`));
+  const smart = body.profiles.find((p: any) => p.profileId === bothId);
+  const full = body.profiles.find((p: any) => p.profileId === `${bothId}:full`);
+  assert.ok(smart && full, 'снова два профиля');
+  assert.equal(smart.routing.fullTimeoutHours, 2.5);
+  assert.equal(full.routing.fullTimeoutHours, 2.5, 'срок виден у обоих профилей сервера');
+
+  // 0 — не возвращать (значение по умолчанию).
+  repo.setEndpointConfig(bothHost, { fullTimeoutHours: null });
+  ({ body } = await getJson(`/sub/${subToken}/meta.json`));
+  assert.equal(body.profiles.find((p: any) => p.profileId === bothId).routing.fullTimeoutHours, 0);
+});
+
 test('meta.json: у каждого профиля обязательные поля и допустимый mode', async () => {
   const { body } = await getJson(`/sub/${subToken}/meta.json`);
   for (const p of body.profiles) {

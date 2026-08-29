@@ -143,6 +143,8 @@ function StepSetup({ quick = false }: { quick?: boolean }) {
       SUGGESTED.map((a) => [a.id, quick ? (s.apps.find((x) => x.id === a.id)?.enabled ?? true) : true]),
     ),
   );
+  // Предлагаем к включению только найденные на машине приложения, которым нужен VPN.
+  const found = s.apps.filter((a) => a.found && a.route === 'vpn').slice(0, 8);
   const [useList, setUseList] = useState(
     quick ? (s.lists.find((l) => l.id === 'sites')?.enabled ?? true) : true,
   );
@@ -179,16 +181,26 @@ function StepSetup({ quick = false }: { quick?: boolean }) {
         note="Роутер, NAS и внутренние сайты в обход VPN. Домашние подсети и так идут напрямую всегда."
       />
 
-      <div className="section-label">Рекомендуемые приложения</div>
-      {SUGGESTED.map((a) => (
-        <Check
-          key={a.id}
-          on={apps[a.id] ?? false}
-          onChange={(v) => setApps((x) => ({ ...x, [a.id]: v }))}
-          title={a.name}
-          note={a.found ? 'Найдено на компьютере' : 'Не найдено — укажете позже'}
-        />
-      ))}
+      <div className="section-label">Приложения на этом компьютере</div>
+      {/* Показываем ТОЛЬКО то, что действительно установлено. Раньше список был
+          статичным и всё в нём значилось найденным — человек видел «Android Studio:
+          не найден, но включён» и справедливо спрашивал, зачем оно здесь. */}
+      {found.length === 0 ? (
+        <div className="hint">
+          Знакомых приложений не нашли — ничего страшного. Маршруты для программ можно
+          добавить позже в разделе «Маршрутизация».
+        </div>
+      ) : (
+        found.map((a) => (
+          <Check
+            key={a.id}
+            on={apps[a.id] ?? false}
+            onChange={(v) => setApps((x) => ({ ...x, [a.id]: v }))}
+            title={a.name}
+            note="Найдено на компьютере"
+          />
+        ))
+      )}
 
       <div className="section-label">Сайты и сервисы</div>
       <Check

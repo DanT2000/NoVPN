@@ -4,9 +4,10 @@
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
 import * as repo from '../repo.js';
+import { getSetting, setSetting } from '../db.js';
 import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshAddProxyUser, sshResyncDevices, sshSetXraySni, REALITY_SNI } from './sshServer.js';
 import { getServerKeys } from './keyvault.js';
-import { notifyAdmin } from './telegram.js';
+import { notifyAdmin, notifyUser } from './telegram.js';
 
 const PROXY_PROTOS = ['http', 'https', 'socks5'];
 
@@ -285,6 +286,7 @@ export async function syncAllServers(): Promise<void> {
     // Запись и ключи храним (quota_blocked=1); при восстановлении лимита пир возвращаем
     // тем же ключом — клиентский .conf работает без изменений, reissue не нужен.
     try {
+      const quotaBlockedUsers = new Set<string>();
       for (const d of repo.listDevicesToBlockForQuota()) {
         const server = repo.getServer(d.serverId);
         if (!server || !(await sshHasSshAccess(server.id))) continue; // недоступен — повторим в след. цикле
@@ -293,6 +295,10 @@ export async function syncAllServers(): Promise<void> {
           if (d.protocol === 'amneziawg' && row?.public_key) await sshRevokeAwg(server, row.public_key);
           else if (d.protocol === 'xray' && row?.uuid) await sshRevokeXray(server, row.uuid);
           repo.setQuotaBlocked(d.id, true);
+          // Человеку надо сказать, почему у него перестало работать. Для AmneziaWG это
+          // особенно важно: пир просто исчезает с сервера, клиент никакой ошибки не
+          // показывает — со стороны это выглядит как «VPN сломался сам по себе».
+          if (d.userId) quotaBlockedUsers.add(d.userId);
         } catch {
           /* сервер недоступен — оставим quota_blocked=0, повторим */
         }
@@ -317,6 +323,40 @@ export async function syncAllServers(): Promise<void> {
         } catch {
           /* сервер недоступен — повторим */
         }
+      }
+      // Предупреждение ДО отключения: осталось меньше 10% лимита. Ключ напоминания
+      // хранится в настройках, чтобы не написать дважды об одном и том же остатке —
+      // счётчик обновляется каждую минуту, иначе человек получил бы поток сообщений.
+      for (const u of repo.listUsersLowOnTraffic(0.1)) {
+        const key = `low-traffic:${u.id}:${u.limitGb}`;
+        const alreadyAt = getSetting<number>(key, 0);
+        // Повторяем, только если человек перешагнул ещё один процент остатка.
+        const leftGb = Math.max(0, u.limitGb - u.usedGb);
+        const bucket = Math.floor(leftGb * 10); // шаг 0.1 ГБ
+        if (alreadyAt === bucket + 1) continue;
+        setSetting(key, bucket + 1);
+        await notifyUser(
+          u.id,
+          `Трафик заканчивается: осталось ${leftGb.toFixed(1)} ГБ из ${u.limitGb} ГБ.
+
+` +
+            'Когда лимит исчерпается, доступ приостановится до обнуления счётчика по вашему тарифу.',
+        );
+      }
+
+      // Отправляем по одному сообщению на человека, а не на каждое устройство.
+      for (const userId of quotaBlockedUsers) {
+        const u = repo.getUser(userId);
+        if (!u) continue;
+        const limit = u.trafficLimitGb ?? 0;
+        await notifyUser(
+          userId,
+          `Лимит трафика исчерпан: ${(u.trafficUsedGb ?? 0).toFixed(1)} из ${limit} ГБ.
+
+` +
+            'Доступ приостановлен и восстановится сам, когда счётчик обнулится по вашему тарифу. ' +
+            'Конфигурации перевыпускать не нужно — они продолжат работать.',
+        );
       }
     } catch (e) {
       repo.addJobError('панель', `Enforcement квоты AWG/Xray: ${e instanceof Error ? e.message : 'ошибка'}`);

@@ -306,16 +306,34 @@ export function listProxyAccountsToRestore(): Array<{ id: string; login: string;
 /** Устройства (AWG/Xray) пользователей, ИСЧЕРПАВШИХ квоту — их пир/uuid надо снять с
  *  сервера (иначе уже импортированный конфиг тоннелит сверх лимита). Ключи/запись в
  *  БД сохраняются (quota_blocked=1) — при восстановлении лимита пир вернётся без reissue. */
-export function listDevicesToBlockForQuota(): Array<{ id: string; serverId: string; protocol: string }> {
+/** Кому пора сказать, что трафик заканчивается: осталось меньше `share` от лимита,
+ *  но лимит ещё не исчерпан. Предупредить надо ДО отключения — «внезапно перестало
+ *  работать» человек воспринимает как поломку, а не как исчерпанный тариф. */
+export function listUsersLowOnTraffic(share = 0.1): Array<{ id: string; usedGb: number; limitGb: number }> {
   return db
     .prepare(
-      `SELECT d.id AS id, d.server_id AS serverId, d.protocol AS protocol
+      `SELECT id, traffic_used_gb AS usedGb, traffic_limit_gb AS limitGb
+         FROM users
+        WHERE deleted_at IS NULL AND is_active = 1
+          AND traffic_limit_gb IS NOT NULL AND traffic_limit_gb > 0
+          AND traffic_used_gb < traffic_limit_gb
+          AND traffic_used_gb >= traffic_limit_gb * (1 - ?)`,
+    )
+    .all(share) as Array<{ id: string; usedGb: number; limitGb: number }>;
+}
+
+export function listDevicesToBlockForQuota(): Array<{ id: string; serverId: string; protocol: string; userId: string }> {
+  // userId нужен, чтобы сказать человеку, ПОЧЕМУ у него перестало работать: для
+  // AmneziaWG пир просто исчезает с сервера, и клиент никакой ошибки не показывает.
+  return db
+    .prepare(
+      `SELECT d.id AS id, d.server_id AS serverId, d.protocol AS protocol, d.user_id AS userId
          FROM devices d JOIN users u ON u.id = d.user_id
         WHERE d.is_active = 1 AND d.quota_blocked = 0 AND u.deleted_at IS NULL
           AND d.protocol IN ('xray','amneziawg')
           AND u.traffic_limit_gb IS NOT NULL AND u.traffic_used_gb >= u.traffic_limit_gb`,
     )
-    .all() as Array<{ id: string; serverId: string; protocol: string }>;
+    .all() as Array<{ id: string; serverId: string; protocol: string; userId: string }>;
 }
 /** Устройства, снятые по квоте (quota_blocked=1), чей пользователь СНОВА под лимитом —
  *  вернуть пир на сервер (тем же ключом → клиентский .conf работает без изменений). */
@@ -754,8 +772,8 @@ export type FallbackType = 'https' | 'http' | 'socks';
 export interface EndpointConfig {
   /** Совместимость: false ⇔ сервер выдаёт ТОЛЬКО полный туннель (profiles === 'full'). */
   xrayWhitelist: boolean;
-  /** 'both' — умная маршрутизация включена (умный + полный профили у всех), 'full' — только полный. */
-  profiles: 'both' | 'full';
+  /** 'both' — умный + полный, 'full' — только полный, 'smart' — только умный. */
+  profiles: 'both' | 'full' | 'smart';
   /** Направление умного профиля: список → VPN (основной) или список → напрямую (унаследованный). */
   smartDirection: 'match-vpn' | 'match-direct';
   /** Откуда список умного профиля: сборка AutoRoute или только свой список сервера. */
@@ -765,19 +783,24 @@ export interface EndpointConfig {
   /** Подмена DNS в умном профиле: домен восстанавливается даже когда его не видно
    *  в трафике (ECH, не-HTTP протоколы). По умолчанию выключено. */
   fakeDns: boolean;
+  /** Через сколько часов полный VPN сам вернётся на умный. 0 — не возвращать. */
+  fullTimeoutHours: number;
   fallbackTypes: FallbackType[] | null; // null = все доступные
 }
 export function getEndpointConfig(rawHost: string): EndpointConfig {
   const host = domainKey(rawHost);
   const r = db.prepare(
-    'SELECT xray_whitelist, profiles, full_default, smart_direction, smart_source, whitelist_domains, lan_access, fake_dns, fallback_types FROM server_keys WHERE domain = ?',
+    'SELECT xray_whitelist, profiles, full_default, smart_direction, smart_source, whitelist_domains, lan_access, fake_dns, full_timeout_hours, fallback_types FROM server_keys WHERE domain = ?',
   ).get(host) as any;
   const g = getSettings();
   // Профили: явное значение сервера, иначе выводим из старого флага (false → только полный).
   const legacyFullOnly = r?.xray_whitelist == null ? g.xrayWhitelist === false : r.xray_whitelist === 0;
   // 'smart' из ранней версии схемы читаем как 'both': полный профиль выдаётся всем.
+  // 'smart' раньше означал «оба профиля» (ранняя схема). Теперь это отдельный вариант
+  // «только умный», поэтому старое значение читаем как 'both' лишь при отсутствии нового
+  // столбца — а он есть, и значит 'smart' пишем осознанно.
   const profiles: EndpointConfig['profiles'] =
-    r?.profiles === 'full' ? 'full' : r?.profiles === 'both' || r?.profiles === 'smart' ? 'both' : legacyFullOnly ? 'full' : 'both';
+    r?.profiles === 'full' ? 'full' : r?.profiles === 'smart' ? 'smart' : r?.profiles === 'both' ? 'both' : legacyFullOnly ? 'full' : 'both';
   const jsonArr = (s: unknown): string[] | undefined => {
     if (typeof s !== 'string') return undefined;
     try {
@@ -796,6 +819,7 @@ export function getEndpointConfig(rawHost: string): EndpointConfig {
     whitelistDomains: r?.whitelist_domains != null ? (jsonArr(r.whitelist_domains) ?? g.whitelistDomains) : g.whitelistDomains,
     lanAccess: r?.lan_access == null ? g.lanAccess === true : r.lan_access === 1,
     fakeDns: r?.fake_dns === 1,
+    fullTimeoutHours: Math.max(0, Number(r?.full_timeout_hours ?? 0) || 0),
     fallbackTypes: (jsonArr(r?.fallback_types) as FallbackType[] | undefined) ?? null,
   };
 }
@@ -803,12 +827,13 @@ export function setEndpointConfig(
   rawHost: string,
   patch: Partial<{
     xrayWhitelist: boolean | null;
-    profiles: 'both' | 'full' | null;
+    profiles: 'both' | 'full' | 'smart' | null;
     smartDirection: 'match-vpn' | 'match-direct' | null;
     smartSource: 'autoroute' | 'local' | null;
     whitelistDomains: string[] | null;
     lanAccess: boolean | null;
     fakeDns: boolean | null;
+    fullTimeoutHours: number | null;
     fallbackTypes: FallbackType[] | null;
   }>,
 ): void {
@@ -832,6 +857,7 @@ export function setEndpointConfig(
   if ('smartSource' in patch) { set.push('smart_source = @ss'); vals.ss = patch.smartSource ?? null; }
   if ('lanAccess' in patch) { set.push('lan_access = @la'); vals.la = patch.lanAccess == null ? null : patch.lanAccess ? 1 : 0; }
   if ('fakeDns' in patch) { set.push('fake_dns = @fd'); vals.fd = patch.fakeDns == null ? null : patch.fakeDns ? 1 : 0; }
+  if ('fullTimeoutHours' in patch) { set.push('full_timeout_hours = @fth'); vals.fth = patch.fullTimeoutHours == null ? null : Math.max(0, patch.fullTimeoutHours); }
   if ('whitelistDomains' in patch) { set.push('whitelist_domains = @wd'); vals.wd = patch.whitelistDomains == null ? null : JSON.stringify(patch.whitelistDomains); }
   if ('fallbackTypes' in patch) { set.push('fallback_types = @ft'); vals.ft = patch.fallbackTypes == null ? null : JSON.stringify(patch.fallbackTypes); }
   if (set.length) db.prepare(`UPDATE server_keys SET ${set.join(', ')}, updated_at = @now WHERE domain = @host`).run({ ...vals, now: nowIso() });
@@ -862,6 +888,7 @@ function withEndpoint(s: Server): Server {
     lanAccess: cfg.lanAccess,
     fallbackTypes: cfg.fallbackTypes,
     ownExceptions,
+    fullTimeoutHours: cfg.fullTimeoutHours,
   };
   return s;
 }
@@ -1470,6 +1497,15 @@ export function findBotUser(chatId: number, _handle?: string): User | null {
 
 /** Привязанные к Telegram пользователи — цели экстренной рассылки. Только активные,
  *  не удалённые, каждый chat_id один раз (иначе дубль сообщений и двойной расход лимита). */
+/** Chat id конкретного пользователя — для личных уведомлений (остаток трафика,
+ *  отключение по квоте). null, если он не привязал Telegram. */
+export function getTelegramChatId(userId: string): number | null {
+  const r = db
+    .prepare('SELECT telegram_chat_id AS chatId FROM users WHERE id = ? AND deleted_at IS NULL')
+    .get(userId) as { chatId: number | null } | undefined;
+  return r?.chatId ?? null;
+}
+
 export function listTelegramTargets(): Array<{ id: string; name: string; chatId: number }> {
   return (
     db

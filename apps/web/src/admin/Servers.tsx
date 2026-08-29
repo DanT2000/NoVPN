@@ -76,7 +76,7 @@ function EndpointConfigPanel({ server }: { server: Server }) {
       if (!alive) return;
       setCfg(r.config);
       setWl((r.config.whitelistDomains ?? []).join('\n'));
-    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fakeDns: false, fallbackTypes: null }); });
+    }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fakeDns: false, fullTimeoutHours: 0, fallbackTypes: null }); });
     return () => { alive = false; };
   }, [server.host]);
 
@@ -110,16 +110,45 @@ function EndpointConfigPanel({ server }: { server: Server }) {
         в одной стране один список обхода, в другой — другой.
       </div>
 
-      <div className="body small muted" style={{ margin: '0 0 4px' }}>Умная маршрутизация на этом сервере:</div>
+      <div className="body small muted" style={{ margin: '0 0 4px' }}>Что получает пользователь этого сервера:</div>
       <div className="chip-row" style={{ marginBottom: 6 }}>
-        <Chip label="Включена: умный профиль + полный VPN" active={cfg.profiles === 'both'} disabled={busy} onClick={() => void save({ profiles: 'both' })} />
-        <Chip label="Выключена: только полный VPN" active={cfg.profiles === 'full'} disabled={busy} onClick={() => void save({ profiles: 'full' })} />
+        <Chip label="Умный профиль + полный VPN" active={cfg.profiles === 'both'} disabled={busy} onClick={() => void save({ profiles: 'both' })} />
+        <Chip label="Только полный VPN" active={cfg.profiles === 'full'} disabled={busy} onClick={() => void save({ profiles: 'full' })} />
+        <Chip label="Только умный профиль" active={cfg.profiles === 'smart'} disabled={busy} onClick={() => void save({ profiles: 'smart' })} />
       </div>
       <div className="body small muted" style={{ marginBottom: 10 }}>
         {cfg.profiles === 'both'
-          ? 'У каждого пользователя в приложении два профиля этого сервера: «умный» первым (рекомендуемый — что не работает в России, через VPN, остальное напрямую) и «Полный VPN» вторым (весь трафик в туннель). Выбирает сам человек; лишний трафик — его лимиты.'
-          : 'Один профиль: весь трафик через VPN без исключений. Список доменов ниже не применяется.'}
+          ? 'Два профиля: умный первым (рекомендуемый — что не работает в России идёт через VPN, остальное напрямую) и полный VPN вторым (весь трафик в туннель). Выбирает сам человек; лишний трафик — его лимиты.'
+          : cfg.profiles === 'smart'
+            ? 'Один профиль — умный. Полный VPN человек получить не сможет: весь трафик через туннель этот сервер не отдаёт.'
+            : 'Один профиль: весь трафик через VPN без исключений. Список доменов ниже не применяется.'}
       </div>
+
+      {cfg.profiles === 'both' ? (
+        <div className="field" style={{ marginBottom: 10 }}>
+          <span className="field-label">Возврат с полного VPN на умный</span>
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <input
+              className="input"
+              style={{ maxWidth: 110 }}
+              type="number"
+              min={0}
+              step={0.5}
+              value={cfg.fullTimeoutHours}
+              disabled={busy}
+              onChange={(e) => setCfg({ ...cfg, fullTimeoutHours: Number(e.target.value) })}
+              onBlur={(e) => void save({ fullTimeoutHours: Number(e.target.value) })}
+            />
+            <span className="small muted">часов · 0.5 — полчаса · 0 — не возвращать</span>
+          </div>
+          <div className="body small muted" style={{ marginTop: 6 }}>
+            Человек включил полный режим «на разок» и забыл — весь его трафик так и идёт через
+            сервер. Здесь задаётся, через сколько приложение само вернёт его на умный.
+            <b> Работает в приложении NoVPN</b>: другие приложения (Happ, v2rayNG) выбирают
+            профиль сами, заставить их сервер не может.
+          </div>
+        </div>
+      ) : null}
 
       {cfg.profiles !== 'full' ? (
         <>
@@ -132,7 +161,7 @@ function EndpointConfigPanel({ server }: { server: Server }) {
               onClick={() => void save({ smartSource: 'autoroute', smartDirection: 'match-vpn' })}
             />
             <Chip
-              label="Обход белых списков (старый): RU-список → напрямую, остальное в VPN"
+              label="Свой список → напрямую, остальное через VPN"
               active={cfg.smartDirection === 'match-direct'}
               disabled={busy}
               onClick={() => void save({ smartSource: 'local', smartDirection: 'match-direct' })}
@@ -140,7 +169,7 @@ function EndpointConfigPanel({ server }: { server: Server }) {
           </div>
           <div className="body small muted" style={{ marginBottom: 10 }}>
             {cfg.smartDirection === 'match-direct'
-              ? 'Всё идёт через VPN, а RU-список (свой ниже или встроенный) — напрямую. Так работали конфиги до AutoRoute.'
+              ? 'Через VPN идёт всё, кроме списка ниже: он остаётся напрямую. Подходит, когда проще перечислить исключения, чем то, что нужно туннелировать.'
               : 'Основной режим. База собирается в разделе AutoRoute, свои домены ниже дополняют её.'}
           </div>
         </>
@@ -736,14 +765,14 @@ export function Servers() {
                         <b style={{ fontSize: 14, color: s.routing.profiles === 'full' ? 'var(--amber-fg)' : 'var(--text-primary)' }}>
                           {s.routing.profiles === 'both'
                             ? 'Умная маршрутизация + Полный VPN'
-                            : s.routing.profiles === 'full'
-                              ? 'Только полный VPN'
-                              : 'Умная маршрутизация'}
+                            : s.routing.profiles === 'smart'
+                              ? 'Только умная маршрутизация'
+                              : 'Только полный VPN'}
                         </b>
                         <span className="small muted">
                           {s.routing.profiles !== 'full'
                             ? s.routing.direction === 'match-direct'
-                              ? 'обход белых списков'
+                              ? 'свой список — напрямую'
                               : s.routing.source === 'autoroute'
                                 ? 'база AutoRoute'
                                 : 'свой список'

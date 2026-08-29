@@ -54,6 +54,8 @@ export interface MetaState {
     recommended: boolean;
     mode: 'smart' | 'full';
     lanAccess: boolean;
+    /** Через сколько часов полный VPN сам вернётся на умный. 0 — не возвращать. */
+    fullTimeoutHours: number;
   }[];
   /** Отказ панели (4xx) — авторитетный: подключение заблокировано до валидного 200. */
   denied: { kind: string; message: string } | null;
@@ -84,6 +86,10 @@ export interface SiteRule {
   route: Route;
   /** Откуда правило: из списка, руками в окне или из браузера. */
   source: 'manual' | 'list' | 'browser';
+  /** Выключенное правило остаётся в списке, но на маршрутизацию не влияет.
+   *  Нужно, чтобы проверить «а если без него» и не удалять безвозвратно.
+   *  Отсутствие поля = включено (старые сохранённые состояния). */
+  enabled?: boolean;
 }
 
 export interface RuleList {

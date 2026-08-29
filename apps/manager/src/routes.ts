@@ -272,7 +272,10 @@ router.get('/sub/:token', (req, res) => {
  *  полный. Пер-пользовательских запретов нет: на сервере ничего не блокируется, и
  *  человек всё равно мог бы получить полный туннель, поправив конфиг руками. */
 function profilesFor(_u: NonNullable<ReturnType<typeof repo.getUser>>, srv: NonNullable<ReturnType<typeof repo.getServer>>): Array<'smart' | 'full'> {
-  return repo.getEndpointConfig(srv.host).profiles === 'full' ? ['full'] : ['smart', 'full'];
+  const profiles = repo.getEndpointConfig(srv.host).profiles;
+  if (profiles === 'full') return ['full'];
+  if (profiles === 'smart') return ['smart'];
+  return ['smart', 'full'];
 }
 
 /** Клиент, который умеет забирать базу маршрутизации DAT-файлами (Happ), получает
@@ -348,6 +351,7 @@ function buildUserXrayFull(
         whitelistDomains: repo.getSettings().whitelistDomains,
         lanAccess: repo.getSettings().lanAccess === true,
         fakeDns: false,
+        fullTimeoutHours: 0,
         fallbackTypes: null,
       };
   // Аварийный фоллбэк — ПЕР-СЕРВЕР: берём ТОЛЬКО прокси ЭТОГО сервера (srv.id), а не все
@@ -534,6 +538,10 @@ router.get('/sub/:token/meta.json', (req, res) => {
           fallbackTypes: cfg.fallbackTypes,
           // Сколько собственных доменов сервера дополняют список. В full — 0: правил нет.
           ownExceptions: mode === 'smart' ? (cfg.whitelistDomains?.length ?? 0) : 0,
+          // Через сколько ЧАСОВ полный VPN сам вернётся на умный (0 — не возвращать).
+          // Исполняет приложение NoVPN: сервер отдаёт два конфига и не знает, каким из
+          // них пользуются. Чужие клиенты поле игнорируют, у них переключение ручное.
+          fullTimeoutHours: cfg.fullTimeoutHours,
         },
       });
     }
@@ -1560,10 +1568,18 @@ router.put('/api/admin/servers/:id/endpoint-config', requireAdmin, (req, res) =>
   if ('xrayWhitelist' in b) patch.xrayWhitelist = b.xrayWhitelist === null ? null : !!b.xrayWhitelist;
   if ('lanAccess' in b) patch.lanAccess = b.lanAccess === null ? null : !!b.lanAccess;
   if ('fakeDns' in b) patch.fakeDns = b.fakeDns === null ? null : !!b.fakeDns;
+  if ('fullTimeoutHours' in b) {
+    // Часы, допускаются дробные (0.5 — полчаса). Мусор и отрицательные — как «не возвращать».
+    const v = Number(b.fullTimeoutHours);
+    patch.fullTimeoutHours = b.fullTimeoutHours === null || !Number.isFinite(v) || v <= 0 ? null : Math.min(v, 24 * 30);
+  }
   if ('whitelistDomains' in b) patch.whitelistDomains = b.whitelistDomains === null ? null : (Array.isArray(b.whitelistDomains) ? b.whitelistDomains.map((x: unknown) => String(x).trim()).filter(Boolean) : null);
   if ('fallbackTypes' in b) patch.fallbackTypes = b.fallbackTypes === null ? null : (Array.isArray(b.fallbackTypes) ? b.fallbackTypes.filter((x: unknown) => x === 'https' || x === 'http' || x === 'socks') : null);
   // Профили подписки и параметры умного профиля.
-  if ('profiles' in b) patch.profiles = b.profiles === 'full' ? 'full' : b.profiles === 'both' || b.profiles === 'smart' ? 'both' : null;
+  // Три варианта: оба профиля, только полный, только умный. Неизвестное значение —
+  // null, то есть «наследовать глобальную настройку», а не молча выбрать за человека.
+  if ('profiles' in b)
+    patch.profiles = b.profiles === 'full' ? 'full' : b.profiles === 'smart' ? 'smart' : b.profiles === 'both' ? 'both' : null;
   if ('smartDirection' in b) patch.smartDirection = b.smartDirection === 'match-direct' ? 'match-direct' : b.smartDirection === 'match-vpn' ? 'match-vpn' : null;
   if ('smartSource' in b) patch.smartSource = b.smartSource === 'local' ? 'local' : b.smartSource === 'autoroute' ? 'autoroute' : null;
   repo.setEndpointConfig(s.host, patch);

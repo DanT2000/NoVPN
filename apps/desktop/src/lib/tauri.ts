@@ -89,6 +89,8 @@ export interface MetaRouting {
   lanAccess: boolean;
   fallbackTypes: string[] | null;
   ownExceptions: number;
+  /** Через сколько часов полный VPN сам вернётся на умный. 0 — не возвращать. */
+  fullTimeoutHours: number;
   expiresAt?: string | null;
   fallbackProfileId?: string | null;
 }

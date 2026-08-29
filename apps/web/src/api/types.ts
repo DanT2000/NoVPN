@@ -306,7 +306,7 @@ export interface EndpointConfigView {
   /** Совместимость: false ⇔ сервер выдаёт только полный туннель. */
   xrayWhitelist: boolean;
   /** 'both' — умная маршрутизация включена (умный + полный профили), 'full' — только полный. */
-  profiles: 'both' | 'full';
+  profiles: 'both' | 'full' | 'smart';
   /** Направление умного профиля: список → VPN (основной) или список → напрямую (унаследованный). */
   smartDirection: 'match-vpn' | 'match-direct';
   /** Откуда список умного профиля: сборка AutoRoute или только свой список. */
@@ -316,6 +316,8 @@ export interface EndpointConfigView {
   /** Подмена DNS в умном профиле: домен восстанавливается даже когда его не видно
    *  в трафике (ECH, не-HTTP протоколы). По умолчанию выключено. */
   fakeDns: boolean;
+  /** Через сколько часов полный VPN сам вернётся на умный. 0 — не возвращать. */
+  fullTimeoutHours: number;
   fallbackTypes: Array<'https' | 'http' | 'socks'> | null;
 }
 

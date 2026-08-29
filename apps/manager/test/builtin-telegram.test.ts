@@ -18,6 +18,7 @@ process.env.SESSION_SECRET = 'test';
 const { TELEGRAM_CIDRS, TELEGRAM_DOMAINS, OPENAI_DOMAINS, DIRECT_DOMAINS, builtinRules } = await import('../src/lib/builtinRoutes.js');
 const { parseRuleLine } = await import('../src/lib/routingRules.js');
 const repo = await import('../src/repo.js');
+const { db } = await import('../src/db.js');
 
 test('встроенные подсети: официальный список плюс сверенные по RDAP диапазоны', () => {
   // Официальный core.telegram.org/resources/cidr.txt.
@@ -73,6 +74,36 @@ test('все встроенные правила разбираются наши
   }
   // Подсети идут первыми — они и есть смысл списка.
   assert.equal(builtinRules()[0]!.kind, 'ip');
+});
+
+// Человека надо предупредить ДО отключения: «внезапно перестало работать» он
+// воспринимает как поломку, а не как исчерпанный тариф.
+test('остаток трафика: предупреждаем тех, у кого меньше 10% лимита', () => {
+  const mk = (name: string, limit: number | null, used: number) => {
+    const u = repo.insertUser({
+      name, comment: '', category: null, tags: [], code: `c${Math.random().toString(36).slice(2, 8)}`,
+      deviceLimit: 1, expiresAt: null, trafficLimitGb: limit, resetPolicy: 'never',
+      allowedServers: [], allowedProtocols: ['xray'],
+    });
+    if (used) repo.addUserTraffic?.(u.id, used);
+    return u;
+  };
+  const low = mk('Заканчивается', 10, 0);
+  const fine = mk('Ещё много', 10, 0);
+  const unlimited = mk('Безлимит', null, 0);
+  // Выставляем расход напрямую: способ пополнения счётчика тут не важен.
+  db.prepare('UPDATE users SET traffic_used_gb = ? WHERE id = ?').run(9.5, low.id);
+  db.prepare('UPDATE users SET traffic_used_gb = ? WHERE id = ?').run(3, fine.id);
+  db.prepare('UPDATE users SET traffic_used_gb = ? WHERE id = ?').run(999, unlimited.id);
+
+  const ids = repo.listUsersLowOnTraffic(0.1).map((u) => u.id);
+  assert.ok(ids.includes(low.id), 'осталось 0.5 из 10 ГБ — предупреждаем');
+  assert.ok(!ids.includes(fine.id), 'потрачено 3 из 10 — рано');
+  assert.ok(!ids.includes(unlimited.id), 'безлимитных не трогаем вовсе');
+
+  // Исчерпавшего лимит сюда не берём: ему уходит другое сообщение — про отключение.
+  db.prepare('UPDATE users SET traffic_used_gb = ? WHERE id = ?').run(10, low.id);
+  assert.ok(!repo.listUsersLowOnTraffic(0.1).some((u) => u.id === low.id));
 });
 
 test('источники подсетей Telegram заведены и стоят выше объёмных списков', () => {

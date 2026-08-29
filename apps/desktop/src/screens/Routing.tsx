@@ -387,14 +387,15 @@ function SitesTab() {
       {shown.map((v) => (
         <button key={v.id} type="button" className="item" onClick={() => setEdit(v)}>
           <Avatar name={v.title} domain={v.domain} />
-          <span className="item-main">
+          <span className="item-main" style={{ opacity: v.enabled === false ? 0.5 : 1 }}>
             <span className="item-name">{v.title}</span>
             <span className="item-meta mono">
               {v.domain}
+              {v.enabled === false ? ' · выключено' : ''}
               {advanced ? (v.source === 'list' ? ' · из списка' : ' · вручную') : ''}
             </span>
           </span>
-          <span className="item-tail">
+          <span className="item-tail" style={{ opacity: v.enabled === false ? 0.5 : 1 }}>
             <RouteTag route={v.route} />
           </span>
         </button>
@@ -407,8 +408,9 @@ function SitesTab() {
 }
 
 function SiteDialog({ site, onClose }: { site: SiteRule; onClose: () => void }) {
-  const { s, setSiteRoute, removeSite } = useStore();
+  const { s, setSiteRoute, removeSite, toggleSite } = useStore();
   const cur = s.sites.find((v) => v.id === site.id) ?? site;
+  const on = cur.enabled !== false;
 
   return (
     <Dialog title={cur.title} onClose={onClose}>
@@ -417,6 +419,11 @@ function SiteDialog({ site, onClose }: { site: SiteRule; onClose: () => void }) 
       </div>
       <div className="section-label first">Маршрут</div>
       <RouteSwitch value={cur.route} onChange={(r) => setSiteRoute(cur.id, r)} />
+      {/* Выключить, а не удалять: удобно проверить «а если без него», ничего не теряя. */}
+      <div className="row-between" style={{ marginTop: 16 }}>
+        <span className="t-note">{on ? 'Правило действует' : 'Правило выключено'}</span>
+        <Toggle on={on} onChange={() => toggleSite(cur.id)} />
+      </div>
       <div style={{ display: 'flex', gap: 9, marginTop: 20 }}>
         <button
           className="btn btn-danger-outline btn-sm"

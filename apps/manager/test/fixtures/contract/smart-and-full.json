@@ -27,7 +27,8 @@
         "mode": "smart",
         "lanAccess": false,
         "fallbackTypes": null,
-        "ownExceptions": 3
+        "ownExceptions": 3,
+        "fullTimeoutHours": 0
       }
     },
     {
@@ -45,7 +46,8 @@
         "mode": "full",
         "lanAccess": false,
         "fallbackTypes": null,
-        "ownExceptions": 0
+        "ownExceptions": 0,
+        "fullTimeoutHours": 0
       }
     },
     {
@@ -63,7 +65,8 @@
         "mode": "full",
         "lanAccess": false,
         "fallbackTypes": null,
-        "ownExceptions": 0
+        "ownExceptions": 0,
+        "fullTimeoutHours": 0
       }
     }
   ]

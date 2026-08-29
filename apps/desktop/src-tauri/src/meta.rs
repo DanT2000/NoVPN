@@ -40,6 +40,10 @@ pub struct Routing {
     pub fallback_types: Option<Vec<String>>,
     #[serde(default)]
     pub own_exceptions: u64,
+    /// Через сколько ЧАСОВ полный VPN сам вернётся на умный. 0 — не возвращать.
+    /// Исполняем это МЫ: сервер отдаёт два конфига и не знает, каким пользуются.
+    #[serde(default)]
+    pub full_timeout_hours: f64,
     /// Зарезервировано контрактом, панель пока не заполняет.
     #[serde(default)]
     pub expires_at: Option<String>,
