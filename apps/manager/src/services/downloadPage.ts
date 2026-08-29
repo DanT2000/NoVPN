@@ -70,6 +70,14 @@ export function renderDownloadPage(opts: {
   .tshoot summary{cursor:pointer;font-weight:600}
   .tshoot p{margin:10px 0;font-size:14px;color:var(--mut)}
   .tshoot a{color:var(--acc)}
+  .tshoot ol{margin:10px 0;padding-left:22px;font-size:14px;color:var(--mut)}
+  .tshoot li{margin:7px 0}
+  .tshoot b{color:var(--tx)}
+  .tshoot+.tshoot{margin-top:10px}
+  .path{display:inline-flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+  .path code{background:var(--card2);padding:4px 9px;border-radius:7px;font-size:13px}
+  .cp{background:var(--card2);color:var(--acc);border:1px solid var(--bd);border-radius:7px;
+      padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit}
   .bbtn em{font-style:normal;font-size:11px;color:var(--mut);background:var(--card2);border-radius:6px;padding:1px 6px}
 </style></head><body>
 <div class="wrap">
@@ -91,20 +99,52 @@ export function renderDownloadPage(opts: {
   </div>
 
   <details class="tshoot">
-    <summary>Установщик пишет «не удалось»?</summary>
+    <summary>Windows не даёт установить или удаляет файл</summary>
     <p>
-      Приложению нужен системный компонент Windows — <b>Microsoft Edge WebView2 Runtime</b>.
-      На Windows 10 и 11 он есть изначально, но его можно удалить вместе с браузером или
-      «чистилкой» системы: тогда установка обрывается ошибкой.
+      <b>Почему так.</b> Приложение пока не подписано платным сертификатом издателя, и его
+      скачали немного людей — репутации у файла нет. Windows смотрит не на содержимое, а на
+      поведение: программа прописывается в автозапуск и создаёт задачу, чтобы включаться
+      вместе с системой. Для встроенной защиты это признак «закрепления в системе», и она
+      блокирует файл на всякий случай. Отсюда «не удалось удалить» и «невозможно открыть
+      файл для записи»: файл уже заблокирован, его нельзя ни перезаписать, ни стереть.
+    </p>
+    <p><b>Что сделать — по шагам (Windows 11):</b></p>
+    <ol>
+      <li>«Параметры» &rarr; <b>Конфиденциальность и защита</b> &rarr; <b>Безопасность Windows</b>.</li>
+      <li>Открыть <b>Защита от вирусов и угроз</b>.</li>
+      <li>Если файл уже удалили: <b>Журнал защиты</b> &rarr; найти запись про NoVPN &rarr;
+        «Действия» &rarr; <b>Разрешить на устройстве</b>.</li>
+      <li>Пролистать вниз до <b>Параметры защиты от вирусов и других угроз</b> &rarr;
+        <b>Управление настройками</b>.</li>
+      <li>Пролистать в самый низ до <b>Исключения</b> &rarr; <b>Добавление или удаление исключений</b>.</li>
+      <li><b>Добавить исключение</b> &rarr; <b>Папка</b>.</li>
+      <li>В строку адреса сверху вставить путь, нажать Enter, затем <b>Выбор папки</b>:
+        <span class="path"><code id="excl">%LOCALAPPDATA%\\NoVPN</code><button class="cp" onclick="navigator.clipboard.writeText(document.getElementById('excl').textContent);this.textContent='Скопировано'">Копировать</button></span>
+      </li>
+      <li>Запустить установщик заново.</li>
+    </ol>
+    <p>
+      Шаг с исключением нужен обязательно: без него защита может удалить файл снова через
+      несколько минут. Подпись издателя снимет этот вопрос совсем — она в планах.
+    </p>
+  </details>
+
+  <details class="tshoot">
+    <summary>Установщик пишет «не удалось» или «невозможно открыть файл для записи»</summary>
+    <p>
+      Сначала проверьте предыдущий пункт — чаще всего дело именно в защите Windows.
+      Если она ни при чём, причин обычно две.
     </p>
     <p>
-      Поставьте его с сайта Microsoft и запустите наш установщик заново:
+      <b>Приложение запущено.</b> Закройте его через значок в трее (правая кнопка &rarr;
+      «Выход») и запустите установщик снова: открытые файлы перезаписать нельзя.
+    </p>
+    <p>
+      <b>Нет системного компонента.</b> Приложению нужен <b>Microsoft Edge WebView2
+      Runtime</b>. На Windows 10 и 11 он есть изначально, но удаляется вместе с браузером
+      или «чистилкой» системы. Поставьте его с сайта Microsoft и повторите установку:
       <a href="https://developer.microsoft.com/microsoft-edge/webview2/" target="_blank" rel="noopener">developer.microsoft.com/microsoft-edge/webview2</a>
       (раздел «Evergreen Standalone Installer», разрядка x64).
-    </p>
-    <p>
-      Если приложение уже стояло, перед повторной установкой закройте его через значок в
-      трее — открытые файлы установщик перезаписать не сможет.
     </p>
   </details>
 
