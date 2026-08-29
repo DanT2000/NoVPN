@@ -62,6 +62,32 @@ const FB_TYPES: Array<{ v: 'https' | 'http' | 'socks'; label: string }> = [
   { v: 'socks', label: 'SOCKS5' },
 ];
 
+/** Гибкий разбор времени автосброса → часы (дробное). Разделитель часы/минуты
+ *  (двоеточие, пробел, дефис, слэш) → «Ч М» = Ч часов М минут; точка/запятая →
+ *  десятичные часы. Примеры: «1:30» / «1 30» → 1.5; «1,5» / «1.5» → 1.5; «2» → 2;
+ *  пусто / «0» → 0 (таймер не запускается). */
+export function parseTimeoutHours(raw: string): number {
+  const s = raw.trim();
+  if (!s) return 0;
+  const hm = s.match(/^(\d+)\s*[:\s\-/]\s*(\d{1,2})$/);
+  if (hm) {
+    const h = parseInt(hm[1]!, 10);
+    const m = Math.min(59, parseInt(hm[2]!, 10));
+    return h + m / 60;
+  }
+  const dec = parseFloat(s.replace(',', '.'));
+  return Number.isFinite(dec) && dec > 0 ? dec : 0;
+}
+
+/** Часы (дробное) → «Ч:ММ» для показа. Ровные часы — без минут («2»). 0 → «0». */
+export function formatTimeoutHours(hours: number | null | undefined): string {
+  if (!hours || hours <= 0) return '0';
+  const total = Math.round(hours * 60);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return m === 0 ? String(h) : `${h}:${String(m).padStart(2, '0')}`;
+}
+
 /** Пер-серверные настройки генерации конфига (маршрутизация НА УСТРОЙСТВЕ). У каждого
  *  сервера могут быть свои обход-домены, LAN-доступ и набор запасных прокси. */
 function EndpointConfigPanel({ server }: { server: Server }) {
@@ -69,6 +95,8 @@ function EndpointConfigPanel({ server }: { server: Server }) {
   const [cfg, setCfg] = useState<EndpointConfigView | null>(null);
   const [wl, setWl] = useState('');
   const [busy, setBusy] = useState(false);
+  // Поле времени автосброса — свободный текст («1:30», «1,5»…), приводим при сохранении.
+  const [timeoutText, setTimeoutText] = useState('0');
 
   useEffect(() => {
     let alive = true;
@@ -79,6 +107,11 @@ function EndpointConfigPanel({ server }: { server: Server }) {
     }).catch(() => { if (alive) setCfg({ xrayWhitelist: true, profiles: 'both', smartDirection: 'match-vpn', smartSource: 'autoroute', whitelistDomains: undefined, lanAccess: false, fakeDns: false, fullTimeoutHours: 0, fallbackTypes: null }); });
     return () => { alive = false; };
   }, [server.host]);
+
+  // Показ поля синхронизируем с сохранённым значением («1.5» → «1:30»).
+  useEffect(() => {
+    if (cfg) setTimeoutText(formatTimeoutHours(cfg.fullTimeoutHours));
+  }, [cfg?.fullTimeoutHours]);
 
   if (!cfg) return <div className="small muted">Загрузка настроек…</div>;
 
@@ -126,26 +159,40 @@ function EndpointConfigPanel({ server }: { server: Server }) {
 
       {cfg.profiles === 'both' ? (
         <div className="field" style={{ marginBottom: 10 }}>
-          <span className="field-label">Возврат с полного VPN на умный</span>
+          <span className="field-label">Авто-сброс на умную маршрутизацию</span>
           <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <input
               className="input"
               style={{ maxWidth: 110 }}
-              type="number"
-              min={0}
-              step={0.5}
-              value={cfg.fullTimeoutHours}
+              type="text"
+              inputMode="text"
+              placeholder="0"
+              value={timeoutText}
               disabled={busy}
-              onChange={(e) => setCfg({ ...cfg, fullTimeoutHours: Number(e.target.value) })}
-              onBlur={(e) => void save({ fullTimeoutHours: Number(e.target.value) })}
+              onChange={(e) => setTimeoutText(e.target.value)}
+              onBlur={() => {
+                const hours = parseTimeoutHours(timeoutText);
+                setTimeoutText(formatTimeoutHours(hours));
+                if (hours !== (cfg.fullTimeoutHours ?? 0)) void save({ fullTimeoutHours: hours });
+              }}
             />
-            <span className="small muted">часов · 0.5 — полчаса · 0 — не возвращать</span>
+            <span className="small muted">
+              {parseTimeoutHours(timeoutText) > 0
+                ? `= ${formatTimeoutHours(parseTimeoutHours(timeoutText))} (ч:мм) · 0 — не сбрасывать`
+                : '0 — не сбрасывать (человек сам решает)'}
+            </span>
           </div>
           <div className="body small muted" style={{ marginTop: 6 }}>
-            Человек включил полный режим «на разок» и забыл — весь его трафик так и идёт через
-            сервер. Здесь задаётся, через сколько приложение само вернёт его на умный.
-            <b> Работает в приложении NoVPN</b>: другие приложения (Happ, v2rayNG) выбирают
-            профиль сами, заставить их сервер не может.
+            Это <b>не лимит сессии</b>, а напоминание: если человек включил полный VPN «на разок»
+            и забыл, приложение само вернёт его на умную маршрутизацию через это время (умная —
+            рекомендуемый режим). <b>0 — таймер не запускается</b>: переключаться между умной и
+            полной можно сколько угодно.
+            <br />
+            Формат гибкий: <b>1:30</b>, <b>1 30</b> — час тридцать; <b>1.5</b> или <b>1,5</b> —
+            тоже полтора часа; <b>2</b> — два часа. Показываем как <b>ч:мм</b>.
+            <br />
+            <b>Работает в приложении NoVPN</b>: другие клиенты (Happ, v2rayNG) выбирают профиль
+            сами, заставить их сервер не может.
           </div>
         </div>
       ) : null}

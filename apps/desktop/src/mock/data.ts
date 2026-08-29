@@ -91,6 +91,7 @@ export const SUGGESTED = P_APPS.filter((a) => a.route === 'vpn' && a.installedOn
 
 export const INITIAL: State = {
   onboarded: false,
+  introSeen: false,
   subscription: { url: '', status: 'none', servers: 0 },
   conn: 'off',
   serverId: null,

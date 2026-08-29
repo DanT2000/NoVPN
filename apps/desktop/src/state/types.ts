@@ -132,6 +132,8 @@ export interface Settings {
 
 export interface State {
   onboarded: boolean;
+  /** Показан ли первичный мини-гайд по главному экрану (один раз после ввода конфига). */
+  introSeen: boolean;
   subscription: Subscription;
   conn: ConnState;
   serverId: string | null;

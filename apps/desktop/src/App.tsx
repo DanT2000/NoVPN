@@ -5,6 +5,7 @@ import { Titlebar } from './components/Titlebar';
 import { TabBar } from './components/TabBar';
 import { DevPanel } from './components/DevPanel';
 import { Onboarding, QuickSetup } from './screens/Onboarding';
+import { Intro } from './screens/Intro';
 import { Home } from './screens/Home';
 import { Routing } from './screens/Routing';
 import { Connection } from './screens/Connection';
@@ -90,6 +91,8 @@ function Shell() {
       {nav.tab === 'connection' ? <Connection /> : null}
       {nav.tab === 'settings' ? <Settings /> : null}
       <TabBar tab={nav.tab} onGo={go} />
+      {/* Первичный мини-гайд — поверх главного экрана, один раз после ввода конфига. */}
+      {s.onboarded && !s.introSeen ? <Intro /> : null}
       {dev ? <DevPanel /> : null}
     </>
   );

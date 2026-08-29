@@ -188,6 +188,7 @@ interface Ctx {
   resetSubscription: () => void;
   finishOnboarding: (prefs?: OnboardingPrefs) => void;
   resetOnboarding: () => void;
+  dismissIntro: () => void;
   /** Открыть быструю настройку повторно (без стирания подписки и правил). */
   openQuickSetup: () => void;
   /** Закрыть быструю настройку, ничего не меняя. */
@@ -783,6 +784,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
 
       setMode: (mode) => patch({ mode }),
+      dismissIntro: () => patch({ introSeen: true }),
       setSmartRouting: (smartRouting) => patch({ smartRouting }),
       setServer: (serverId) => patch({ serverId }),
       setSetting: (k, v) => setS((x) => ({ ...x, settings: { ...x.settings, [k]: v } })),
