@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "860357e919622644e5a745be5ccc4b1a3e928f709c8bec1d19a390d3503b5d4a",
-  "signature": "nVinmnsLC3czUKHExW36BmUuhfR3px+AfXOs4vx7Wqb7xSRX7pRbDNfosgGyzzkQrePapbszCBU3jZzR/G3yDg==",
-  "sizeBytes": 16548114,
-  "notes": "Смена сервера теперь без «Отключить» — переключается сразу. Кнопка «Добавить подписку» на странице выпуска открывает приложение и подставляет ссылку. В полном VPN локальная сеть остаётся напрямую, если включена настройка «Локальная сеть — напрямую»."
+  "sha256": "4e9cedcc3d69031a0bf8f1a5b9dee278249c734fe673f136f1fa5f7fb5e8dc56",
+  "signature": "BuX3Vh+SISYGNvOQrYzNI/22G3KTzsTm9hfmAd6gxqBcF8OGRb0Q2a8e9t0hQBDcuMOmy4nwR85ZweR9sPkqBw==",
+  "sizeBytes": 16534305,
+  "notes": "«Указать вручную» для приложений теперь открывает выбор файла и берёт реальный путь (плюс «Изменить путь»). В настройках — кнопки скачивания расширения браузера для ручной установки."
 }
