@@ -565,6 +565,31 @@ pub fn vpn_alive(running: tauri::State<'_, Running>) -> bool {
     }
 }
 
+/// Реальная проверка связи с сервером ЧЕРЕЗ туннель (не просто «движок жив»).
+/// `true` — сервер отвечает; `false` — связи нет (сервер недоступен/заблокирован),
+/// даже если процесс движка слушает порт. Интерфейс по этому сигналу
+/// переподключается и отличает «подключено» от «реально работает».
+#[tauri::command]
+pub fn vpn_probe(running: tauri::State<'_, Running>) -> bool {
+    // Движок должен быть поднят — иначе проверять нечего.
+    {
+        let mut guard = match running.0.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let up = match guard.as_mut() {
+            Some(e) => e.alive(),
+            None => false,
+        };
+        if !up {
+            return false;
+        }
+    }
+    let ports = Ports::default();
+    // gstatic generate_204 — лёгкий и стабильно доступный из большинства сетей.
+    core::proxy_delay(ports.controller, core::GROUP, "http://www.gstatic.com/generate_204", 4000).is_ok()
+}
+
 /// Порт локального прокси — его показываем в расширенном режиме и отдаём
 /// расширению браузера.
 #[tauri::command]

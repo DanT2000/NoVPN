@@ -22,6 +22,7 @@ import {
   subCached,
   subFetch,
   vpnAlive,
+  vpnProbe,
   vpnConnect,
   vpnDisconnect,
   vpnReload,
@@ -550,6 +551,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
      неудачной попытке состояние застряло бы в 'connecting' навсегда. Держим
      conn='on', а факт переподключения показываем отдельным флагом. */
   const retries = useRef(0);
+  // Проба реальной связи реже, чем tick (каждый 3-й ≈ 12с), и требует ДВУХ неудач
+  // подряд — иначе одна медленная проверка дёргала бы переподключение зря.
+  const probeTick = useRef(0);
+  const probeFails = useRef(0);
   // s и srv нужны свежими внутри интервала — держим в ref, чтобы не пересоздавать
   // интервал на каждый чих и не ловить устаревшее замыкание.
   const liveDeps = useRef({ s, srv });
@@ -557,10 +562,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!inTauri || s.conn !== 'on') return;
     retries.current = 0;
+    probeTick.current = 0;
+    probeFails.current = 0;
     let stop = false;
     const id = window.setInterval(async () => {
+      if (stop) return;
       const alive = await vpnAlive().catch(() => true);
-      if (stop || alive) {
+      let dead = !alive;
+      // Движок жив — но раз в ~12с проверяем РЕАЛЬНУЮ связь с сервером через
+      // туннель. Две неудачи подряд считаем потерей связи (сервер недоступен),
+      // хотя процесс движка и слушает порт.
+      if (alive) {
+        probeTick.current += 1;
+        if (probeTick.current % 3 === 0) {
+          const ok = await vpnProbe().catch(() => true); // сбой вызова ≠ «нет связи»
+          if (ok) {
+            probeFails.current = 0;
+          } else {
+            probeFails.current += 1;
+            if (probeFails.current >= 2) dead = true;
+          }
+        }
+      }
+      if (stop || !dead) {
         retries.current = 0;
         setReconnecting(false);
         return;
@@ -588,6 +612,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return;
         }
         retries.current = 0;
+        probeFails.current = 0;
         setReconnecting(false);
       } catch {
         /* следующий тик попробует снова */

@@ -154,6 +154,8 @@ export const vpnDisconnect = () => callOrThrow<void>('vpn_disconnect');
 export const vpnReload = (selected: string | null, rules: RulesPayload) =>
   callOrThrow<void>('vpn_reload', { selected, rules });
 export const vpnAlive = () => call<boolean>('vpn_alive').then((v) => v ?? false);
+/** Реальная проверка связи с сервером через туннель (не только «движок жив»). */
+export const vpnProbe = () => call<boolean>('vpn_probe').then((v) => v ?? false);
 export const vpnPort = () => call<number>('vpn_port');
 
 /** Открыть папку настроек NoVPN в проводнике. */

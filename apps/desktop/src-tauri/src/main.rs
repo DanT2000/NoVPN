@@ -220,6 +220,7 @@ fn main() {
             cmds::vpn_disconnect,
             cmds::vpn_reload,
             cmds::vpn_alive,
+            cmds::vpn_probe,
             cmds::vpn_port,
             cmds::apps_installed,
             cmds::apps_running,

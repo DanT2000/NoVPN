@@ -644,6 +644,71 @@ pub fn select_proxy(controller_port: u16, group: &str, name: &str) -> Result<(),
     }
 }
 
+/// Percent-encode для значения query-строки (буквы/цифры/`-._~` оставляем).
+fn q_enc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// РЕАЛЬНАЯ проверка связи через туннель: спрашиваем у движка задержку до
+/// контрольного URL ЧЕРЕЗ выбранный сервер (mihomo `/proxies/{group}/delay`).
+/// `Ok(ms)` — сервер отвечает; `Err` — связи нет (сервер недоступен/заблокирован),
+/// даже если процесс движка жив. Именно это отличает «подключено» от «работает».
+pub fn proxy_delay(
+    controller_port: u16,
+    group: &str,
+    test_url: &str,
+    timeout_ms: u32,
+) -> Result<u32, String> {
+    use std::io::{Read, Write};
+
+    let path = format!(
+        "/proxies/{}/delay?timeout={}&url={}",
+        q_enc(group),
+        timeout_ms,
+        q_enc(test_url)
+    );
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n",
+        path = path,
+        port = controller_port
+    );
+
+    let addr: SocketAddr = ([127, 0, 0, 1], controller_port).into();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
+        .map_err(|e| format!("Движок не отвечает: {e}"))?;
+    // Ждём дольше, чем сам замер: движок держит соединение до timeout_ms.
+    stream
+        .set_read_timeout(Some(Duration::from_millis(timeout_ms as u64 + 2000)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("Не удалось запросить проверку: {e}"))?;
+    let mut resp = String::new();
+    let _ = stream.read_to_string(&mut resp);
+    let status = resp.lines().next().unwrap_or("");
+    // 200 + тело {"delay": N} — сервер отвечает. Иначе (тайм-аут/ошибка) связи нет.
+    if !status.contains(" 200") {
+        return Err("нет связи с сервером".into());
+    }
+    let body = resp.split("\r\n\r\n").nth(1).unwrap_or("");
+    // Достаём число после "delay": без тащить JSON-парсер.
+    if let Some(i) = body.find("\"delay\"") {
+        let tail = &body[i + 7..];
+        let digits: String = tail.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(ms) = digits.parse::<u32>() {
+            return Ok(ms);
+        }
+    }
+    Err("нет связи с сервером".into())
+}
+
 /// Запущенный движок.
 pub const PID_NAME: &str = "engine.pid";
 
