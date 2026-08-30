@@ -1604,10 +1604,12 @@ router.post('/api/admin/servers/:id/change-port', requireAdmin, async (req, res)
   const proto = comp === 'xray' ? 'tcp' : 'udp';
   const protoKey = comp === 'xray' ? 'xray' : 'awg';
   const oldPort = comp === 'xray' ? s.ports!.xray : s.ports!.awg;
-  const otherPort = comp === 'xray' ? s.ports!.awg : s.ports!.xray;
   if (oldPort === newPort) return res.json({ ok: true, unchanged: true });
-  // Не даём конфликтующий порт (SSH/ACME/встречный компонент). #11
-  if ([22, 80, otherPort].includes(newPort)) return res.status(400).json(err('validation', `Порт ${newPort} занят (SSH/80/другой компонент). Выберите другой.`));
+  // Не даём занять SSH/ACME. Встречный компонент НЕ проверяем: Xray — TCP,
+  // AmneziaWG — UDP, один и тот же номер порта у них не конфликтует (разные
+  // транспорты). Иначе AWG нельзя было бы поставить на 443, где слушает Xray/TCP,
+  // а 443/UDP как раз лучший вариант (маскировка под QUIC/HTTP3).
+  if ([22, 80].includes(newPort)) return res.status(400).json(err('validation', `Порт ${newPort} занят (SSH/80). Выберите другой.`));
   try {
     // Переустанавливаем службу на новом порту (ключи/uuid сохраняются — из профиля).
     await runProvision(s.id, s.protocols as string[], comp === 'xray' ? { xray: newPort } : { awg: newPort });
