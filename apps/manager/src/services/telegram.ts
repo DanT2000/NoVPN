@@ -299,9 +299,13 @@ export async function notifyUser(userId: string, text: string): Promise<boolean>
   }
 }
 
-export async function broadcastToLinked(text: string): Promise<{ total: number; sent: number; failed: number; aborted: boolean }> {
-  const body = text.trim();
-  if (!body) throw new Error('Пустое сообщение.');
+/** Общий цикл рассылки по всем привязанным: надёжность (мьютекс, ретрай 429,
+ *  пропуск заблокировавших, обрыв при мёртвой инфраструктуре) одна на все виды.
+ *  `makeReq(chatId)` строит метод и параметры Telegram (текст или фото + флаги). */
+async function broadcastLoop(
+  makeReq: (chatId: number) => { method: string; params: Record<string, unknown> },
+  logLabel: string,
+): Promise<{ total: number; sent: number; failed: number; aborted: boolean }> {
   if (!getToken()) throw new Error('Бот не настроен: задайте токен в настройках Telegram.');
   let enabled = false;
   try {
@@ -317,13 +321,17 @@ export async function broadcastToLinked(text: string): Promise<{ total: number; 
   let consecFail = 0;
   let aborted = false;
   let targets: Array<{ id: string; name: string; chatId: number }> = [];
+  const send1 = async (chatId: number) => {
+    const { method, params } = makeReq(chatId);
+    await tgApi(method, params, undefined, AbortSignal.timeout(MSG_TIMEOUT_MS));
+  };
   try {
     // Внутри try: если чтение целей бросит (SQLITE_BUSY при бэкапе), finally снимет
     // флаг — иначе мьютекс залип бы навсегда и все рассылки блокировались.
     targets = repo.listTelegramTargets();
     for (const t of targets) {
       try {
-        await tgApi('sendMessage', { chat_id: t.chatId, text: body, disable_web_page_preview: true }, undefined, AbortSignal.timeout(MSG_TIMEOUT_MS));
+        await send1(t.chatId);
         sent += 1;
         consecFail = 0;
       } catch (e) {
@@ -331,7 +339,7 @@ export async function broadcastToLinked(text: string): Promise<{ total: number; 
         if (e instanceof TgApiError && e.code === 429 && e.retryAfter) {
           await sleep(Math.min(e.retryAfter * 1000, 30000));
           try {
-            await tgApi('sendMessage', { chat_id: t.chatId, text: body, disable_web_page_preview: true }, undefined, AbortSignal.timeout(MSG_TIMEOUT_MS));
+            await send1(t.chatId);
             sent += 1;
             consecFail = 0;
             await sleep(60);
@@ -343,7 +351,7 @@ export async function broadcastToLinked(text: string): Promise<{ total: number; 
         // Заблокировал/удалил бота (403), устаревший chat_id (400) — штатный случай:
         // Telegram ОТВЕТИЛ, значит токен и прокси живы. Такие адресаты просто
         // пропускаются и НЕ считаются в consecFail — иначе 5 подряд заблокировавших
-        // бота (порядок целей произвольный) прервали бы всю экстренную рассылку (#9).
+        // бота (порядок целей произвольный) прервали бы всю рассылку (#9).
         // В consecFail попадают только признаки мёртвой инфраструктуры (таймаут/сеть/5xx).
         failed += 1;
         const definiteReply = e instanceof TgApiError && typeof e.code === 'number' && e.code >= 400 && e.code < 500;
@@ -363,9 +371,18 @@ export async function broadcastToLinked(text: string): Promise<{ total: number; 
     broadcasting = false;
   }
   repo.addLog(
-    `Экстренная рассылка: отправлено ${sent} из ${targets.length}${failed ? `, не доставлено ${failed}` : ''}${aborted ? ' (прервана: бот/прокси недоступны)' : ''}`,
+    `${logLabel}: отправлено ${sent} из ${targets.length}${failed ? `, не доставлено ${failed}` : ''}${aborted ? ' (прервана: бот/прокси недоступны)' : ''}`,
   );
   return { total: targets.length, sent, failed, aborted };
+}
+
+export async function broadcastToLinked(text: string): Promise<{ total: number; sent: number; failed: number; aborted: boolean }> {
+  const body = text.trim();
+  if (!body) throw new Error('Пустое сообщение.');
+  return broadcastLoop(
+    (chatId) => ({ method: 'sendMessage', params: { chat_id: chatId, text: body, disable_web_page_preview: true } }),
+    'Экстренная рассылка',
+  );
 }
 
 type KbBtn = { text: string; callback_data: string } | { text: string; url: string };
@@ -477,15 +494,100 @@ async function showMenu(chatId: number, user: { name: string; deviceLimit: numbe
   await editOrSend(chatId, msgId, m.text, { kb: m.kb });
 }
 
+// ── Админская рассылка через бота ──
+// Админ (adminTelegramChatId) шлёт /broadcast, затем ОДНИМ сообщением текст и/или
+// картинку с подписью; бот показывает превью и по кнопке рассылает всем — обычно
+// или «тихо» (без звука, для ночи). Состояние держим в памяти процесса бота.
+type BroadcastDraft = { stage: 'compose' } | { stage: 'confirm'; photo?: string; caption?: string; text?: string };
+const broadcastState = new Map<number, BroadcastDraft>();
+
+function isAdminChat(chatId: number): boolean {
+  const a = Number(String(repo.getSettings().adminTelegramChatId || '').trim());
+  return !!a && a === chatId;
+}
+
+async function startBroadcast(chatId: number): Promise<void> {
+  broadcastState.set(chatId, { stage: 'compose' });
+  await send(
+    chatId,
+    'Рассылка всем привязанным пользователям.\n\nПришлите ОДНИМ сообщением текст и/или картинку (картинку — с подписью). Для отмены: /cancel',
+  );
+}
+
+async function captureBroadcast(chatId: number, msg: Record<string, any>): Promise<void> {
+  if (typeof msg.text === 'string' && /^\/cancel(@\w+)?$/i.test(msg.text.trim())) {
+    broadcastState.delete(chatId);
+    await send(chatId, 'Рассылка отменена.');
+    return;
+  }
+  const photos = Array.isArray(msg.photo) ? msg.photo : null;
+  const photo = photos && photos.length ? String(photos[photos.length - 1].file_id) : undefined;
+  const caption = typeof msg.caption === 'string' ? msg.caption : undefined;
+  const text = typeof msg.text === 'string' ? msg.text.trim() : undefined;
+  if (!photo && !text) {
+    await send(chatId, 'Пусто. Пришлите текст или картинку с подписью. Для отмены: /cancel');
+    return;
+  }
+  broadcastState.set(chatId, { stage: 'confirm', photo, caption, text });
+  const kb: Kb = [
+    [{ text: '📣 Отправить всем', callback_data: 'bc:send' }],
+    [{ text: '🌙 Тихо (без звука)', callback_data: 'bc:silent' }],
+    [{ text: 'Отмена', callback_data: 'bc:cancel' }],
+  ];
+  const preview = photo ? `Картинка${caption ? ` + подпись:\n\n${caption}` : ' (без подписи)'}` : `Текст:\n\n${text}`;
+  await send(chatId, `Проверьте рассылку 👇\n\n${preview}\n\nОтправить всем?`, { kb });
+}
+
+async function runBroadcast(chatId: number, silent: boolean): Promise<void> {
+  const d = broadcastState.get(chatId);
+  if (!d || d.stage !== 'confirm') {
+    await send(chatId, 'Нечего отправлять. Начните заново: /broadcast');
+    return;
+  }
+  broadcastState.delete(chatId);
+  await send(chatId, silent ? 'Отправляю тихо…' : 'Отправляю…');
+  try {
+    const r = d.photo
+      ? await broadcastLoop(
+          (cid) => ({ method: 'sendPhoto', params: { chat_id: cid, photo: d.photo, caption: d.caption || undefined, disable_notification: silent } }),
+          'Рассылка администратора',
+        )
+      : await broadcastLoop(
+          (cid) => ({ method: 'sendMessage', params: { chat_id: cid, text: (d.text || '').trim(), disable_web_page_preview: true, disable_notification: silent } }),
+          'Рассылка администратора',
+        );
+    await send(
+      chatId,
+      `Готово. Отправлено ${r.sent} из ${r.total}${r.failed ? `, не доставлено ${r.failed}` : ''}${r.aborted ? ' (прервано: бот/прокси недоступны)' : ''}.`,
+    );
+  } catch (e) {
+    await send(chatId, `Не удалось разослать: ${e instanceof Error ? e.message : 'ошибка'}`);
+  }
+}
+
 async function handleUpdate(u: Record<string, any>): Promise<void> {
   if (u.callback_query) return handleCallback(u.callback_query);
   const msg = u.message ?? u.edited_message;
-  if (!msg || typeof msg.text !== 'string') return;
+  if (!msg) return;
   // Только личные чаты. Привязка в группе навесила бы аккаунт на весь чат: любой
   // участник получал бы конфиги и список устройств чужого пользователя.
   if (msg.chat?.type && msg.chat.type !== 'private') return;
   const chatId = msg.chat.id as number;
+  // Админ в режиме составления рассылки — ЛЮБОЕ сообщение (в т.ч. фото без текста)
+  // считаем контентом рассылки.
+  if (isAdminChat(chatId) && broadcastState.get(chatId)?.stage === 'compose') {
+    return captureBroadcast(chatId, msg);
+  }
+  if (typeof msg.text !== 'string') return;
   const text = (msg.text as string).trim();
+  // /broadcast и /cancel — только для администратора.
+  if (isAdminChat(chatId)) {
+    if (/^\/broadcast(@\w+)?$/i.test(text)) return startBroadcast(chatId);
+    if (/^\/cancel(@\w+)?$/i.test(text) && broadcastState.has(chatId)) {
+      broadcastState.delete(chatId);
+      return send(chatId, 'Рассылка отменена.');
+    }
+  }
   const handle = handleOf(msg.from ?? {}, chatId);
 
   // Команды меню/конфига для уже привязанных. Строгий разбор: «/config» — это
@@ -568,6 +670,16 @@ async function handleCallback(cb: Record<string, any>): Promise<void> {
   // нажатие в группе — ничего сделать не можем/не должны.
   if (typeof chatId !== 'number' || (chat?.type && chat.type !== 'private')) return;
   const data = String(cb.data ?? '');
+  // Кнопки рассылки — админские, до привязки пользователя (админ может им не быть).
+  if (data.startsWith('bc:') && isAdminChat(chatId)) {
+    if (data === 'bc:send') void runBroadcast(chatId, false).catch(() => {});
+    else if (data === 'bc:silent') void runBroadcast(chatId, true).catch(() => {});
+    else if (data === 'bc:cancel') {
+      broadcastState.delete(chatId);
+      await send(chatId, 'Рассылка отменена.');
+    }
+    return;
+  }
   const handle = handleOf(cb.from ?? {}, chatId);
   const user = findUser(chatId, handle);
   if (!user) {
