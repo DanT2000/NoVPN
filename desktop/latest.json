@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "066fb2ce7cd2514249c12deef6c09634a052c492d679edb52dc571a3eec24078",
-  "signature": "ybmxEmwLGXq2z7nAm5FcP1BfdWZNGUoYdslZaRMp0b56TLGb0q7Cqbwe+brrqD6WIKIGxesLA5ubCNS4qwi7BA==",
-  "sizeBytes": 16533431,
-  "notes": "В полном VPN локальная сеть остаётся напрямую, если включена настройка «Локальная сеть — напрямую» (доступ к NAS/принтеру по имени работает и в полном режиме)."
+  "sha256": "860357e919622644e5a745be5ccc4b1a3e928f709c8bec1d19a390d3503b5d4a",
+  "signature": "nVinmnsLC3czUKHExW36BmUuhfR3px+AfXOs4vx7Wqb7xSRX7pRbDNfosgGyzzkQrePapbszCBU3jZzR/G3yDg==",
+  "sizeBytes": 16548114,
+  "notes": "Смена сервера теперь без «Отключить» — переключается сразу. Кнопка «Добавить подписку» на странице выпуска открывает приложение и подставляет ссылку. В полном VPN локальная сеть остаётся напрямую, если включена настройка «Локальная сеть — напрямую»."
 }
