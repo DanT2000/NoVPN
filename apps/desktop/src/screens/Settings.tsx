@@ -16,6 +16,7 @@ import {
   updateInstall,
   vpnPort,
   browsersInstalled,
+  openUrl,
 } from '../lib/tauri';
 import type { InstalledBrowser, UpdateInfo } from '../lib/tauri';
 import { IconChevron, IconRefresh } from '../components/icons';
@@ -160,6 +161,14 @@ export function Settings() {
   }, []);
 
   const { s, setSetting, setSmartRouting, openQuickSetup, go, fullAvailable } = useStore();
+  // Origin панели берём из ссылки-подписки — с него же раздаётся zip расширения.
+  const extOrigin = (() => {
+    try {
+      return new URL(s.subscription.url).origin;
+    } catch {
+      return '';
+    }
+  })();
   const [advOpen, setAdvOpen] = useState(false);
   const [upd, setUpd] = useState<{ state: 'idle' | 'checking' | 'done' | 'installing'; info?: UpdateInfo; error?: string }>({ state: 'idle' });
 
@@ -278,11 +287,27 @@ export function Settings() {
           </div>
         ))
       )}
-      {/* Расширения в магазинах ещё нет — не показываем кнопку, которая ведёт в никуда. */}
+      {/* Расширения в магазинах ещё нет — даём файл для ручной установки прямо отсюда. */}
+      {extOrigin ? (
+        <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => void openUrl(`${extOrigin}/extension/novpn-extension-chrome.zip`)}
+          >
+            ⬇ Скачать для Chrome / Edge / Яндекс
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => void openUrl(`${extOrigin}/extension/novpn-extension-firefox.zip`)}
+          >
+            ⬇ Для Firefox
+          </button>
+        </div>
+      ) : null}
       <div className="hint" style={{ marginTop: 10 }}>
-        Расширение пока ставится вручную: распакуйте архив, откройте в браузере страницу
-        расширений, включите «Режим разработчика» и нажмите «Загрузить распакованное
-        расширение». Пошагово — в инструкции на сайте.
+        Расширение пока ставится вручную: скачайте архив кнопкой выше, распакуйте, откройте в
+        браузере страницу расширений, включите «Режим разработчика» и нажмите «Загрузить
+        распакованное расширение». Пошагово — в инструкции на сайте.
       </div>
 
       <div className="section-label">Обновления</div>

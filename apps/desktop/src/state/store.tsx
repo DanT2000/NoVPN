@@ -201,7 +201,7 @@ interface Ctx {
 
   setAppRoute: (id: string, r: Route) => void;
   toggleApp: (id: string) => void;
-  locateApp: (id: string) => void;
+  locateApp: (id: string, path: string) => void;
   addApp: (name: string, route: Route, processes?: string[]) => void;
   removeApp: (id: string) => void;
 
@@ -796,14 +796,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ...x,
           apps: x.apps.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a)),
         })),
-      locateApp: (id) =>
+      locateApp: (id, path) =>
         setS((x) => ({
           ...x,
-          apps: x.apps.map((a) =>
-            a.id === id
-              ? { ...a, found: true, source: 'manual', path: `C:\\Program Files\\${a.name}` }
-              : a,
-          ),
+          apps: x.apps.map((a) => {
+            if (a.id !== id) return a;
+            // Берём РЕАЛЬНЫЙ выбранный файл: и путь, и имя процесса (маршрутизация
+            // идёт по PROCESS-NAME, поэтому процесс должен совпадать с выбранным exe).
+            const exe = path.replace(/\\/g, '/').split('/').pop() || '';
+            const processes = exe ? [exe] : a.processes;
+            return { ...a, found: true, source: 'manual', path, processes };
+          }),
         })),
       addApp: (name, route, processes) =>
         setS((x) => {

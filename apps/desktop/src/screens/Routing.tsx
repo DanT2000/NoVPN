@@ -150,7 +150,13 @@ function AppDialog({ app, onClose }: { app: AppRule; onClose: () => void }) {
         <div className="notice notice-amber" style={{ marginBottom: 16 }}>
           <div className="row-between">
             <span>Не найдено на компьютере</span>
-            <button className="link-btn" onClick={() => locateApp(cur.id)}>
+            <button
+              className="link-btn"
+              onClick={async () => {
+                const p = await pickExe();
+                if (p) locateApp(cur.id, p);
+              }}
+            >
               Указать вручную
             </button>
           </div>
@@ -164,7 +170,19 @@ function AppDialog({ app, onClose }: { app: AppRule; onClose: () => void }) {
         <>
           <div className="section-label">Процесс</div>
           <div className="mono t-body">{cur.processes.join(', ')}</div>
-          <div className="section-label">Путь</div>
+          <div className="section-label">
+            Путь
+            <button
+              className="link-btn"
+              style={{ marginLeft: 8, fontWeight: 400 }}
+              onClick={async () => {
+                const p = await pickExe();
+                if (p) locateApp(cur.id, p);
+              }}
+            >
+              Изменить
+            </button>
+          </div>
           <div className="mono t-note" style={{ wordBreak: 'break-all' }}>
             {cur.path}
           </div>
