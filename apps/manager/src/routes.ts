@@ -295,7 +295,7 @@ function wantsGeoDat(req: { query: Record<string, unknown>; headers: Record<stri
  *  правил — правила лежат в самом конфиге (`geosite:novpn`). Формат и доставка заголовком
  *  `routing: happ://routing/onadd/<base64>` — по документации Happ. `LastUpdated` меняется
  *  вместе со сборкой AutoRoute, иначе приложение не перекачает базы. */
-function happRoutingLink(origin: string): string {
+function happRoutingLink(origin: string, lanSubnets: string[] = []): string {
   const published = repo.listAutoRouteBuilds().find((b) => b.published);
   const stamp = published?.builtAt ? Math.floor(new Date(published.builtAt).getTime() / 1000) : 0;
   const profile = {
@@ -314,7 +314,10 @@ function happRoutingLink(origin: string): string {
     DirectSites: [],
     DirectIp: [],
     ProxySites: [],
-    ProxyIp: [],
+    // Домашние подсети серверов с включённым «Доступ в локалку» уводим В ТУННЕЛЬ
+    // (ProxyIp), чтобы RDP/доступ к домашней сети работал и в Happ. Пусто у обычных
+    // серверов — их локалка остаётся напрямую, как и было.
+    ProxyIp: lanSubnets,
     BlockSites: [],
     BlockIp: [],
     DomainStrategy: 'AsIs',
@@ -453,12 +456,16 @@ router.get('/sub/:token/full', (req, res) => {
   const entries = (overQuota ? [] : repo.subscriptionXrayEntries(u.id)).reverse();
   const geoDat = wantsGeoDat(req as never);
   const parts: string[] = [];
+  // Включён ли «Доступ в локалку» хоть у одного сервера подписки: тогда для Happ
+  // уводим домашние подсети в туннель (маршрутизация Happ глобальна на подписку).
+  let lanAccessOn = false;
   for (const e of entries) {
     const srv = repo.getServer(e.serverId);
     // Устройство на уже удалённом сервере пропускаем — ровно как meta.json ниже
     // (`if (!srv) continue`). Иначе /full отдал бы лишний конфиг, которого нет в
     // meta.profiles[], и матчинг профилей на клиенте разъехался бы на один.
     if (!srv) continue;
+    if (repo.getEndpointConfig(srv.host).lanAccess) lanAccessOn = true;
     // Один конфиг на ПРОФИЛЬ: сервер с обоими режимами даёт два — умный первым,
     // «Полный VPN» вторым (если разрешён пользователю). Порядок 1:1 с meta.profiles[].
     for (const profile of profilesFor(u, srv)) {
@@ -467,11 +474,14 @@ router.get('/sub/:token/full', (req, res) => {
     }
   }
   if (parts.length === 0) return res.status(404).send(''); // пусто/битое → не отдаём all-direct утечку
+  // Домашние диапазоны для Happ (только при включённом lanAccess). 10.0.0.0/8 НЕ
+  // берём — он пересекается с мобильными/операторскими сетями, увели бы их в туннель.
+  const lanSubnets = lanAccessOn ? ['192.168.0.0/16', '172.16.0.0/12'] : [];
   sendUserXrayFull(
     res,
     u,
     parts.length === 1 ? parts[0]! : `[\n${parts.join(',\n')}\n]`,
-    geoDat ? happRoutingLink(reqOrigin(req as never)) : undefined,
+    geoDat ? happRoutingLink(reqOrigin(req as never), lanSubnets) : undefined,
   );
 });
 
@@ -585,7 +595,11 @@ router.get('/sub/:token/server/:id/full', (req, res) => {
   const geoDat = wantsGeoDat(req as never);
   const json = buildUserXrayFull(u, links, srv, overQuota, profile, geoDat);
   if (!json) return res.status(404).send('');
-  sendUserXrayFull(res, u, json, geoDat ? happRoutingLink(reqOrigin(req as never)) : undefined);
+  // Пер-серверная подписка: маршрутизация Happ строго по ЭТОМУ серверу. Включён
+  // «Доступ в локалку» → домашние подсети уводим в туннель (RDP/доступ к домашней
+  // сети). 10.0.0.0/8 не берём — пересекается с мобильными сетями.
+  const lanSubnets = repo.getEndpointConfig(srv.host).lanAccess ? ['192.168.0.0/16', '172.16.0.0/12'] : [];
+  sendUserXrayFull(res, u, json, geoDat ? happRoutingLink(reqOrigin(req as never), lanSubnets) : undefined);
 });
 
 // ── bootstrap ──
