@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "e4d594413eba47018529b6619a7012dc1ef2cf1c648d8102e0689ab13abf13cd",
-  "signature": "W5MmU2AwPd1S+lFxOseH1xfvq+m2vGw5gq3NBRERXBBohcq4vxPsrz/GFZDi1pZFH5kmXCCUMCbMpehMJbjlBw==",
-  "sizeBytes": 16543388,
-  "notes": "Автопереподключение: если пропала связь с сервером (а не просто «движок жив»), приложение само восстанавливает соединение. Это же убирает ложное «Подключено» при отсутствии интернета."
+  "sha256": "377938fc693b8d4c146ec2b2355df2449746d5cdf26fc0ca6f7206e8da4d6a74",
+  "signature": "AOHAycFNdMIFtKrr38TMOlf4AP4oIgcE8xyJlRdRA2Np/01GvlgIXbfjqilfzOTsCYZhiSEWc48I+YCCvmFTCg==",
+  "sizeBytes": 16539846,
+  "notes": "Приложение больше не реагирует на клавишу Scroll Lock (её используют некоторые скриншот-программы) — не появляется случайная рамка на пункте меню."
 }
