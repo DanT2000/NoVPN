@@ -51,8 +51,11 @@ export function renderSubPage(opts: {
   // где-то нет». Используем её и для основной ссылки, и для «Добавить подписку» (one-tap).
   const sub = whitelist && configCount > 0 ? `${subUrl}/full` : subUrl;
 
-  // Только клиенты, умеющие Xray: подписка — это Xray.
-  const xrayApps = apps.filter((a) => a.enabled && a.compat.includes('xray'));
+  // Только клиенты, умеющие Xray: подписка — это Xray. Наше приложение NoVPN
+  // Desktop — первым как приоритетное (у него one-tap «Добавить подписку» и гайд).
+  const xrayApps = apps
+    .filter((a) => a.enabled && a.compat.includes('xray'))
+    .sort((a, b) => (a.id === 'novpn-desktop' ? -1 : b.id === 'novpn-desktop' ? 1 : 0));
 
   const cards = PLATFORMS.map((plat) => {
     const list = xrayApps

@@ -39,6 +39,16 @@ export async function onTrayToggle(cb: () => void): Promise<() => void> {
   return await listen('tray-toggle', () => cb());
 }
 
+/** Отложенная подписка из глубокой ссылки novpn:// (холодный старт). */
+export const takeDeepLink = () => call('take_deep_link') as Promise<string | null>;
+
+/** Глубокая ссылка, пришедшая на уже запущенное приложение (тёплый старт). */
+export async function onDeepLink(cb: (url: string) => void): Promise<() => void> {
+  if (!inTauri) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return await listen<string>('deep-link', (e) => cb(e.payload));
+}
+
 /* ── Подписка и подключение ───────────────────────────────── */
 
 export interface ServerInfo {

@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use novpn_desktop::{cmds, host, selftest, update};
+use novpn_desktop::{cmds, deeplink, host, selftest, update};
 
 use std::sync::Mutex;
 use tauri::{
@@ -21,6 +21,21 @@ struct Tray {
 
 const ICON_ON: &[u8] = include_bytes!("../icons/tray-on.png");
 const ICON_OFF: &[u8] = include_bytes!("../icons/tray-off.png");
+
+/// Ссылка-подписка из глубокой ссылки `novpn://subscribe?url=…`, пришедшая ДО того,
+/// как интерфейс успел подписаться на событие (холодный старт). Фронтенд забирает её
+/// при загрузке командой `take_deep_link`; тёплый старт приходит событием.
+struct PendingLink(Mutex<Option<String>>);
+
+/// Забрать и очистить отложенную ссылку-подписку (вызывает интерфейс при запуске).
+#[tauri::command]
+fn take_deep_link(app: tauri::AppHandle) -> Option<String> {
+    app.state::<PendingLink>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|mut p| p.take())
+}
 
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -180,16 +195,25 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Второй запуск (клик по ярлыку при живом трее) не поднимает новый
             // экземпляр и не снимает системный прокси — просто показывает окно.
+            // Если это глубокая ссылка «Добавить подписку», отдаём её интерфейсу.
+            if let Some(url) = deeplink::from_args(args.iter().cloned()) {
+                if let Ok(mut p) = app.state::<PendingLink>().0.lock() {
+                    *p = Some(url.clone());
+                }
+                let _ = app.emit("deep-link", url);
+            }
             show_main(app);
         }))
         .manage(cmds::Running::default())
+        .manage(PendingLink(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             set_tray_state,
             set_close_to_tray,
             quit_app,
+            take_deep_link,
             cmds::sub_fetch,
             cmds::sub_cached,
             cmds::vpn_connect,
@@ -234,6 +258,15 @@ fn main() {
             // Приложение к тому же почти всегда стартует без повышения (автозапуск),
             // так что запись и так попадает в верный хайв.
             let _ = host::register();
+            // Протокол novpn:// для кнопки «Добавить подписку» на странице выпуска.
+            let _ = deeplink::register();
+            // Холодный старт по ссылке: интерфейс ещё не подписан на событие, поэтому
+            // придерживаем подписку и отдаём её по запросу при загрузке.
+            if let Some(url) = deeplink::from_args(std::env::args()) {
+                if let Ok(mut p) = app.state::<PendingLink>().0.lock() {
+                    *p = Some(url);
+                }
+            }
 
             let toggle = MenuItem::with_id(app, "toggle", "Подключить", true, None::<&str>)?;
             let open = MenuItem::with_id(app, "open", "Открыть NoVPN", true, None::<&str>)?;

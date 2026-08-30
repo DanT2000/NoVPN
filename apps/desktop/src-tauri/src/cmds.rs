@@ -433,7 +433,15 @@ pub fn vpn_reload(
     let dir = store::engine_dir();
     let path = dir.join("config.yaml");
     std::fs::write(&path, &config).map_err(|e| format!("Не удалось записать конфиг: {e}"))?;
-    core::reload(ports.controller, &path)
+    core::reload(ports.controller, &path)?;
+    // Переключение сервера на подключённом клиенте: reload сохраняет прежний выбор
+    // группы select, поэтому явно указываем движку новый сервер — иначе смена
+    // сервера не срабатывала бы без ручного «Отключить». Best-effort: если выбор
+    // не задан или переключить не вышло, правила всё равно применены.
+    if let Some(name) = selected.as_deref() {
+        let _ = core::select_proxy(ports.controller, core::GROUP, name);
+    }
+    Ok(())
 }
 
 /// Возвращает системный прокси в то состояние, в котором мы его застали.

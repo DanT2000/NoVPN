@@ -607,6 +607,43 @@ pub fn reload(controller_port: u16, config_path: &Path) -> Result<(), String> {
     }
 }
 
+/// Явно переключить селектор группы на конкретный сервер. mihomo при перезагрузке
+/// конфига СОХРАНЯЕТ ранее выбранный прокси группы `select`, поэтому смена сервера
+/// одним лишь reload не срабатывала — движок оставался на старом, и человеку
+/// приходилось жать «Отключить». Этот вызов заставляет группу указать на новый.
+/// `group`/`name` — фиксированный ASCII-тег и имя сервера из подписки; имя может
+/// содержать пробелы/не-ASCII, поэтому уходит в JSON-тело, а не в URL.
+pub fn select_proxy(controller_port: u16, group: &str, name: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+
+    let body = serde_json::json!({ "name": name }).to_string();
+    let req = format!(
+        "PUT /proxies/{group} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}",
+        group = group,
+        port = controller_port,
+        len = body.len(),
+        body = body
+    );
+
+    let addr: SocketAddr = ([127, 0, 0, 1], controller_port).into();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
+        .map_err(|e| format!("Движок не отвечает: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("Не удалось переключить сервер: {e}"))?;
+    let mut resp = String::new();
+    let _ = stream.read_to_string(&mut resp);
+    let status = resp.lines().next().unwrap_or("");
+    if status.contains(" 204") || status.contains(" 200") {
+        Ok(())
+    } else {
+        Err(format!("Движок отклонил переключение сервера: {}", status.trim()))
+    }
+}
+
 /// Запущенный движок.
 pub const PID_NAME: &str = "engine.pid";
 

@@ -10,14 +10,14 @@ import { Home } from './screens/Home';
 import { Routing } from './screens/Routing';
 import { Connection } from './screens/Connection';
 import { Settings } from './screens/Settings';
-import { onTrayToggle, syncCloseToTray, syncTray } from './lib/tauri';
+import { onDeepLink, onTrayToggle, syncCloseToTray, syncTray, takeDeepLink } from './lib/tauri';
 
 const ZOOM = { normal: 1, large: 1.12, xlarge: 1.25 };
 
 const LIVE = new Set(['on', 'config-updating', 'config-updated']);
 
 function Shell() {
-  const { s, nav, go, connect, disconnect } = useStore();
+  const { s, nav, go, connect, disconnect, checkSubscription } = useStore();
   const dev = import.meta.env.DEV;
   const live = LIVE.has(s.conn);
 
@@ -50,6 +50,31 @@ function Shell() {
     let stop = () => {};
     void onTrayToggle(() => trayToggle.current()).then((f) => {
       // Успели отписаться до резолва listen — снимаем слушатель сразу.
+      if (active) stop = f;
+      else f();
+    });
+    return () => {
+      active = false;
+      stop();
+    };
+  }, []);
+
+  // Глубокая ссылка «Добавить подписку» (novpn://): и холодный старт (забираем
+  // отложенную), и тёплый (событие на живое приложение). Подписываемся один раз,
+  // актуальный обработчик — через ref, как у трея.
+  const addSub = useRef<(url: string) => void>(() => {});
+  addSub.current = (url: string) => {
+    if (url) checkSubscription(url);
+  };
+  useEffect(() => {
+    let active = true;
+    let stop = () => {};
+    void takeDeepLink()
+      .then((u) => {
+        if (active && u) addSub.current(u);
+      })
+      .catch(() => {});
+    void onDeepLink((u) => addSub.current(u)).then((f) => {
       if (active) stop = f;
       else f();
     });
