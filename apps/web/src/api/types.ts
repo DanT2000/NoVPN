@@ -211,7 +211,8 @@ export interface ApiClient {
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
   /** Включить/выключить запасной вход по коду. */
-  setCodeLogin(id: string, enabled: boolean): Promise<User>;
+  /** forever — бессрочно, без автосброса через N дней. */
+  setCodeLogin(id: string, enabled: boolean, forever?: boolean): Promise<User>;
   deleteUser(id: string): Promise<Ok>;
 
   // ── admin: servers ──

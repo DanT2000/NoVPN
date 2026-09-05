@@ -43,12 +43,18 @@ export const nowIso = () => new Date().toISOString();
 export const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(6).toString('base64url')}`;
 
 // ── users ──
+// Расход за 30 дней подмешиваем из почасового учёта одним запросом на весь список —
+// он нужен для сортировки «кто больше тратит сейчас», а не за всё время.
 export function listUsers(): User[] {
-  return (db.prepare('SELECT * FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC').all() as any[]).map(rowToUser);
+  const t30 = getUsersTraffic30();
+  return (db.prepare('SELECT * FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC').all() as any[]).map((r) => ({
+    ...rowToUser(r),
+    traffic30Gb: t30[r.id] ?? 0,
+  }));
 }
 export function getUser(id: string): User | null {
   const r = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(id) as any;
-  return r ? rowToUser(r) : null;
+  return r ? { ...rowToUser(r), traffic30Gb: getUsersTraffic30()[id] ?? 0 } : null;
 }
 export function getUserByCode(code: string): User | null {
   const r = db.prepare('SELECT * FROM users WHERE code = ? AND deleted_at IS NULL').get(code) as any;
@@ -150,12 +156,13 @@ export function insertUser(u: NewUserRow): User {
 
 /** Включить/выключить вход по коду для пользователя.
  *  При включении срок берётся из настроек (codeLoginDays): через столько дней
- *  вход по коду сам отключится. 0 = без срока. */
-export function setCodeLogin(userId: string, enabled: boolean): void {
+ *  вход по коду сам отключится. 0 = без срока. forever = true — бессрочно для
+ *  ЭТОГО человека, даже если в настройках задан срок (кому код нужен постоянно). */
+export function setCodeLogin(userId: string, enabled: boolean, forever = false): void {
   let until: string | null = null;
   if (enabled) {
     const days = Number(getSettings()?.codeLoginDays ?? 15);
-    until = days > 0 ? new Date(Date.now() + days * 86400000).toISOString() : CODE_LOGIN_FOREVER;
+    until = forever || days <= 0 ? CODE_LOGIN_FOREVER : new Date(Date.now() + days * 86400000).toISOString();
   }
   db.prepare('UPDATE users SET code_login_until = ?, updated_at = ? WHERE id = ?').run(until, nowIso(), userId);
 }
@@ -1734,6 +1741,22 @@ export function getTrafficWho(fromHour: string, toHour: string, serverId?: strin
 export function getTrafficSince(): string | null {
   const r = db.prepare('SELECT MIN(hour) AS h FROM traffic_hourly').get() as { h: string | null } | undefined;
   return r?.h ?? null;
+}
+
+/** Расход за последние 30 дней по пользователям (из почасового учёта) — для
+ *  сортировки списка и карточки. Пусто, пока учёт не накопился. */
+export function getUsersTraffic30(): Record<string, number> {
+  const since = hourKey(new Date(Date.now() - 30 * 86400000));
+  const rows = db
+    .prepare(
+      `SELECT d.user_id AS userId, COALESCE(SUM(t.bytes),0) AS bytes
+         FROM traffic_hourly t JOIN devices d ON d.id = t.device_id
+        WHERE t.hour >= ? AND d.user_id IS NOT NULL GROUP BY d.user_id`,
+    )
+    .all(since) as Array<{ userId: string; bytes: number }>;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.userId] = r.bytes / 1e9;
+  return out;
 }
 
 // ── нагрузка серверов (CPU/ОЗУ/диск/сеть) ──

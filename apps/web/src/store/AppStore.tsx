@@ -107,7 +107,7 @@ interface AppContextValue {
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
   /** Включить/выключить запасной вход по коду. */
-  setCodeLogin(id: string, enabled: boolean): Promise<User>;
+  setCodeLogin(id: string, enabled: boolean, forever?: boolean): Promise<User>;
   deleteUser(id: string): Promise<void>;
 
   // server ops
@@ -534,8 +534,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [upsertUser],
   );
   const setCodeLogin = useCallback(
-    async (id: string, enabled: boolean) => {
-      const u = await api.setCodeLogin(id, enabled);
+    async (id: string, enabled: boolean, forever?: boolean) => {
+      const u = await api.setCodeLogin(id, enabled, forever);
       upsertUser(u);
       return u;
     },

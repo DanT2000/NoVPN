@@ -174,7 +174,9 @@ export function AutoRoute() {
             <span>
               {num(state.subscription.rules)} правил
               {state.subscription.truncated ? (
-                <span style={{ color: 'var(--amber-fg)' }}> — достигнут потолок {num(state.subscription.cap)}: в телефонный конфиг входят первые по приоритету, остальные только в DAT/JSON</span>
+                <span style={{ color: 'var(--amber-fg)' }}>
+                  {' '}— в подписке потолок {num(state.subscription.cap)}: он касается ТОЛЬКО клиентов без поддержки DAT (v2rayNG, v2rayN — им список зашивается прямо в конфиг), туда входят первые по приоритету. Happ получает всю базу через DAT, NoVPN Desktop — через свои списки; для них потолка нет.
+                </span>
               ) : null}
             </span>
           </div>

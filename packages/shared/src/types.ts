@@ -132,6 +132,11 @@ export interface User {
   expiresAt: string | null;
   trafficLimitGb: number | null;
   trafficUsedGb: number;
+  /** Трафик уже удалённых конфигов, списанный на пользователя (входит в trafficUsedGb).
+   *  Показываем отдельно, иначе непонятно, куда делась разница с суммой живых конфигов. */
+  retiredTrafficGb?: number;
+  /** Расход за последние 30 дней по почасовому учёту (появляется по мере накопления). */
+  traffic30Gb?: number;
   resetPolicy: ResetPolicy;
   allowedServers: string[];
   allowedProtocols: UserProtocol[];

@@ -34,12 +34,50 @@ function rowProps(onClick: () => void) {
 
 const CATEGORIES = ['Общие', 'Семья', 'Друзья', 'Работа', 'Админ'] as const;
 
+// Сортировка списка. «За 30 дней» — из почасового учёта: кто тратит СЕЙЧАС, а не за
+// всё время; пока учёт копится, у всех там нули и порядок остаётся по имени.
+type SortKey = 'name' | 'traffic' | 'traffic30' | 'activity';
+const SORTS: Array<{ key: SortKey; label: string }> = [
+  { key: 'name', label: 'По имени' },
+  { key: 'traffic', label: 'По трафику' },
+  { key: 'traffic30', label: 'За 30 дней' },
+  { key: 'activity', label: 'По активности' },
+];
+
+// Избранные — те, кто важнее остальных: всегда сверху, со звёздочкой. Это личный
+// порядок админа в этом браузере, поэтому живёт в localStorage, а не в базе.
+const FAV_KEY = 'novpn.favUsers';
+function loadFav(): Set<string> {
+  try {
+    const raw = localStorage.getItem(FAV_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveFav(s: Set<string>): void {
+  try {
+    localStorage.setItem(FAV_KEY, JSON.stringify([...s]));
+  } catch {
+    /* приватный режим — ну и ладно */
+  }
+}
+
 export function Users() {
   const { data, loading, loadError, isMobile, goAdmin, setUserActive, showToast } = useApp();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
   const [catFilter, setCatFilter] = useState<string>('all');
   const [busy, setBusy] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>('name');
+  const [fav, setFav] = useState<Set<string>>(loadFav);
+  const toggleFav = (id: string) => {
+    const next = new Set(fav);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setFav(next);
+    saveFav(next);
+  };
 
   if (loadError) return <div className="notice notice-red">{loadError}</div>;
   if (loading || !data) return <Loading text="Загружаем пользователей…" />;
@@ -56,6 +94,16 @@ export function Users() {
     if (catFilter !== 'all' && (u.category ?? '') !== catFilter) return false;
     return true;
   });
+  // Избранные всегда сверху, внутри — выбранная сортировка (числовые — по убыванию).
+  const cmp = (a: User, b: User): number => {
+    switch (sort) {
+      case 'traffic': return (b.trafficUsedGb ?? 0) - (a.trafficUsedGb ?? 0);
+      case 'traffic30': return (b.traffic30Gb ?? 0) - (a.traffic30Gb ?? 0);
+      case 'activity': return (b.lastActivityAt ? Date.parse(b.lastActivityAt) : 0) - (a.lastActivityAt ? Date.parse(a.lastActivityAt) : 0);
+      default: return a.name.localeCompare(b.name, 'ru');
+    }
+  };
+  const shown = [...filtered].sort((a, b) => Number(fav.has(b.id)) - Number(fav.has(a.id)) || cmp(a, b));
 
   // Категории: базовые + любые встречающиеся у пользователей (кастомные).
   const catList = Array.from(new Set([...CATEGORIES, ...users.map((u) => u.category ?? '').filter(Boolean)]));
@@ -124,11 +172,19 @@ export function Users() {
           ))}
         </div>
 
-        {filtered.length === 0 ? (
+        <div className="chip-row">
+          <span className="small muted" style={{ alignSelf: 'center', marginRight: 4 }}>Сортировка:</span>
+          {SORTS.map((s) => (
+            <Chip key={s.key} label={s.label} size="sm" active={sort === s.key} onClick={() => setSort(s.key)} />
+          ))}
+          {fav.size > 0 ? <span className="small muted" style={{ alignSelf: 'center', marginLeft: 6 }}>★ избранные — всегда сверху</span> : null}
+        </div>
+
+        {shown.length === 0 ? (
           <EmptyState title="Никого не нашлось" text="Измените запрос или сбросьте фильтры." />
         ) : (
           <Panel bodyStyle={{ gap: 0 }}>
-            {filtered.map((u) => {
+            {shown.map((u) => {
               const catTags = [u.category, u.tags.join(', ')].filter(Boolean).join(' · ');
               return (
                 <div
@@ -139,6 +195,17 @@ export function Users() {
                 >
                   <div style={{ minWidth: 0 }}>
                     <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                      {/* Звёздочка — в избранное (всегда сверху). Клик не должен открывать карточку. */}
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title={fav.has(u.id) ? 'Убрать из избранных' : 'В избранные — всегда сверху'}
+                        onClick={(e) => { e.stopPropagation(); toggleFav(u.id); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggleFav(u.id); } }}
+                        style={{ cursor: 'pointer', color: fav.has(u.id) ? 'var(--amber-fg)' : 'var(--text-muted-2)', fontSize: 15, lineHeight: 1 }}
+                      >
+                        {fav.has(u.id) ? '★' : '☆'}
+                      </span>
                       <span style={{ fontWeight: 600 }}>{u.name}</span>
                       {/* Код — только если у пользователя включён вход по нему. */}
                       {u.codeLoginUntil && new Date(u.codeLoginUntil) > new Date() ? (

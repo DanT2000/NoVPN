@@ -307,10 +307,10 @@ export const mockApi: ApiClient = {
     log(`Перевыпущена личная ссылка «${u.name}»`);
     return clone(u);
   },
-  async setCodeLogin(id: string, enabled: boolean): Promise<User> {
+  async setCodeLogin(id: string, enabled: boolean, forever?: boolean): Promise<User> {
     await wait(150);
     const u = state.users.find((x) => x.id === id)!;
-    u.codeLoginUntil = enabled ? '2999-01-01T00:00:00.000Z' : null;
+    u.codeLoginUntil = enabled ? (forever ? '2999-01-01T00:00:00.000Z' : new Date(Date.now() + 15 * 86400000).toISOString()) : null;
     return clone(u);
   },
 

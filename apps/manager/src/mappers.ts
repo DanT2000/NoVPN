@@ -27,6 +27,7 @@ export function rowToUser(r: any): User {
     expiresAt: r.expires_at ?? null,
     trafficLimitGb: r.traffic_limit_gb ?? null,
     trafficUsedGb: r.traffic_used_gb ?? 0,
+    retiredTrafficGb: r.retired_traffic_gb ?? 0,
     resetPolicy: r.reset_policy === 'monthly' ? 'monthly' : 'never',
     allowedServers: j<string[]>(r.allowed_servers, []),
     allowedProtocols: j<Array<'xray' | 'amneziawg'>>(r.allowed_protocols, ['xray']),

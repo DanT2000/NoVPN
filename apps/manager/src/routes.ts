@@ -994,13 +994,15 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
   res.json(u);
 });
 
-// Включить/выключить вход по коду для пользователя.
+// Включить/выключить вход по коду для пользователя. forever=true — бессрочно, без
+// автосброса через codeLoginDays (для тех, кому код нужен постоянно).
 router.post('/api/admin/users/:id/code-login', requireAdmin, (req, res) => {
   const u = repo.getUser(req.params.id!);
   if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
   const enabled = req.body?.enabled === true;
-  repo.setCodeLogin(u.id, enabled);
-  repo.addLog(`${enabled ? 'Включён' : 'Отключён'} вход по коду «${u.name}»`);
+  const forever = enabled && req.body?.forever === true;
+  repo.setCodeLogin(u.id, enabled, forever);
+  repo.addLog(`${enabled ? (forever ? 'Включён бессрочно' : 'Включён') : 'Отключён'} вход по коду «${u.name}»`);
   res.json(repo.getUser(u.id));
 });
 

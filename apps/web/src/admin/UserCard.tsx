@@ -132,10 +132,12 @@ function UserCardInner({ user }: { user: User }) {
         showToast('Ссылка перевыпущена');
       },
     });
-  const toggleCodeLogin = async (on: boolean) => {
+  // Бессрочный код: срок 2999 год — так помечает панель тех, кому код нужен постоянно.
+  const codeLoginForever = codeLoginActive && new Date(user.codeLoginUntil!).getFullYear() >= 2999;
+  const toggleCodeLogin = async (on: boolean, forever = false) => {
     try {
-      await setCodeLogin(user.id, on);
-      showToast(on ? 'Вход по коду включён' : 'Вход по коду выключен');
+      await setCodeLogin(user.id, on, forever);
+      showToast(!on ? 'Вход по коду выключен' : forever ? 'Вход по коду включён бессрочно' : 'Вход по коду включён');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не удалось изменить');
     }
@@ -355,6 +357,16 @@ function UserCardInner({ user }: { user: User }) {
         <StatCard label="Трафик" value={`${gb(user.trafficUsedGb)} / ${gb(user.trafficLimitGb)}`} />
         <StatCard label="Активность" value={rel(user.lastActivityAt)} />
       </div>
+      {/* Откуда взялась цифра трафика: часть могла остаться от уже удалённых конфигов
+          (она списана на человека, чтобы удаление конфига не возвращало квоту), плюс
+          свежий расход за месяц из почасового учёта. */}
+      {(user.retiredTrafficGb ?? 0) > 0.05 || (user.traffic30Gb ?? 0) > 0 ? (
+        <div className="small muted mono" style={{ marginTop: -4 }}>
+          {(user.retiredTrafficGb ?? 0) > 0.05 ? `из них удалённые конфиги: ${gb(user.retiredTrafficGb ?? 0)}` : ''}
+          {(user.retiredTrafficGb ?? 0) > 0.05 && (user.traffic30Gb ?? 0) > 0 ? ' · ' : ''}
+          {(user.traffic30Gb ?? 0) > 0 ? `за последние 30 дней: ${gb(user.traffic30Gb ?? 0)}` : ''}
+        </div>
+      ) : null}
 
       {/* Код + Срок в две колонки */}
       <div className="grid-2">
@@ -393,6 +405,18 @@ function UserCardInner({ user }: { user: User }) {
             </span>
             <Toggle on={codeLoginActive} onChange={(v) => void toggleCodeLogin(v)} ariaLabel="Вход по коду" />
           </label>
+          {/* Срок действия: по умолчанию код сам отключается через N дней из настроек;
+              кому он нужен постоянно — делаем бессрочным, автосброс его не тронет. */}
+          {codeLoginActive ? (
+            <div className="row" style={{ gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+              <span className="small muted">
+                {codeLoginForever ? 'Бессрочно — сам не отключится.' : `Отключится сам ${dateShort(user.codeLoginUntil!)}.`}
+              </span>
+              <button className="btn btn-outline btn-sm" onClick={() => void toggleCodeLogin(true, !codeLoginForever)}>
+                {codeLoginForever ? 'Ограничить сроком из настроек' : 'Сделать бессрочным'}
+              </button>
+            </div>
+          ) : null}
           {codeLoginActive ? (
             <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
               <span className="mono" style={{ fontSize: 22, fontWeight: 700, letterSpacing: '0.06em' }}>
@@ -723,7 +747,8 @@ function UserCardInner({ user }: { user: User }) {
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600 }}>{d.name}</div>
                   <div className="small muted">
-                    {serverName} · {PROTOCOL_LABELS[d.protocol]} · {rel(d.lastSeenAt)}
+                    {serverName} · {PROTOCOL_LABELS[d.protocol]} ·{' '}
+                    {d.lastSeenAt ? rel(d.lastSeenAt) : `ни разу не подключался · создан ${rel(d.createdAt)}`}
                   </div>
                 </div>
                 <div className="row" style={{ gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
