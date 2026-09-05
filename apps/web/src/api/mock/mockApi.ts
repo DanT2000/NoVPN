@@ -615,6 +615,17 @@ export const mockApi: ApiClient = {
         uptime24h: online ? [99.9, 100, 98.7][i % 3]! : 41.2,
         uptime7d: online ? [99.6, 99.9, 97.4][i % 3]! : 63.5,
         lastChangeAt: s.lastSyncAt ?? null,
+        load: online
+          ? {
+              at: new Date().toISOString(),
+              cpuPct: [12.4, 38.1, 7.9][i % 3]!,
+              memUsed: [1.2e9, 2.6e9, 0.9e9][i % 3]!,
+              memTotal: 4e9,
+              diskUsed: [11e9, 27e9, 6e9][i % 3]!,
+              diskTotal: 40e9,
+              uptimeSec: [864000, 172800, 43200][i % 3]!,
+            }
+          : null,
       };
     });
     return { servers };

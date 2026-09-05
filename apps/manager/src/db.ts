@@ -284,6 +284,25 @@ CREATE TABLE IF NOT EXISTS traffic_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_daily_day ON traffic_daily(day);
 
+-- Нагрузка серверов (CPU/ОЗУ/диск/сеть). Агент не нужен: читаем /proc и df тем же
+-- sync-циклом по SSH. Нужно, чтобы «здоровье сервера» отвечало не только «работает
+-- или нет», но и «что с ним». net_rx/net_tx — НАКОПИТЕЛЬНЫЕ счётчики интерфейсов,
+-- скорость считается по дельте между снимками. Держим месяц, как и расход.
+CREATE TABLE IF NOT EXISTS server_metrics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  cpu_pct REAL NOT NULL DEFAULT 0,
+  mem_used INTEGER NOT NULL DEFAULT 0,
+  mem_total INTEGER NOT NULL DEFAULT 0,
+  disk_used INTEGER NOT NULL DEFAULT 0,
+  disk_total INTEGER NOT NULL DEFAULT 0,
+  net_rx INTEGER NOT NULL DEFAULT 0,
+  net_tx INTEGER NOT NULL DEFAULT 0,
+  uptime_sec INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_server_metrics ON server_metrics(server_id, at);
+
 -- События смены состояния сервера (online<->offline) — для аптайма/инцидентов
 -- в стиле Uptime Kuma. Пишем ТОЛЬКО при смене состояния (компактно).
 CREATE TABLE IF NOT EXISTS server_status_events (

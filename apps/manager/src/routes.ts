@@ -2045,17 +2045,55 @@ router.get('/api/admin/traffic', requireAdmin, (req, res) => {
   });
 });
 router.get('/api/admin/health', requireAdmin, (_req, res) => {
+  // Последняя нагрузка по каждому серверу — чтобы «здоровье» отвечало не только
+  // «работает или нет», но и «что с ним сейчас».
+  const latest = repo.getLatestServerMetrics();
   const servers = repo.listServers().map((s) => {
     const online = s.agent === 'online';
     const u24 = repo.serverUptime(s.id, 86400000, online);
     const u7 = repo.serverUptime(s.id, 7 * 86400000, online);
+    const m = latest[s.id] ?? null;
     return {
       id: s.id, name: s.name, country: s.country ?? null, online, lastSyncAt: s.lastSyncAt ?? null, endpointOk: s.endpointOk,
       uptime24h: Math.round(u24.uptimePct * 10) / 10, uptime7d: Math.round(u7.uptimePct * 10) / 10,
       lastChangeAt: u24.lastChangeAt,
+      load: m
+        ? {
+            at: m.at,
+            cpuPct: Math.round(m.cpuPct * 10) / 10,
+            memUsed: m.memUsed, memTotal: m.memTotal,
+            diskUsed: m.diskUsed, diskTotal: m.diskTotal,
+            uptimeSec: m.uptimeSec,
+          }
+        : null,
     };
   });
   res.json({ servers });
+});
+
+// Ряд нагрузки одного сервера (графики CPU/ОЗУ/диск/сеть). Скорость сети считаем
+// здесь: в базе лежат накопительные счётчики интерфейсов, клиенту нужна скорость.
+router.get('/api/admin/servers/:id/metrics', requireAdmin, (req, res) => {
+  const s = repo.getServer(String(req.params.id ?? ''));
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const hours = Math.min(24 * 30, Math.max(1, Number(req.query.hours) || 24));
+  const rows = repo.getServerMetrics(s.id, hours * 3600000);
+  const series = rows.map((r, i) => {
+    const prev = i > 0 ? rows[i - 1]! : null;
+    const dt = prev ? (new Date(r.at).getTime() - new Date(prev.at).getTime()) / 1000 : 0;
+    // Счётчик мог обнулиться (перезагрузка) — отрицательную дельту не показываем.
+    const rate = (cur: number, was: number) => (dt > 0 && cur >= was ? Math.round((cur - was) / dt) : 0);
+    return {
+      at: r.at,
+      cpuPct: Math.round(r.cpuPct * 10) / 10,
+      memUsed: r.memUsed, memTotal: r.memTotal,
+      diskUsed: r.diskUsed, diskTotal: r.diskTotal,
+      uptimeSec: r.uptimeSec,
+      netRxBps: prev ? rate(r.netRx, prev.netRx) : 0,
+      netTxBps: prev ? rate(r.netTx, prev.netTx) : 0,
+    };
+  });
+  res.json({ serverId: s.id, name: s.name, hours, series });
 });
 
 // ── admin: бэкап базы ──

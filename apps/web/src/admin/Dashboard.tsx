@@ -291,17 +291,36 @@ export function Dashboard() {
             extra={<button type="button" style={linkBtn} onClick={() => goAdmin('servers')}>все →</button>}
             bodyStyle={{ gap: 0 }}
           >
-            {health.map((h) => (
-              <div key={h.id} className="divide-row">
-                <div className="row" style={{ gap: 10, minWidth: 0 }}>
-                  <Dot color={h.online ? 'var(--green-dot)' : 'var(--red-fg)'} />
-                  <span style={{ fontWeight: 600, ...ellipsis }}>{h.name}{h.country ? ` (${h.country})` : ''}</span>
+            {health.map((h) => {
+              // Нагрузка: диск выделяем цветом — он забивается тихо и роняет сервер.
+              const pct = (u: number, t: number) => (t > 0 ? Math.round((u / t) * 100) : 0);
+              const diskPct = h.load ? pct(h.load.diskUsed, h.load.diskTotal) : 0;
+              const memPct = h.load ? pct(h.load.memUsed, h.load.memTotal) : 0;
+              return (
+                <div key={h.id} className="divide-row" style={{ alignItems: 'flex-start' }}>
+                  <div className="row" style={{ gap: 10, minWidth: 0 }}>
+                    <Dot color={h.online ? 'var(--green-dot)' : 'var(--red-fg)'} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, ...ellipsis }}>{h.name}{h.country ? ` (${h.country})` : ''}</div>
+                      {h.load ? (
+                        <div className="small muted mono" style={{ marginTop: 2 }}>
+                          ЦП {h.load.cpuPct}% · ОЗУ {memPct}% ({gb(h.load.memUsed / 1e9)}/{gb(h.load.memTotal / 1e9)}) ·{' '}
+                          <span style={diskPct >= 90 ? { color: 'var(--red-fg)', fontWeight: 700 } : undefined}>
+                            диск {diskPct}%
+                          </span>{' '}
+                          ({gb(h.load.diskUsed / 1e9)}/{gb(h.load.diskTotal / 1e9)}) · аптайм {Math.floor(h.load.uptimeSec / 86400)} д
+                        </div>
+                      ) : (
+                        <div className="small muted" style={{ marginTop: 2 }}>нагрузка ещё не снята</div>
+                      )}
+                    </div>
+                  </div>
+                  <span className="small muted mono" style={{ flex: 'none' }}>
+                    {h.online ? 'онлайн' : 'офлайн'} · аптайм 24ч {h.uptime24h}% · 7д {h.uptime7d}%
+                  </span>
                 </div>
-                <span className="small muted mono" style={{ flex: 'none' }}>
-                  {h.online ? 'онлайн' : 'офлайн'} · аптайм 24ч {h.uptime24h}% · 7д {h.uptime7d}%
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </Panel>
         ) : null}
 

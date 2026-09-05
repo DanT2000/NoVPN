@@ -5,7 +5,8 @@
 
 import * as repo from '../repo.js';
 import { getSetting, setSetting } from '../db.js';
-import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshAddProxyUser, sshResyncDevices, sshSetXraySni, REALITY_SNI } from './sshServer.js';
+import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshAddProxyUser, sshResyncDevices, sshSetXraySni, sshReadMetrics, REALITY_SNI } from './sshServer.js';
+import type { ServerMetrics } from './sshServer.js';
 import { getServerKeys } from './keyvault.js';
 import { notifyAdmin, notifyUser } from './telegram.js';
 
@@ -35,6 +36,45 @@ function logSyncError(serverName: string, serverId: string, op: string, e: unkno
 function clearSyncErr(serverId: string, op: string): void {
   lastSyncErrAt.delete(`${serverId}|${op}`);
   lastSyncErrAt.delete(`${serverId}|__unreachable__`); // сервер ответил — снимаем и «недоступен»
+}
+
+// Нагрузку снимаем не каждый цикл: SSH-заход с секундной паузой на замер CPU не нужен
+// чаще, чем раз в 5 минут (столько же держит и запись в БД).
+const lastMetricsAt = new Map<string, number>();
+const METRICS_GAP_MS = 5 * 60 * 1000;
+
+const asGb = (b: number) => `${(b / 1e9).toFixed(1)} ГБ`;
+
+/** Предупреждения по нагрузке. Пороги консервативные, чтобы не спамить: диск важнее
+ *  всего — он забивается логами тихо и роняет сервер без единого сигнала. CPU шлём
+ *  только если держится высоким несколько замеров подряд, иначе всплеск = ложная тревога. */
+async function checkLoadAlerts(name: string, id: string, m: ServerMetrics): Promise<void> {
+  const pct = (used: number, total: number) => (total > 0 ? (used / total) * 100 : 0);
+  const day = 12 * 3600 * 1000; // не чаще двух раз в сутки на каждый вид
+  const disk = pct(m.diskUsed, m.diskTotal);
+  if (disk >= 90) {
+    await notifyAdmin(
+      `Сервер «${name}»: диск занят на ${disk.toFixed(0)}% (${asGb(m.diskUsed)} из ${asGb(m.diskTotal)}). Стоит почистить логи, иначе сервер встанет.`,
+      { key: `load-disk:${id}`, minGapMs: day },
+    );
+  }
+  const mem = pct(m.memUsed, m.memTotal);
+  if (mem >= 92) {
+    await notifyAdmin(`Сервер «${name}»: память занята на ${mem.toFixed(0)}% (${asGb(m.memUsed)} из ${asGb(m.memTotal)}).`, {
+      key: `load-mem:${id}`,
+      minGapMs: day,
+    });
+  }
+  // CPU: только устойчивая нагрузка — три последних замера (≈15 минут) подряд ≥90%.
+  if (m.cpuPct >= 90) {
+    const recent = repo.getServerMetrics(id, 20 * 60 * 1000);
+    if (recent.length >= 3 && recent.slice(-3).every((s) => s.cpuPct >= 90)) {
+      await notifyAdmin(`Сервер «${name}»: процессор держится на ${m.cpuPct.toFixed(0)}% уже ~15 минут.`, {
+        key: `load-cpu:${id}`,
+        minGapMs: day,
+      });
+    }
+  }
 }
 
 export async function syncAllServers(): Promise<void> {
@@ -97,6 +137,22 @@ export async function syncAllServers(): Promise<void> {
     for (const s of repo.listServers()) {
       if (s.detached) continue; // endpoint сохранён, физического сервера нет — sync пропускает
       if (!(await sshHasSshAccess(s.id))) continue;
+
+      // Нагрузка сервера: CPU/ОЗУ/диск/сеть тем же заходом по SSH, раз в 5 минут.
+      // Пишем ДО проверки порогов, чтобы свежий замер попал в оценку «держится ли CPU».
+      if (Date.now() - (lastMetricsAt.get(s.id) ?? 0) >= METRICS_GAP_MS) {
+        lastMetricsAt.set(s.id, Date.now());
+        try {
+          const m = await sshReadMetrics(s.id);
+          if (m) {
+            repo.recordServerMetrics(s.id, m);
+            await checkLoadAlerts(s.name, s.id, m);
+          }
+          clearSyncErr(s.id, 'Метрики нагрузки');
+        } catch (e) {
+          logSyncError(s.name, s.id, 'Метрики нагрузки', e);
+        }
+      }
 
       const hasAwg = s.protocols.includes('amneziawg');
       const hasXray = s.protocols.includes('xray');

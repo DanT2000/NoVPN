@@ -350,6 +350,18 @@ export interface ServerHealth {
   uptime24h: number;
   uptime7d: number;
   lastChangeAt: string | null;
+  /** Последний снимок нагрузки (null — ещё не собирали). */
+  load: ServerLoad | null;
+}
+
+export interface ServerLoad {
+  at: string;
+  cpuPct: number;
+  memUsed: number;
+  memTotal: number;
+  diskUsed: number;
+  diskTotal: number;
+  uptimeSec: number;
 }
 
 export type { Device };

@@ -1042,6 +1042,50 @@ export async function sshPing(serverId: string): Promise<void> {
   await runScript(creds(serverId), 'echo ok', 40000);
 }
 
+/** Мгновенные метрики нагрузки сервера. Агент не нужен: всё читается из /proc и df
+ *  одной короткой командой в том же sync-цикле, что уже ходит по SSH.
+ *  CPU считаем честно — два замера /proc/stat с паузой в секунду (мгновенная
+ *  загрузка, а не load average, который на多ядерных вводит в заблуждение).
+ *  Сеть отдаём НАКОПИТЕЛЬНО (байты с загрузки) — скорость панель считает по дельте. */
+export interface ServerMetrics {
+  cpuPct: number;
+  memTotal: number;
+  memUsed: number;
+  diskTotal: number;
+  diskUsed: number;
+  netRx: number;
+  netTx: number;
+  uptimeSec: number;
+}
+export async function sshReadMetrics(serverId: string): Promise<ServerMetrics | null> {
+  const script = `set +e
+r1=$(awk '/^cpu /{t=0; for(i=2;i<=NF;i++) t+=$i; print t" "($5+$6)}' /proc/stat)
+sleep 1
+r2=$(awk '/^cpu /{t=0; for(i=2;i<=NF;i++) t+=$i; print t" "($5+$6)}' /proc/stat)
+CPU=$(echo "$r1 $r2" | awk '{dt=$3-$1; di=$4-$2; if(dt>0){v=100*(dt-di)/dt; if(v<0)v=0; if(v>100)v=100; printf "%.1f", v} else printf "0"}')
+MEM=$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{printf "%d %d", t*1024, (t-a)*1024}' /proc/meminfo)
+DISK=$(df -B1 / 2>/dev/null | awk 'NR==2{printf "%d %d", $2, $3}')
+NET=$(awk 'NR>2{gsub(/:/," "); if($1!="lo"){rx+=$2; tx+=$10}} END{printf "%d %d", rx, tx}' /proc/net/dev)
+UP=$(awk '{printf "%d", $1}' /proc/uptime)
+echo "METRICS $CPU $MEM $DISK $NET $UP"`;
+  const out = await runScript(creds(serverId), script, 40000);
+  const line = out.split('\n').find((l) => l.startsWith('METRICS '));
+  if (!line) return null;
+  const p = line.trim().split(/\s+/).slice(1).map(Number);
+  // cpu, memTotal, memUsed, diskTotal, diskUsed, netRx, netTx, uptime
+  if (p.length < 8 || p.some((v) => !Number.isFinite(v))) return null;
+  return {
+    cpuPct: p[0]!,
+    memTotal: p[1]!,
+    memUsed: p[2]!,
+    diskTotal: p[3]!,
+    diskUsed: p[4]!,
+    netRx: p[5]!,
+    netTx: p[6]!,
+    uptimeSec: p[7]!,
+  };
+}
+
 export async function sshRevokeXray(server: Server, uuid: string): Promise<void> {
   assertUuid(uuid); // защита от инъекции в python -c (значение может быть из импорта)
   const script = `set -e

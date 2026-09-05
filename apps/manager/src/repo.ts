@@ -1732,6 +1732,64 @@ export function getDailyTrafficSince(): string | null {
   return r?.d ?? null;
 }
 
+// ── нагрузка серверов (CPU/ОЗУ/диск/сеть) ──
+
+export interface ServerMetricSample {
+  at: string;
+  cpuPct: number;
+  memUsed: number;
+  memTotal: number;
+  diskUsed: number;
+  diskTotal: number;
+  netRx: number;
+  netTx: number;
+  uptimeSec: number;
+}
+
+/** Снимок нагрузки сервера. Throttled (не чаще раза в 5 мин), старое (>30 дней) чистим. */
+export function recordServerMetrics(
+  serverId: string,
+  m: { cpuPct: number; memUsed: number; memTotal: number; diskUsed: number; diskTotal: number; netRx: number; netTx: number; uptimeSec: number },
+  minGapMin = 5,
+): void {
+  const last = db.prepare('SELECT at FROM server_metrics WHERE server_id=? ORDER BY id DESC LIMIT 1').get(serverId) as { at: string } | undefined;
+  if (last && Date.now() - new Date(last.at).getTime() < minGapMin * 60000) return;
+  db.prepare(
+    'INSERT INTO server_metrics(server_id,at,cpu_pct,mem_used,mem_total,disk_used,disk_total,net_rx,net_tx,uptime_sec) VALUES(?,?,?,?,?,?,?,?,?,?)',
+  ).run(serverId, nowIso(), m.cpuPct, m.memUsed, m.memTotal, m.diskUsed, m.diskTotal, m.netRx, m.netTx, m.uptimeSec);
+  db.prepare('DELETE FROM server_metrics WHERE at < ?').run(new Date(Date.now() - 30 * 86400000).toISOString());
+}
+
+/** Ряд метрик сервера за период (для графиков нагрузки). */
+export function getServerMetrics(serverId: string, sinceMs: number): ServerMetricSample[] {
+  const since = new Date(Date.now() - sinceMs).toISOString();
+  return db
+    .prepare(
+      `SELECT at, cpu_pct AS cpuPct, mem_used AS memUsed, mem_total AS memTotal,
+              disk_used AS diskUsed, disk_total AS diskTotal, net_rx AS netRx, net_tx AS netTx, uptime_sec AS uptimeSec
+         FROM server_metrics WHERE server_id=? AND at >= ? ORDER BY at ASC`,
+    )
+    .all(serverId, since) as ServerMetricSample[];
+}
+
+/** Последний снимок по каждому серверу — для списка «здоровье серверов». */
+export function getLatestServerMetrics(): Record<string, ServerMetricSample> {
+  const rows = db
+    .prepare(
+      `SELECT m.server_id AS serverId, m.at, m.cpu_pct AS cpuPct, m.mem_used AS memUsed, m.mem_total AS memTotal,
+              m.disk_used AS diskUsed, m.disk_total AS diskTotal, m.net_rx AS netRx, m.net_tx AS netTx, m.uptime_sec AS uptimeSec
+         FROM server_metrics m
+         JOIN (SELECT server_id, MAX(id) AS id FROM server_metrics GROUP BY server_id) t ON t.id = m.id`,
+    )
+    .all() as Array<ServerMetricSample & { serverId: string }>;
+  const out: Record<string, ServerMetricSample> = {};
+  for (const r of rows) {
+    const { serverId, ...rest } = r;
+    out[serverId] = rest;
+  }
+  return out;
+}
+
 /** Событие смены состояния сервера — пишем только при изменении (компактно). */
 export function recordServerStatus(serverId: string, online: boolean): void {
   const last = db.prepare('SELECT online FROM server_status_events WHERE server_id=? ORDER BY id DESC LIMIT 1').get(serverId) as { online: number } | undefined;
