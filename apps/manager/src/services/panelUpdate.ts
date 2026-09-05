@@ -81,11 +81,16 @@ export async function triggerUpdate(): Promise<{ ok: true; status: number }> {
   if (!url) throw new Error('Хук обновления не настроен. Укажите его в настройках панели.');
   if (!/^https:\/\//i.test(url)) throw new Error('Хук обновления должен быть https-ссылкой.');
   const token = String(s.updateHookToken ?? '').trim();
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    signal: AbortSignal.timeout(20000),
-  });
+  const send = (method: 'POST' | 'GET') =>
+    fetch(url, {
+      method,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+  // Обычные вебхуки принимают POST, а деплой Coolify отдаётся по GET. Пробуем POST и,
+  // если метод не поддержан, повторяем GET — чтобы работало и там, и там.
+  let r = await send('POST');
+  if (r.status === 404 || r.status === 405) r = await send('GET');
   // 2xx — сборка принята. Тело не разбираем: у разных CI оно своё.
   if (!r.ok) throw new Error(`Хук ответил ${r.status}. Проверьте ссылку и токен.`);
   repo.addLog(`Запущено обновление панели (текущая версия ${currentVersion()})`);
