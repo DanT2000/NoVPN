@@ -1651,6 +1651,87 @@ export function getStatsSeries(sinceMs: number): StatsSample[] {
     .all(since) as StatsSample[];
 }
 
+// ── посуточный расход по устройствам («кто израсходовал столько трафика») ──
+// stats_samples хранит только общий итог, поэтому аномальный день по нему не
+// разложить. Здесь копим ту же дельту, что и накопительные счётчики устройства.
+
+/** Сколько суток держим подробности: месяц — дальше они не нужны, только место. */
+const DAILY_KEEP_DAYS = 30;
+
+/** Ключ суток YYYY-MM-DD (UTC). */
+function dayKey(d = new Date()): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Прибавить расход устройства к текущим суткам (вызывается из sync). */
+export function addDailyTraffic(deviceId: string, bytes: number): void {
+  if (!deviceId || !Number.isFinite(bytes) || bytes <= 0) return;
+  db.prepare(
+    'INSERT INTO traffic_daily(day, device_id, bytes) VALUES(?,?,?) ON CONFLICT(day, device_id) DO UPDATE SET bytes = bytes + excluded.bytes',
+  ).run(dayKey(), deviceId, Math.round(bytes));
+}
+
+/** Чистка подробностей старше месяца. */
+export function pruneDailyTraffic(keepDays = DAILY_KEEP_DAYS): void {
+  db.prepare('DELETE FROM traffic_daily WHERE day < ?').run(dayKey(new Date(Date.now() - keepDays * 86400000)));
+}
+
+export interface TrafficDay { day: string; bytes: number }
+export interface TrafficWhoDevice { deviceId: string; name: string; protocol: string; serverName: string; bytes: number }
+export interface TrafficWho { userId: string | null; userName: string; bytes: number; devices: TrafficWhoDevice[] }
+
+/** Посуточный ряд расхода; можно ограничить одним сервером. */
+export function getDailyTrafficSeries(fromDay: string, toDay: string, serverId?: string | null): TrafficDay[] {
+  const args: unknown[] = [fromDay, toDay];
+  let where = 't.day >= ? AND t.day <= ?';
+  if (serverId) { where += ' AND d.server_id = ?'; args.push(serverId); }
+  return db
+    .prepare(
+      `SELECT t.day AS day, COALESCE(SUM(t.bytes),0) AS bytes
+         FROM traffic_daily t JOIN devices d ON d.id = t.device_id
+        WHERE ${where} GROUP BY t.day ORDER BY t.day ASC`,
+    )
+    .all(...args) as TrafficDay[];
+}
+
+/** Кто сколько израсходовал за период, с раскрытием до устройств. */
+export function getDailyTrafficWho(fromDay: string, toDay: string, serverId?: string | null): TrafficWho[] {
+  const args: unknown[] = [fromDay, toDay];
+  let where = 't.day >= ? AND t.day <= ?';
+  if (serverId) { where += ' AND d.server_id = ?'; args.push(serverId); }
+  const rows = db
+    .prepare(
+      `SELECT d.user_id AS userId, COALESCE(u.name,'(удалён)') AS userName, d.id AS deviceId,
+              COALESCE(d.name,'') AS deviceName, COALESCE(d.protocol,'') AS protocol,
+              COALESCE(s.name, d.server_id) AS serverName, COALESCE(SUM(t.bytes),0) AS bytes
+         FROM traffic_daily t
+         JOIN devices d ON d.id = t.device_id
+         LEFT JOIN users u ON u.id = d.user_id
+         LEFT JOIN servers s ON s.id = d.server_id
+        WHERE ${where}
+        GROUP BY d.id ORDER BY bytes DESC`,
+    )
+    .all(...args) as Array<TrafficWhoDevice & { userId: string | null; userName: string; deviceName: string }>;
+  const byUser = new Map<string, TrafficWho>();
+  for (const r of rows) {
+    const key = r.userId ?? '—';
+    let u = byUser.get(key);
+    if (!u) {
+      u = { userId: r.userId, userName: r.userName, bytes: 0, devices: [] };
+      byUser.set(key, u);
+    }
+    u.bytes += r.bytes;
+    u.devices.push({ deviceId: r.deviceId, name: r.deviceName, protocol: r.protocol, serverName: r.serverName, bytes: r.bytes });
+  }
+  return [...byUser.values()].sort((a, b) => b.bytes - a.bytes);
+}
+
+/** С какого дня есть подробности (чтобы честно показать «копится с …»). */
+export function getDailyTrafficSince(): string | null {
+  const r = db.prepare('SELECT MIN(day) AS d FROM traffic_daily').get() as { d: string | null } | undefined;
+  return r?.d ?? null;
+}
+
 /** Событие смены состояния сервера — пишем только при изменении (компактно). */
 export function recordServerStatus(serverId: string, online: boolean): void {
   const last = db.prepare('SELECT online FROM server_status_events WHERE server_id=? ORDER BY id DESC LIMIT 1').get(serverId) as { online: number } | undefined;

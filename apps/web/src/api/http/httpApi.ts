@@ -35,6 +35,7 @@ import type {
   ServerHealth,
   ServerProxyConfig,
   StatsPoint,
+  TrafficBreakdown,
   UpdateUserPatch,
 } from '../types';
 
@@ -155,6 +156,13 @@ export const httpApi: ApiClient = {
   saveSettings: (input: AppSettings) => req<AppSettings>('PUT', '/api/admin/settings', input),
   getStats: (days: number) => req<{ days: number; series: StatsPoint[] }>('GET', `/api/admin/stats?days=${days}`),
   getHealth: () => req<{ servers: ServerHealth[] }>('GET', '/api/admin/health'),
+  getTraffic: (p) => {
+    const q = new URLSearchParams();
+    if (p.from) q.set('from', p.from);
+    if (p.to) q.set('to', p.to);
+    if (p.serverId) q.set('serverId', p.serverId);
+    return req<TrafficBreakdown>('GET', `/api/admin/traffic?${q.toString()}`);
+  },
 
   getDesktop: () => req<DesktopStatus>('GET', '/api/admin/desktop'),
   saveDesktopConfig: (patch) =>

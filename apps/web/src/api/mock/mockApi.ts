@@ -579,6 +579,33 @@ export const mockApi: ApiClient = {
     });
     return { days, series };
   },
+  async getTraffic(p: { from?: string; to?: string; serverId?: string | null }) {
+    await wait(180);
+    // Синтетика для демо: суточный ряд + «кто израсходовал» из текущих устройств.
+    const to = p.to ?? new Date().toISOString().slice(0, 10);
+    const from = p.from ?? new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+    const days = Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1);
+    const series = Array.from({ length: days }, (_, i) => ({
+      day: new Date(Date.parse(from) + i * 86400000).toISOString().slice(0, 10),
+      bytes: Math.round((8 + 26 * Math.abs(Math.sin(i * 1.3))) * 1e9),
+    }));
+    const devs = state.devices.filter((d) => !p.serverId || d.serverId === p.serverId);
+    const byUser = new Map<string, { userId: string | null; userName: string; bytes: number; devices: Array<{ deviceId: string; name: string; protocol: string; serverName: string; bytes: number }> }>();
+    devs.forEach((d, i) => {
+      const u = state.users.find((x) => x.id === d.userId);
+      const key = d.userId ?? '—';
+      const bytes = Math.round((1 + 9 * Math.abs(Math.sin(i * 2.1))) * 1e9);
+      let e = byUser.get(key);
+      if (!e) { e = { userId: d.userId ?? null, userName: u?.name ?? '(удалён)', bytes: 0, devices: [] }; byUser.set(key, e); }
+      e.bytes += bytes;
+      e.devices.push({ deviceId: d.id, name: d.name ?? '', protocol: d.protocol ?? '', serverName: state.servers.find((s) => s.id === d.serverId)?.name ?? '—', bytes });
+    });
+    return {
+      from, to, serverId: p.serverId ?? null,
+      since: from, keepDays: 30, series,
+      who: [...byUser.values()].sort((a, b) => b.bytes - a.bytes),
+    };
+  },
   async getHealth() {
     await wait(200);
     const servers = state.servers.map((s, i) => {

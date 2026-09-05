@@ -12,11 +12,17 @@ export function BarChart({
   height = 180,
   format = (v: number) => String(Math.round(v)),
   empty = 'Пока мало данных — история копится (снимок раз в ~10 минут).',
+  onSelect,
+  selected = null,
 }: {
   bars: Bar[];
   height?: number;
   format?: (v: number) => string;
   empty?: string;
+  /** Клик по столбцу (напр. «показать, кто израсходовал в этот день»). */
+  onSelect?: (index: number) => void;
+  /** Подсвеченный столбец. */
+  selected?: number | null;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   if (bars.length === 0) {
@@ -46,13 +52,16 @@ export function BarChart({
           <div
             key={i}
             onMouseEnter={() => setHover(i)}
+            onClick={onSelect ? () => onSelect(i) : undefined}
             title=""
-            style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'flex-end', cursor: 'default' }}
+            style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', alignItems: 'flex-end', cursor: onSelect ? 'pointer' : 'default' }}
           >
             <div
               style={{
                 width: '100%', height: `${Math.max(2, (b.value / max) * 100)}%`,
-                background: 'var(--accent)', opacity: hover === i ? 1 : 0.5,
+                // Выбранный столбец держим ярким, чтобы было видно, за какой день разбивка.
+                background: selected === i ? 'var(--accent-light, var(--accent))' : 'var(--accent)',
+                opacity: hover === i || selected === i ? 1 : 0.5,
                 borderRadius: '3px 3px 0 0', transition: 'opacity .1s',
               }}
             />

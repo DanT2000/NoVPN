@@ -152,6 +152,9 @@ export async function syncAllServers(): Promise<void> {
             };
             if (p.handshake > 0) fields.last_seen_at = new Date(p.handshake * 1000).toISOString();
             repo.updateDeviceFields(d.id, fields);
+            // Тот же прирост кладём в посуточную разбивку — по ней потом видно,
+            // кто именно израсходовал трафик в конкретный день.
+            repo.addDailyTraffic(d.id, rxDelta + txDelta);
             if (d.userId) affected.add(d.userId);
           }
         } catch (e) {
@@ -184,6 +187,8 @@ export async function syncAllServers(): Promise<void> {
             // Был трафик в этом цикле → устройство сейчас активно.
             if ((x.up || 0) + (x.down || 0) > 0) fields.last_seen_at = now;
             repo.updateDeviceFields(d.id, fields);
+            // Тот же прирост — в посуточную разбивку (кто израсходовал и когда).
+            repo.addDailyTraffic(d.id, (x.up || 0) + (x.down || 0));
             if (d.userId) affected.add(d.userId);
           }
         } catch (e) {
@@ -377,6 +382,7 @@ export async function syncAllServers(): Promise<void> {
     try {
       for (const s of repo.listServers()) if (!s.detached) repo.recordServerStatus(s.id, s.agent === 'online');
       repo.recordStatsSample();
+      repo.pruneDailyTraffic(); // подробности расхода держим месяц
       if (repo.getSettings().dailyDigest !== false) {
         const digest = repo.buildDailyDigestIfDue();
         if (digest) void notifyAdmin(digest, { key: 'daily-digest', minGapMs: 0 }).catch(() => {});

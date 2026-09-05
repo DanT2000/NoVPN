@@ -271,6 +271,19 @@ CREATE TABLE IF NOT EXISTS stats_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_stats_at ON stats_samples(at);
 
+-- Посуточный расход по КАЖДОМУ устройству. stats_samples хранит только общий итог,
+-- поэтому «кто именно съел 134 ГБ в пятницу» по нему не ответить. Здесь копим ту же
+-- дельту, которую sync и так вычисляет по счётчикам устройства, — из неё считается
+-- любой срез (человек, сервер, протокол). Строк мало (одна на устройство в сутки),
+-- старше месяца чистим: подробности нужны только для разбора свежих аномалий.
+CREATE TABLE IF NOT EXISTS traffic_daily (
+  day TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_daily_day ON traffic_daily(day);
+
 -- События смены состояния сервера (online<->offline) — для аптайма/инцидентов
 -- в стиле Uptime Kuma. Пишем ТОЛЬКО при смене состояния (компактно).
 CREATE TABLE IF NOT EXISTS server_status_events (

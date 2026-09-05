@@ -5,7 +5,7 @@ import type { KeyboardEvent } from 'react';
 import type { User } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
-import type { StatsPoint, ServerHealth } from '../api/types';
+import type { StatsPoint, ServerHealth, TrafficBreakdown } from '../api/types';
 import { Panel, Dot, ScreenHeader, Loading, Chip } from '../components/ui';
 import { BarChart, type Bar } from '../components/Chart';
 import { statusOf } from '../lib/status';
@@ -25,6 +25,8 @@ const METRICS: Array<{ key: Metric; label: string; hint: string }> = [
 
 const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 const pad = (n: number) => String(n).padStart(2, '0');
+/** Ключ суток YYYY-MM-DD в UTC — ровно так их пишет панель в посуточную таблицу. */
+const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /** Раскладываем накопительную серию по корзинам: сутки → по часам, неделя/месяц → по
  *  дням. Трафик = ПРИРОСТ за корзину (реальное использование за период), активность =
@@ -34,7 +36,7 @@ const pad = (n: number) => String(n).padStart(2, '0');
  *  (цикл синка увидел не все устройства из-за холодного SSH) и на следующем снимке
  *  вернуться назад. Этот «возврат» — не реальный трафик. Запоминаем провал и гасим им
  *  последующий скачок, иначе фантомные сотни ГБ «за час». */
-function bucketize(series: StatsPoint[], days: number, metric: Metric): Bar[] {
+function bucketize(series: StatsPoint[], days: number, metric: Metric): Array<Bar & { at: number }> {
   if (series.length === 0) return [];
   const now = Date.now();
   const byHour = days <= 1;
@@ -67,7 +69,9 @@ function bucketize(series: StatsPoint[], days: number, metric: Metric): Bar[] {
     .map(([bk, v]) => {
       const d = new Date(bk);
       const label = byHour ? `${pad(d.getHours())}:00` : `${WD[d.getDay()]}, ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
-      return { label, value: metric === 'traffic' ? v.traffic : v.used };
+      // `at` — начало корзины: по нему клик на столбце знает, за какой день просить
+      // разбивку «кто израсходовал».
+      return { label, value: metric === 'traffic' ? v.traffic : v.used, at: bk };
     });
 }
 
@@ -101,6 +105,12 @@ export function Dashboard() {
   const [metric, setMetric] = useState<Metric>('traffic');
   const [series, setSeries] = useState<StatsPoint[] | null>(null);
   const [health, setHealth] = useState<ServerHealth[] | null>(null);
+  // Разбор аномального дня: какой день выбран на графике, по какому серверу
+  // фильтруем и кто сколько израсходовал.
+  const [selDay, setSelDay] = useState<string | null>(null);
+  const [srvFilter, setSrvFilter] = useState<string | null>(null);
+  const [who, setWho] = useState<TrafficBreakdown | null>(null);
+  const [whoBusy, setWhoBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -112,11 +122,24 @@ export function Dashboard() {
     api.getHealth().then((r) => { if (alive) setHealth(r.servers); }).catch(() => { if (alive) setHealth([]); });
     return () => { alive = false; };
   }, []);
+  // Кто израсходовал за выбранный день (и по выбранному серверу).
+  useEffect(() => {
+    if (!selDay) { setWho(null); return; }
+    let alive = true;
+    setWhoBusy(true);
+    api
+      .getTraffic({ from: selDay, to: selDay, serverId: srvFilter })
+      .then((r) => { if (alive) setWho(r); })
+      .catch(() => { if (alive) setWho(null); })
+      .finally(() => { if (alive) setWhoBusy(false); });
+    return () => { alive = false; };
+  }, [selDay, srvFilter]);
 
   if (loadError) return <div className="notice notice-red">{loadError}</div>;
   if (loading || !data) return <Loading text="Загружаем данные…" />;
 
   const bars = series ? bucketize(series, win, metric) : [];
+  const selIdx = selDay ? bars.findIndex((b) => dayOf(b.at) === selDay) : -1;
   const periodTotal = bars.reduce((s, b) => s + b.value, 0);
   const metricInfo = METRICS.find((m) => m.key === metric)!;
 
@@ -213,8 +236,52 @@ export function Dashboard() {
             <BarChart
               bars={bars}
               format={metric === 'traffic' ? (v) => gb(v) : (v) => `${Math.round(v)} конф.`}
+              onSelect={metric === 'traffic' ? (i) => setSelDay(dayOf(bars[i]!.at)) : undefined}
+              selected={selIdx >= 0 ? selIdx : null}
             />
           )}
+
+          {/* Разбор дня: общий график даёт только сумму, а по аномальному дню нужно
+              видеть конкретных людей. Подробности копятся посуточно и живут месяц. */}
+          {metric === 'traffic' && series !== null && bars.length > 0 ? (
+            <div style={{ marginTop: 14, borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+              <div className="row-between" style={{ gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                <span className="small muted">
+                  {selDay ? `Кто израсходовал за ${selDay}` : 'Нажмите на столбец — покажу, кто израсходовал в этот день'}
+                </span>
+                <div className="chip-row">
+                  <Chip label="Все серверы" size="sm" active={!srvFilter} onClick={() => setSrvFilter(null)} />
+                  {servers.map((s) => (
+                    <Chip key={s.id} label={s.name} size="sm" active={srvFilter === s.id} onClick={() => setSrvFilter(s.id)} />
+                  ))}
+                  {selDay ? <Chip label="Сбросить день" size="sm" onClick={() => setSelDay(null)} /> : null}
+                </div>
+              </div>
+              {selDay ? (
+                whoBusy ? (
+                  <div className="small muted" style={{ padding: '10px 0' }}>Считаем…</div>
+                ) : !who || who.who.length === 0 ? (
+                  <div className="small muted" style={{ padding: '10px 0' }}>
+                    {who?.since
+                      ? 'За этот день подробностей нет.'
+                      : 'Подробности пока не накопились — сбор включён, данные появятся со следующих суток.'}
+                  </div>
+                ) : (
+                  who.who.slice(0, 15).map((u) => (
+                    <div key={u.userId ?? u.userName} className="divide-row">
+                      <div className="row" style={{ gap: 8, minWidth: 0 }}>
+                        <span style={{ fontWeight: 600, ...ellipsis }}>{u.userName}</span>
+                        <span className="small muted mono" style={{ flex: 'none' }}>
+                          {[...new Set(u.devices.map((d) => `${d.protocol} · ${d.serverName}`))].join(', ')}
+                        </span>
+                      </div>
+                      <span className="mono" style={{ flex: 'none', fontWeight: 700 }}>{gb(u.bytes / 1e9)}</span>
+                    </div>
+                  ))
+                )
+              ) : null}
+            </div>
+          ) : null}
         </Panel>
 
         {/* Здоровье серверов: аптайм за сутки/неделю (в стиле Uptime-мониторинга) */}

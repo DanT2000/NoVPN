@@ -281,6 +281,25 @@ export interface ApiClient {
   // ── admin: графики истории + здоровье серверов ──
   getStats(days: number): Promise<{ days: number; series: StatsPoint[] }>;
   getHealth(): Promise<{ servers: ServerHealth[] }>;
+  /** Посуточный расход с разбивкой «кто израсходовал» (опционально по одному серверу). */
+  getTraffic(p: { from?: string; to?: string; serverId?: string | null }): Promise<TrafficBreakdown>;
+}
+
+/** Расход за период: суточный ряд + кто именно израсходовал. */
+export interface TrafficBreakdown {
+  from: string;
+  to: string;
+  serverId: string | null;
+  /** С какого дня копятся подробности (null — данных ещё нет). */
+  since: string | null;
+  keepDays: number;
+  series: Array<{ day: string; bytes: number }>;
+  who: Array<{
+    userId: string | null;
+    userName: string;
+    bytes: number;
+    devices: Array<{ deviceId: string; name: string; protocol: string; serverName: string; bytes: number }>;
+  }>;
 }
 
 export interface StatsPoint {

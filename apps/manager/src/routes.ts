@@ -2019,6 +2019,31 @@ router.get('/api/admin/stats', requireAdmin, (req, res) => {
   const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
   res.json({ days, series: repo.getStatsSeries(days * 86400000) });
 });
+
+// Посуточный расход с разбивкой «кто израсходовал»: общий график показывает только
+// сумму, а по аномальному дню нужно видеть конкретных людей. Период — сутки или
+// произвольный диапазон (неделя), можно ограничить одним сервером.
+router.get('/api/admin/traffic', requireAdmin, (req, res) => {
+  const day = (v: unknown): string | null => {
+    const s = String(v ?? '').trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
+  const today = new Date().toISOString().slice(0, 10);
+  const to = day(req.query.to) ?? today;
+  const from = day(req.query.from) ?? new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+  const serverId = String(req.query.serverId ?? '').trim() || null;
+  // Сервер должен существовать — иначе молча вернули бы пустоту как «нет расхода».
+  if (serverId && !repo.getServer(serverId)) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  res.json({
+    from,
+    to,
+    serverId,
+    since: repo.getDailyTrafficSince(), // с какого дня вообще копятся подробности
+    keepDays: 30,
+    series: repo.getDailyTrafficSeries(from, to, serverId),
+    who: repo.getDailyTrafficWho(from, to, serverId),
+  });
+});
 router.get('/api/admin/health', requireAdmin, (_req, res) => {
   const servers = repo.listServers().map((s) => {
     const online = s.agent === 'online';
