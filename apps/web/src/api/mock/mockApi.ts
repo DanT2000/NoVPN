@@ -606,6 +606,14 @@ export const mockApi: ApiClient = {
       who: [...byUser.values()].sort((a, b) => b.bytes - a.bytes),
     };
   },
+  async getPanelUpdate() {
+    await wait(150);
+    return { current: '1.0.0', latest: '1.0.1', updateAvailable: true, hookConfigured: false, checkedAt: new Date().toISOString() };
+  },
+  async runPanelUpdate() {
+    await wait(300);
+    return { ok: true, status: 200, version: '1.0.0' };
+  },
   async getHealth() {
     await wait(200);
     const servers = state.servers.map((s, i) => {

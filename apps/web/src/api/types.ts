@@ -283,6 +283,21 @@ export interface ApiClient {
   getHealth(): Promise<{ servers: ServerHealth[] }>;
   /** Посуточный расход с разбивкой «кто израсходовал» (опционально по одному серверу). */
   getTraffic(p: { from?: string; to?: string; serverId?: string | null }): Promise<TrafficBreakdown>;
+  /** Есть ли новая версия панели на GitHub. */
+  getPanelUpdate(): Promise<PanelUpdateState>;
+  /** Запустить обновление панели (панель перезапустится). */
+  runPanelUpdate(): Promise<{ ok: boolean; status: number; version: string }>;
+}
+
+/** Состояние обновления панели. */
+export interface PanelUpdateState {
+  current: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  /** Настроен ли хук пересборки — без него обновиться нельзя. */
+  hookConfigured: boolean;
+  checkedAt: string;
+  error?: string;
 }
 
 /** Расход за период: суточный ряд + кто именно израсходовал. */

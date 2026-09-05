@@ -36,6 +36,7 @@ import type {
   ServerProxyConfig,
   StatsPoint,
   TrafficBreakdown,
+  PanelUpdateState,
   UpdateUserPatch,
 } from '../types';
 
@@ -163,6 +164,8 @@ export const httpApi: ApiClient = {
     if (p.serverId) q.set('serverId', p.serverId);
     return req<TrafficBreakdown>('GET', `/api/admin/traffic?${q.toString()}`);
   },
+  getPanelUpdate: () => req<PanelUpdateState>('GET', '/api/admin/panel/update'),
+  runPanelUpdate: () => req<{ ok: boolean; status: number; version: string }>('POST', '/api/admin/panel/update'),
 
   getDesktop: () => req<DesktopStatus>('GET', '/api/admin/desktop'),
   saveDesktopConfig: (patch) =>

@@ -276,6 +276,12 @@ export interface AppSettings {
   extEdgeUrl?: string;
   extYandexUrl?: string;
   extFirefoxUrl?: string;
+  /** Обновление панели. Панель работает Docker-образом, который собирает CI из GitHub,
+   *  поэтому «подменить себя» нельзя — по кнопке «Обновить» она шлёт POST на этот хук,
+   *  а CI забирает свежий код и перезапускает контейнер. Пусто → кнопка недоступна. */
+  updateHookUrl?: string;
+  /** Токен для хука (уходит как Bearer), если CI его требует. */
+  updateHookToken?: string;
 }
 
 // ── Умная маршрутизация (Smart Routing) — управляемые JSON-файлы для NoVPN Desktop ──

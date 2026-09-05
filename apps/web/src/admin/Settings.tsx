@@ -1,10 +1,11 @@
 // A10 — Настройки. Брендинг, значения по умолчанию, шаблон и параметры безопасности.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AppSettings, UserProtocol } from '@novpn/shared';
 import { RU_WHITELIST_ROUTES } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
+import type { PanelUpdateState } from '../api/types';
 import { Chip, Field, Panel } from '../components/ui';
 
 const PROTO_OPTIONS: Array<{ value: UserProtocol; label: string }> = [
@@ -39,6 +40,11 @@ export function Settings() {
   const [adminChatId, setAdminChatId] = useState(s?.adminTelegramChatId ?? '');
   const [notifyErrors, setNotifyErrors] = useState(s?.notifyErrors !== false);
   const [dailyDigest, setDailyDigest] = useState(s?.dailyDigest !== false);
+  // Обновление панели: хук пересборки и состояние проверки версии.
+  const [hookUrl, setHookUrl] = useState(s?.updateHookUrl ?? '');
+  const [hookToken, setHookToken] = useState(s?.updateHookToken ?? '');
+  const [upd, setUpd] = useState<PanelUpdateState | null>(null);
+  const [updBusy, setUpdBusy] = useState(false);
   // Редактируемый список доменов обхода (по строке на домен). Если у панели он ещё не
   // задан явно — префилл встроенным дефолтом (146 доменов), чтобы админ видел и правил их.
   const wlDefaultText = RU_WHITELIST_ROUTES.join('\n');
@@ -65,6 +71,14 @@ export function Settings() {
   const [bkBusy, setBkBusy] = useState(false);
   const [restoreFile, setRestoreFile] = useState<string | null>(null);
   const [restorePass, setRestorePass] = useState('');
+
+  // Версию панели спрашиваем при открытии экрана: без этого админ не узнает, что вышло
+  // обновление. Ошибку глушим — блок покажет «—», кнопка проверки всегда под рукой.
+  useEffect(() => {
+    let alive = true;
+    api.getPanelUpdate().then((r) => { if (alive) setUpd(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   if (!data || !s) return null;
 
@@ -179,6 +193,8 @@ export function Settings() {
 
   // Настройки изменены? Тогда показываем липкую панель сохранения.
   const dirty =
+    hookUrl !== (s.updateHookUrl ?? '') ||
+    hookToken !== (s.updateHookToken ?? '') ||
     domain !== (s.domain ?? '') ||
     JSON.stringify(defaultProtocols) !== JSON.stringify(s.defaultProtocols ?? []) ||
     messageTemplate !== (s.messageTemplate ?? '') ||
@@ -215,6 +231,8 @@ export function Settings() {
         dailyDigest,
         // Совпадает со встроенным → пусто (не морозим список, ловим обновления из кода).
         whitelistDomains: wlIsBuiltin ? [] : wlLines,
+        updateHookUrl: hookUrl.trim(),
+        updateHookToken: hookToken.trim(),
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
@@ -488,6 +506,99 @@ export function Settings() {
             Перезапуск нужен, если меняли домен или переменные окружения. Занимает
             несколько секунд, выданные конфиги при этом не затрагиваются.
           </div>
+        </Panel>
+
+        {/* Обновление панели — только вручную: человек сам решает, когда перезапускать. */}
+        <Panel title="Обновление панели">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Панель работает образом, который собирается из GitHub. Обновление запускается
+            только вручную: она проверяет, есть ли версия новее, а по кнопке просит сборку
+            собраться заново из свежего кода. Панель при этом перезапустится (пара минут),
+            VPN у пользователей продолжит работать.
+          </div>
+
+          <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+            <span className="mono small">
+              Текущая версия: <b>{upd?.current ?? '—'}</b>
+              {upd?.latest ? <> · на GitHub: <b>{upd.latest}</b></> : null}
+            </span>
+            {upd?.updateAvailable ? (
+              <span className="chip chip-sm" style={{ color: 'var(--green-fg)' }}>доступно обновление</span>
+            ) : upd && !upd.error ? (
+              <span className="small muted">установлена последняя</span>
+            ) : null}
+          </div>
+          {upd?.error ? <div className="notice notice-amber" style={{ marginBottom: 10 }}>{upd.error}</div> : null}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            <Field label="Ссылка хука пересборки">
+              <input
+                className="input"
+                placeholder="https://…/api/v1/deploy?uuid=…"
+                value={hookUrl}
+                onChange={(e) => setHookUrl(e.target.value)}
+              />
+            </Field>
+            <Field label="Токен хука (если нужен)">
+              <input
+                className="input"
+                type="password"
+                placeholder="Bearer-токен"
+                value={hookToken}
+                onChange={(e) => setHookToken(e.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="body small muted" style={{ marginTop: 6, marginBottom: 10 }}>
+            Хук — это адрес, по которому ваша сборка запускает пересборку. Сохраните
+            настройки после ввода. Без хука кнопка обновления недоступна.
+          </div>
+
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-outline btn-sm"
+              disabled={updBusy}
+              onClick={() => {
+                setUpdBusy(true);
+                api
+                  .getPanelUpdate()
+                  .then(setUpd)
+                  .catch((e: unknown) => showToast(e instanceof Error ? e.message : 'Не удалось проверить'))
+                  .finally(() => setUpdBusy(false));
+              }}
+            >
+              {updBusy ? 'Проверяем…' : 'Проверить обновление'}
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={updBusy || !upd?.hookConfigured}
+              onClick={() =>
+                showConfirm({
+                  title: 'Обновить панель?',
+                  text: 'Сборка соберётся заново из свежего кода, панель перезапустится и будет недоступна пару минут. Подключения пользователей к VPN это не затрагивает.',
+                  confirmLabel: 'Обновить',
+                  onConfirm: async () => {
+                    setUpdBusy(true);
+                    try {
+                      await api.runPanelUpdate();
+                      showToast('Обновление запущено — панель поднимется через пару минут');
+                    } catch (e) {
+                      showToast(e instanceof Error ? e.message : 'Не удалось запустить обновление');
+                    } finally {
+                      setUpdBusy(false);
+                    }
+                  },
+                })
+              }
+            >
+              Обновить сейчас
+            </button>
+          </div>
+          {upd && !upd.hookConfigured ? (
+            <div className="body small muted" style={{ marginTop: 8 }}>
+              Кнопка станет доступна, когда укажете ссылку хука и сохраните настройки.
+            </div>
+          ) : null}
         </Panel>
 
         {/* Экстренная рассылка через бота */}

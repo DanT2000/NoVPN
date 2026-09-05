@@ -254,7 +254,8 @@ export function Dashboard() {
                   {servers.map((s) => (
                     <Chip key={s.id} label={s.name} size="sm" active={srvFilter === s.id} onClick={() => setSrvFilter(s.id)} />
                   ))}
-                  {selDay ? <Chip label="Сбросить день" size="sm" onClick={() => setSelDay(null)} /> : null}
+                  {/* Только снимает выделение дня — данные не трогает. */}
+                  {selDay ? <Chip label="Снять выбор дня" size="sm" onClick={() => setSelDay(null)} /> : null}
                 </div>
               </div>
               {selDay ? (

@@ -42,6 +42,7 @@ import {
   mirrorCheck,
   type DesktopChannelConfig,
 } from './services/desktopChannel.js';
+import { checkUpdate as checkPanelUpdate, triggerUpdate as triggerPanelUpdate, currentVersion as panelVersion } from './services/panelUpdate.js';
 
 export const router = Router();
 
@@ -2009,6 +2010,8 @@ router.put('/api/admin/settings', requireAdmin, (req, res) => {
   next.codeLoginDays = clamp(next.codeLoginDays, cur.codeLoginDays ?? 15);
   if (next.whitelistDomains != null && !Array.isArray(next.whitelistDomains)) next.whitelistDomains = cur.whitelistDomains;
   if (typeof next.brandName === 'string') next.brandName = next.brandName.slice(0, 64).trim();
+  if (typeof next.updateHookUrl === 'string') next.updateHookUrl = next.updateHookUrl.trim().slice(0, 500);
+  if (typeof next.updateHookToken === 'string') next.updateHookToken = next.updateHookToken.trim().slice(0, 200);
   next.lanAccess = next.lanAccess === true;
   next.xrayWhitelist = next.xrayWhitelist !== false;
   res.json(repo.saveSettings(next));
@@ -2094,6 +2097,26 @@ router.get('/api/admin/servers/:id/metrics', requireAdmin, (req, res) => {
     };
   });
   res.json({ serverId: s.id, name: s.name, hours, series });
+});
+
+// ── admin: обновление самой панели (только вручную) ──
+// Панель — Docker-образ, который CI собирает из GitHub, поэтому «подменить себя»
+// нельзя: проверяем версию на GitHub, а по кнопке дёргаем хук пересборки.
+router.get('/api/admin/panel/update', requireAdmin, async (_req, res) => {
+  try {
+    res.json(await checkPanelUpdate());
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось проверить обновление.'));
+  }
+});
+router.post('/api/admin/panel/update', requireAdmin, async (_req, res) => {
+  try {
+    const r = await triggerPanelUpdate();
+    // Ответ уходит ДО перезапуска: пересборка идёт на стороне CI, панель погаснет позже.
+    res.json({ ...r, version: panelVersion() });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось запустить обновление.'));
+  }
 });
 
 // ── admin: бэкап базы ──
