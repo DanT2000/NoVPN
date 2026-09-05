@@ -7,7 +7,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { ServerMetricPoint } from '../api/types';
-import { BarChart, type Bar } from '../components/Chart';
+import { LineChart, type Bar } from '../components/Chart';
 import { Chip } from '../components/ui';
 import { gb } from '../lib/format';
 
@@ -117,7 +117,8 @@ export function ServerCharts({ serverId, name }: { serverId: string; name: strin
                 <span className="small" style={{ fontWeight: 600 }}>{c.title}</span>
                 <span className="small muted mono">{c.note}</span>
               </div>
-              <BarChart bars={c.bars} height={110} format={c.format} empty="Нет точек за период." />
+              {/* Нагрузка — непрерывная величина, её ход читается линией, а не столбиками. */}
+              <LineChart bars={c.bars} height={110} format={c.format} empty="Нет точек за период." />
             </div>
           ))}
         </div>
