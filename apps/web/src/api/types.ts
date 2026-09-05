@@ -281,12 +281,28 @@ export interface ApiClient {
   // ── admin: графики истории + здоровье серверов ──
   getStats(days: number): Promise<{ days: number; series: StatsPoint[] }>;
   getHealth(): Promise<{ servers: ServerHealth[] }>;
-  /** Посуточный расход с разбивкой «кто израсходовал» (опционально по одному серверу). */
-  getTraffic(p: { from?: string; to?: string; serverId?: string | null }): Promise<TrafficBreakdown>;
+  /** Расход с разбивкой «кто израсходовал» за час/день/диапазон (опционально по серверу).
+   *  from/to — час (YYYY-MM-DDTHH) или день (YYYY-MM-DD); by — группировка ряда. */
+  getTraffic(p: { from?: string; to?: string; serverId?: string | null; by?: 'hour' | 'day' }): Promise<TrafficBreakdown>;
+  /** Ряд нагрузки одного сервера (ЦП/ОЗУ/диск/сеть) за последние N часов. */
+  getServerMetrics(id: string, hours: number): Promise<{ serverId: string; name: string; hours: number; series: ServerMetricPoint[] }>;
   /** Есть ли новая версия панели на GitHub. */
   getPanelUpdate(): Promise<PanelUpdateState>;
   /** Запустить обновление панели (панель перезапустится). */
   runPanelUpdate(): Promise<{ ok: boolean; status: number; version: string }>;
+}
+
+/** Точка ряда нагрузки сервера. Скорость сети уже посчитана (байт/с). */
+export interface ServerMetricPoint {
+  at: string;
+  cpuPct: number;
+  memUsed: number;
+  memTotal: number;
+  diskUsed: number;
+  diskTotal: number;
+  uptimeSec: number;
+  netRxBps: number;
+  netTxBps: number;
 }
 
 /** Состояние обновления панели. */
@@ -304,11 +320,13 @@ export interface PanelUpdateState {
 export interface TrafficBreakdown {
   from: string;
   to: string;
+  by: 'hour' | 'day';
   serverId: string | null;
-  /** С какого дня копятся подробности (null — данных ещё нет). */
+  /** С какого часа копятся подробности (null — данных ещё нет). */
   since: string | null;
   keepDays: number;
-  series: Array<{ day: string; bytes: number }>;
+  /** key — час (YYYY-MM-DDTHH) или день (YYYY-MM-DD), смотря по `by`. */
+  series: Array<{ key: string; bytes: number }>;
   who: Array<{
     userId: string | null;
     userName: string;
@@ -377,6 +395,8 @@ export interface ServerLoad {
   diskUsed: number;
   diskTotal: number;
   uptimeSec: number;
+  /** Сеть: сейчас и пик за сутки (байт/с) — видно, доходят ли всплески до потолка канала. */
+  net: { rxBps: number; txBps: number; peakRxBps: number; peakTxBps: number };
 }
 
 export type { Device };

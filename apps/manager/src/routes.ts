@@ -2023,28 +2023,32 @@ router.get('/api/admin/stats', requireAdmin, (req, res) => {
   res.json({ days, series: repo.getStatsSeries(days * 86400000) });
 });
 
-// Посуточный расход с разбивкой «кто израсходовал»: общий график показывает только
-// сумму, а по аномальному дню нужно видеть конкретных людей. Период — сутки или
-// произвольный диапазон (неделя), можно ограничить одним сервером.
+// Расход с разбивкой «кто израсходовал»: общий график показывает только сумму, а по
+// аномальному часу/дню нужно видеть конкретных людей и их конфиги. from/to — час
+// (YYYY-MM-DDTHH) или день (YYYY-MM-DD, раскрывается в T00..T23), включительно;
+// by — как группировать ряд (по часам или по дням); можно ограничить одним сервером.
 router.get('/api/admin/traffic', requireAdmin, (req, res) => {
-  const day = (v: unknown): string | null => {
+  const key = (v: unknown, edge: 'from' | 'to'): string | null => {
     const s = String(v ?? '').trim();
-    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(s)) return s;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T${edge === 'from' ? '00' : '23'}`;
+    return null;
   };
-  const today = new Date().toISOString().slice(0, 10);
-  const to = day(req.query.to) ?? today;
-  const from = day(req.query.from) ?? new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
+  const to = key(req.query.to, 'to') ?? new Date().toISOString().slice(0, 13);
+  const from = key(req.query.from, 'from') ?? `${new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10)}T00`;
+  const by: repo.TrafficBy = String(req.query.by ?? '') === 'hour' ? 'hour' : 'day';
   const serverId = String(req.query.serverId ?? '').trim() || null;
   // Сервер должен существовать — иначе молча вернули бы пустоту как «нет расхода».
   if (serverId && !repo.getServer(serverId)) return res.status(404).json(err('not_found', 'Сервер не найден.'));
   res.json({
     from,
     to,
+    by,
     serverId,
-    since: repo.getDailyTrafficSince(), // с какого дня вообще копятся подробности
+    since: repo.getTrafficSince(), // с какого часа вообще копятся подробности
     keepDays: 30,
-    series: repo.getDailyTrafficSeries(from, to, serverId),
-    who: repo.getDailyTrafficWho(from, to, serverId),
+    series: repo.getTrafficSeries(from, to, serverId, by),
+    who: repo.getTrafficWho(from, to, serverId),
   });
 });
 router.get('/api/admin/health', requireAdmin, (_req, res) => {
@@ -2067,6 +2071,8 @@ router.get('/api/admin/health', requireAdmin, (_req, res) => {
             memUsed: m.memUsed, memTotal: m.memTotal,
             diskUsed: m.diskUsed, diskTotal: m.diskTotal,
             uptimeSec: m.uptimeSec,
+            // Сеть: сейчас и пик за сутки — видно, доходят ли всплески до потолка канала.
+            net: repo.getServerNetRates(s.id, 24 * 3600000),
           }
         : null,
     };

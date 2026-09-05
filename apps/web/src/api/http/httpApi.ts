@@ -37,6 +37,7 @@ import type {
   StatsPoint,
   TrafficBreakdown,
   PanelUpdateState,
+  ServerMetricPoint,
   UpdateUserPatch,
 } from '../types';
 
@@ -162,8 +163,11 @@ export const httpApi: ApiClient = {
     if (p.from) q.set('from', p.from);
     if (p.to) q.set('to', p.to);
     if (p.serverId) q.set('serverId', p.serverId);
+    if (p.by) q.set('by', p.by);
     return req<TrafficBreakdown>('GET', `/api/admin/traffic?${q.toString()}`);
   },
+  getServerMetrics: (id, hours) =>
+    req<{ serverId: string; name: string; hours: number; series: ServerMetricPoint[] }>('GET', `/api/admin/servers/${id}/metrics?hours=${hours}`),
   getPanelUpdate: () => req<PanelUpdateState>('GET', '/api/admin/panel/update'),
   runPanelUpdate: () => req<{ ok: boolean; status: number; version: string }>('POST', '/api/admin/panel/update'),
 

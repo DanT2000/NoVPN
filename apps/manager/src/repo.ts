@@ -1651,60 +1651,64 @@ export function getStatsSeries(sinceMs: number): StatsSample[] {
     .all(since) as StatsSample[];
 }
 
-// ── посуточный расход по устройствам («кто израсходовал столько трафика») ──
-// stats_samples хранит только общий итог, поэтому аномальный день по нему не
+// ── почасовой расход по устройствам («кто израсходовал столько трафика») ──
+// stats_samples хранит только общий итог, поэтому аномальный час/день по нему не
 // разложить. Здесь копим ту же дельту, что и накопительные счётчики устройства.
+// Ключ — час в UTC («2026-09-05T14»): день = сумма часов, поэтому один и тот же
+// запрос отвечает и «кто сидел в этот час», и «кто съел месяц».
 
 /** Сколько суток держим подробности: месяц — дальше они не нужны, только место. */
-const DAILY_KEEP_DAYS = 30;
+const TRAFFIC_KEEP_DAYS = 30;
 
-/** Ключ суток YYYY-MM-DD (UTC). */
-function dayKey(d = new Date()): string {
-  return d.toISOString().slice(0, 10);
+/** Ключ часа YYYY-MM-DDTHH (UTC). Такие строки сравниваются как даты. */
+export function hourKey(d = new Date()): string {
+  return d.toISOString().slice(0, 13);
 }
 
-/** Прибавить расход устройства к текущим суткам (вызывается из sync). */
-export function addDailyTraffic(deviceId: string, bytes: number): void {
+/** Прибавить расход устройства к текущему часу (вызывается из sync). */
+export function addTrafficSample(deviceId: string, bytes: number): void {
   if (!deviceId || !Number.isFinite(bytes) || bytes <= 0) return;
   db.prepare(
-    'INSERT INTO traffic_daily(day, device_id, bytes) VALUES(?,?,?) ON CONFLICT(day, device_id) DO UPDATE SET bytes = bytes + excluded.bytes',
-  ).run(dayKey(), deviceId, Math.round(bytes));
+    'INSERT INTO traffic_hourly(hour, device_id, bytes) VALUES(?,?,?) ON CONFLICT(hour, device_id) DO UPDATE SET bytes = bytes + excluded.bytes',
+  ).run(hourKey(), deviceId, Math.round(bytes));
 }
 
 /** Чистка подробностей старше месяца. */
-export function pruneDailyTraffic(keepDays = DAILY_KEEP_DAYS): void {
-  db.prepare('DELETE FROM traffic_daily WHERE day < ?').run(dayKey(new Date(Date.now() - keepDays * 86400000)));
+export function pruneTraffic(keepDays = TRAFFIC_KEEP_DAYS): void {
+  db.prepare('DELETE FROM traffic_hourly WHERE hour < ?').run(hourKey(new Date(Date.now() - keepDays * 86400000)));
 }
 
-export interface TrafficDay { day: string; bytes: number }
+export type TrafficBy = 'hour' | 'day';
+export interface TrafficPoint { key: string; bytes: number }
 export interface TrafficWhoDevice { deviceId: string; name: string; protocol: string; serverName: string; bytes: number }
 export interface TrafficWho { userId: string | null; userName: string; bytes: number; devices: TrafficWhoDevice[] }
 
-/** Посуточный ряд расхода; можно ограничить одним сервером. */
-export function getDailyTrafficSeries(fromDay: string, toDay: string, serverId?: string | null): TrafficDay[] {
-  const args: unknown[] = [fromDay, toDay];
-  let where = 't.day >= ? AND t.day <= ?';
+/** Ряд расхода по часам или по дням за диапазон часов (включительно); можно по серверу. */
+export function getTrafficSeries(fromHour: string, toHour: string, serverId: string | null | undefined, by: TrafficBy): TrafficPoint[] {
+  const args: unknown[] = [fromHour, toHour];
+  let where = 't.hour >= ? AND t.hour <= ?';
   if (serverId) { where += ' AND d.server_id = ?'; args.push(serverId); }
+  const key = by === 'day' ? 'substr(t.hour, 1, 10)' : 't.hour';
   return db
     .prepare(
-      `SELECT t.day AS day, COALESCE(SUM(t.bytes),0) AS bytes
-         FROM traffic_daily t JOIN devices d ON d.id = t.device_id
-        WHERE ${where} GROUP BY t.day ORDER BY t.day ASC`,
+      `SELECT ${key} AS key, COALESCE(SUM(t.bytes),0) AS bytes
+         FROM traffic_hourly t JOIN devices d ON d.id = t.device_id
+        WHERE ${where} GROUP BY ${key} ORDER BY key ASC`,
     )
-    .all(...args) as TrafficDay[];
+    .all(...args) as TrafficPoint[];
 }
 
-/** Кто сколько израсходовал за период, с раскрытием до устройств. */
-export function getDailyTrafficWho(fromDay: string, toDay: string, serverId?: string | null): TrafficWho[] {
-  const args: unknown[] = [fromDay, toDay];
-  let where = 't.day >= ? AND t.day <= ?';
+/** Кто сколько израсходовал за диапазон часов, с раскрытием до устройств. */
+export function getTrafficWho(fromHour: string, toHour: string, serverId?: string | null): TrafficWho[] {
+  const args: unknown[] = [fromHour, toHour];
+  let where = 't.hour >= ? AND t.hour <= ?';
   if (serverId) { where += ' AND d.server_id = ?'; args.push(serverId); }
   const rows = db
     .prepare(
       `SELECT d.user_id AS userId, COALESCE(u.name,'(удалён)') AS userName, d.id AS deviceId,
               COALESCE(d.name,'') AS deviceName, COALESCE(d.protocol,'') AS protocol,
               COALESCE(s.name, d.server_id) AS serverName, COALESCE(SUM(t.bytes),0) AS bytes
-         FROM traffic_daily t
+         FROM traffic_hourly t
          JOIN devices d ON d.id = t.device_id
          LEFT JOIN users u ON u.id = d.user_id
          LEFT JOIN servers s ON s.id = d.server_id
@@ -1726,10 +1730,10 @@ export function getDailyTrafficWho(fromDay: string, toDay: string, serverId?: st
   return [...byUser.values()].sort((a, b) => b.bytes - a.bytes);
 }
 
-/** С какого дня есть подробности (чтобы честно показать «копится с …»). */
-export function getDailyTrafficSince(): string | null {
-  const r = db.prepare('SELECT MIN(day) AS d FROM traffic_daily').get() as { d: string | null } | undefined;
-  return r?.d ?? null;
+/** С какого часа есть подробности (чтобы честно показать «копится с …»). */
+export function getTrafficSince(): string | null {
+  const r = db.prepare('SELECT MIN(hour) AS h FROM traffic_hourly').get() as { h: string | null } | undefined;
+  return r?.h ?? null;
 }
 
 // ── нагрузка серверов (CPU/ОЗУ/диск/сеть) ──
@@ -1770,6 +1774,25 @@ export function getServerMetrics(serverId: string, sinceMs: number): ServerMetri
          FROM server_metrics WHERE server_id=? AND at >= ? ORDER BY at ASC`,
     )
     .all(serverId, since) as ServerMetricSample[];
+}
+
+/** Текущая и ПИКОВАЯ скорость сети сервера за период — по дельтам накопительных
+ *  счётчиков между соседними снимками. Пик нужен, чтобы понять, упирается ли канал
+ *  (если всплески доходят до потолка тарифа — пора расширяться). */
+export function getServerNetRates(serverId: string, sinceMs: number): { rxBps: number; txBps: number; peakRxBps: number; peakTxBps: number } {
+  const rows = getServerMetrics(serverId, sinceMs);
+  let rx = 0, tx = 0, peakRx = 0, peakTx = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1]!, b = rows[i]!;
+    const dt = (new Date(b.at).getTime() - new Date(a.at).getTime()) / 1000;
+    // Счётчик обнулился (перезагрузка) — эту пару пропускаем, не рисуем фантом.
+    if (dt <= 0 || b.netRx < a.netRx || b.netTx < a.netTx) continue;
+    rx = (b.netRx - a.netRx) / dt;
+    tx = (b.netTx - a.netTx) / dt;
+    if (rx > peakRx) peakRx = rx;
+    if (tx > peakTx) peakTx = tx;
+  }
+  return { rxBps: Math.round(rx), txBps: Math.round(tx), peakRxBps: Math.round(peakRx), peakTxBps: Math.round(peakTx) };
 }
 
 /** Последний снимок по каждому серверу — для списка «здоровье серверов». */

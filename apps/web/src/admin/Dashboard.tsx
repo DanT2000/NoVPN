@@ -8,6 +8,7 @@ import { api } from '../api';
 import type { StatsPoint, ServerHealth, TrafficBreakdown } from '../api/types';
 import { Panel, Dot, ScreenHeader, Loading, Chip } from '../components/ui';
 import { BarChart, type Bar } from '../components/Chart';
+import { ServerCharts, mbit } from './ServerCharts';
 import { statusOf } from '../lib/status';
 import { gb, rel, daysLeft } from '../lib/format';
 
@@ -25,8 +26,19 @@ const METRICS: Array<{ key: Metric; label: string; hint: string }> = [
 
 const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 const pad = (n: number) => String(n).padStart(2, '0');
-/** Ключ суток YYYY-MM-DD в UTC — ровно так их пишет панель в посуточную таблицу. */
+/** Ключи периода в UTC — ровно так их пишет панель в почасовую таблицу: день
+ *  YYYY-MM-DD, час YYYY-MM-DDTHH. В окне «Сутки» столбец = час, иначе = день. */
 const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const hourOf = (ms: number) => new Date(ms).toISOString().slice(0, 13);
+/** Человеческая подпись ключа: «05.09» или «05.09 14:00» (час — в местном времени). */
+function fmtKey(key: string): string {
+  if (key.length > 10) {
+    const d = new Date(`${key}:00:00Z`);
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:00`;
+  }
+  const [y, m, d] = key.split('-');
+  return `${d}.${m}.${y}`;
+}
 
 /** Раскладываем накопительную серию по корзинам: сутки → по часам, неделя/месяц → по
  *  дням. Трафик = ПРИРОСТ за корзину (реальное использование за период), активность =
@@ -105,12 +117,18 @@ export function Dashboard() {
   const [metric, setMetric] = useState<Metric>('traffic');
   const [series, setSeries] = useState<StatsPoint[] | null>(null);
   const [health, setHealth] = useState<ServerHealth[] | null>(null);
-  // Разбор аномального дня: какой день выбран на графике, по какому серверу
-  // фильтруем и кто сколько израсходовал.
-  const [selDay, setSelDay] = useState<string | null>(null);
+  // Разбор аномальных дней: какой день или диапазон выбран на графике (клик,
+  // Shift+клик, протягивание), по какому серверу фильтруем, кто сколько
+  // израсходовал, и какой человек раскрыт до конфигов.
+  const [selFrom, setSelFrom] = useState<string | null>(null);
+  const [selTo, setSelTo] = useState<string | null>(null);
   const [srvFilter, setSrvFilter] = useState<string | null>(null);
   const [who, setWho] = useState<TrafficBreakdown | null>(null);
   const [whoBusy, setWhoBusy] = useState(false);
+  const [openUser, setOpenUser] = useState<string | null>(null);
+  const [allDevices, setAllDevices] = useState(false);
+  // Какой сервер раскрыт до графиков нагрузки в «Здоровье серверов».
+  const [openServer, setOpenServer] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -122,24 +140,50 @@ export function Dashboard() {
     api.getHealth().then((r) => { if (alive) setHealth(r.servers); }).catch(() => { if (alive) setHealth([]); });
     return () => { alive = false; };
   }, []);
-  // Кто израсходовал за выбранный день (и по выбранному серверу).
+  // Кто израсходовал за выбранный день или диапазон (и по выбранному серверу).
   useEffect(() => {
-    if (!selDay) { setWho(null); return; }
+    if (!selFrom || !selTo) { setWho(null); return; }
     let alive = true;
     setWhoBusy(true);
+    setOpenUser(null);
+    setAllDevices(false);
     api
-      .getTraffic({ from: selDay, to: selDay, serverId: srvFilter })
+      .getTraffic({ from: selFrom, to: selTo, serverId: srvFilter, by: selFrom.length > 10 ? 'hour' : 'day' })
       .then((r) => { if (alive) setWho(r); })
       .catch(() => { if (alive) setWho(null); })
       .finally(() => { if (alive) setWhoBusy(false); });
     return () => { alive = false; };
-  }, [selDay, srvFilter]);
+  }, [selFrom, selTo, srvFilter]);
 
   if (loadError) return <div className="notice notice-red">{loadError}</div>;
   if (loading || !data) return <Loading text="Загружаем данные…" />;
 
   const bars = series ? bucketize(series, win, metric) : [];
-  const selIdx = selDay ? bars.findIndex((b) => dayOf(b.at) === selDay) : -1;
+  // В окне «Сутки» столбцы почасовые — и разбор просим по часам; иначе по дням.
+  const byHour = win <= 1;
+  const keyOf = (ms: number) => (byHour ? hourOf(ms) : dayOf(ms));
+  // Индексы столбцов выбранного диапазона — для подсветки на графике.
+  const idxOf = (key: string | null) => (key ? bars.findIndex((b) => keyOf(b.at) === key) : -1);
+  const selRange: [number, number] | null =
+    selFrom && selTo && idxOf(selFrom) >= 0 && idxOf(selTo) >= 0 ? [idxOf(selFrom), idxOf(selTo)] : null;
+  // Клик — один столбец; Shift+клик — от первого выбранного до этого; протягивание —
+  // диапазон. Ключи (день/час) сортируются как строки ровно в хронологическом порядке.
+  const pickDay = (i: number, shift: boolean) => {
+    const k = keyOf(bars[i]!.at);
+    if (shift && selFrom) {
+      const [a, b] = [selFrom, k].sort();
+      setSelFrom(a!);
+      setSelTo(b!);
+    } else {
+      setSelFrom(k);
+      setSelTo(k);
+    }
+  };
+  const pickRange = (a: number, b: number) => {
+    const [x, y] = [keyOf(bars[a]!.at), keyOf(bars[b]!.at)].sort();
+    setSelFrom(x!);
+    setSelTo(y!);
+  };
   const periodTotal = bars.reduce((s, b) => s + b.value, 0);
   const metricInfo = METRICS.find((m) => m.key === metric)!;
 
@@ -236,8 +280,9 @@ export function Dashboard() {
             <BarChart
               bars={bars}
               format={metric === 'traffic' ? (v) => gb(v) : (v) => `${Math.round(v)} конф.`}
-              onSelect={metric === 'traffic' ? (i) => setSelDay(dayOf(bars[i]!.at)) : undefined}
-              selected={selIdx >= 0 ? selIdx : null}
+              onSelect={metric === 'traffic' ? pickDay : undefined}
+              onSelectRange={metric === 'traffic' ? pickRange : undefined}
+              selectedRange={metric === 'traffic' ? selRange : null}
             />
           )}
 
@@ -247,38 +292,77 @@ export function Dashboard() {
             <div style={{ marginTop: 14, borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
               <div className="row-between" style={{ gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
                 <span className="small muted">
-                  {selDay ? `Кто израсходовал за ${selDay}` : 'Нажмите на столбец — покажу, кто израсходовал в этот день'}
+                  {selFrom && selTo
+                    ? `Кто израсходовал ${selFrom === selTo ? `за ${fmtKey(selFrom)}` : `с ${fmtKey(selFrom)} по ${fmtKey(selTo)}`}`
+                    : byHour
+                      ? 'Нажмите на столбец — покажу, кто сидел в этот час. Shift+клик или протягивание — несколько часов.'
+                      : 'Нажмите на столбец — покажу, кто израсходовал в этот день. Shift+клик или протягивание — диапазон дней.'}
                 </span>
                 <div className="chip-row">
                   <Chip label="Все серверы" size="sm" active={!srvFilter} onClick={() => setSrvFilter(null)} />
                   {servers.map((s) => (
                     <Chip key={s.id} label={s.name} size="sm" active={srvFilter === s.id} onClick={() => setSrvFilter(s.id)} />
                   ))}
-                  {/* Только снимает выделение дня — данные не трогает. */}
-                  {selDay ? <Chip label="Снять выбор дня" size="sm" onClick={() => setSelDay(null)} /> : null}
+                  {/* Только снимает выделение — данные не трогает. */}
+                  {selFrom ? <Chip label="Снять выбор" size="sm" onClick={() => { setSelFrom(null); setSelTo(null); }} /> : null}
                 </div>
               </div>
-              {selDay ? (
+              {selFrom && selTo ? (
                 whoBusy ? (
                   <div className="small muted" style={{ padding: '10px 0' }}>Считаем…</div>
                 ) : !who || who.who.length === 0 ? (
                   <div className="small muted" style={{ padding: '10px 0' }}>
                     {who?.since
-                      ? 'За этот день подробностей нет.'
+                      ? 'За эти дни подробностей нет.'
                       : 'Подробности пока не накопились — сбор включён, данные появятся со следующих суток.'}
                   </div>
                 ) : (
-                  who.who.slice(0, 15).map((u) => (
-                    <div key={u.userId ?? u.userName} className="divide-row">
-                      <div className="row" style={{ gap: 8, minWidth: 0 }}>
-                        <span style={{ fontWeight: 600, ...ellipsis }}>{u.userName}</span>
-                        <span className="small muted mono" style={{ flex: 'none' }}>
-                          {[...new Set(u.devices.map((d) => `${d.protocol} · ${d.serverName}`))].join(', ')}
-                        </span>
+                  who.who.slice(0, 15).map((u) => {
+                    // Клик по человеку раскрывает его конфиги по расходу: так видно, какой
+                    // именно конфиг «жрёт», и можно сказать об этом человеку. Сначала топ-5.
+                    const key = u.userId ?? u.userName;
+                    const open = openUser === key;
+                    const devs = [...u.devices].sort((a, b) => b.bytes - a.bytes);
+                    const shown = open && !allDevices ? devs.slice(0, 5) : devs;
+                    return (
+                      <div key={key}>
+                        <div
+                          className="divide-row"
+                          role="button"
+                          tabIndex={0}
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => { setOpenUser(open ? null : key); setAllDevices(false); }}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenUser(open ? null : key); setAllDevices(false); } }}
+                        >
+                          <div className="row" style={{ gap: 8, minWidth: 0 }}>
+                            <span className="small muted" style={{ flex: 'none', width: 10 }}>{open ? '▾' : '▸'}</span>
+                            <span style={{ fontWeight: 600, ...ellipsis }}>{u.userName}</span>
+                            <span className="small muted mono" style={{ flex: 'none' }}>
+                              {u.devices.length} конф. · {[...new Set(u.devices.map((d) => `${d.protocol} · ${d.serverName}`))].join(', ')}
+                            </span>
+                          </div>
+                          <span className="mono" style={{ flex: 'none', fontWeight: 700 }}>{gb(u.bytes / 1e9)}</span>
+                        </div>
+                        {open ? (
+                          <div style={{ padding: '2px 0 10px 24px' }}>
+                            {shown.map((d) => (
+                              <div key={d.deviceId} className="row-between" style={{ padding: '4px 0', gap: 10 }}>
+                                <span className="small mono" style={ellipsis}>
+                                  {d.name || '(без имени)'} · {d.protocol} · {d.serverName}
+                                </span>
+                                <span className="small mono" style={{ flex: 'none', fontWeight: 600 }}>{gb(d.bytes / 1e9)}</span>
+                              </div>
+                            ))}
+                            {devs.length > 5 && !allDevices ? (
+                              <button type="button" style={linkBtn} onClick={(e) => { e.stopPropagation(); setAllDevices(true); }}>
+                                показать все {devs.length} →
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
-                      <span className="mono" style={{ flex: 'none', fontWeight: 700 }}>{gb(u.bytes / 1e9)}</span>
-                    </div>
-                  ))
+                    );
+                  })
                 )
               ) : null}
             </div>
@@ -294,23 +378,41 @@ export function Dashboard() {
           >
             {health.map((h) => {
               // Нагрузка: диск выделяем цветом — он забивается тихо и роняет сервер.
+              // Клик по серверу раскрывает графики ЦП/ОЗУ/диск/сеть под списком.
               const pct = (u: number, t: number) => (t > 0 ? Math.round((u / t) * 100) : 0);
               const diskPct = h.load ? pct(h.load.diskUsed, h.load.diskTotal) : 0;
               const memPct = h.load ? pct(h.load.memUsed, h.load.memTotal) : 0;
+              const open = openServer === h.id;
               return (
-                <div key={h.id} className="divide-row" style={{ alignItems: 'flex-start' }}>
+                <div
+                  key={h.id}
+                  className="divide-row"
+                  role="button"
+                  tabIndex={0}
+                  style={{ alignItems: 'flex-start', cursor: 'pointer' }}
+                  onClick={() => setOpenServer(open ? null : h.id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenServer(open ? null : h.id); } }}
+                >
                   <div className="row" style={{ gap: 10, minWidth: 0 }}>
                     <Dot color={h.online ? 'var(--green-dot)' : 'var(--red-fg)'} />
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, ...ellipsis }}>{h.name}{h.country ? ` (${h.country})` : ''}</div>
+                      <div style={{ fontWeight: 600, ...ellipsis }}>
+                        <span className="small muted" style={{ marginRight: 6 }}>{open ? '▾' : '▸'}</span>
+                        {h.name}{h.country ? ` (${h.country})` : ''}
+                      </div>
                       {h.load ? (
-                        <div className="small muted mono" style={{ marginTop: 2 }}>
-                          ЦП {h.load.cpuPct}% · ОЗУ {memPct}% ({gb(h.load.memUsed / 1e9)}/{gb(h.load.memTotal / 1e9)}) ·{' '}
-                          <span style={diskPct >= 90 ? { color: 'var(--red-fg)', fontWeight: 700 } : undefined}>
-                            диск {diskPct}%
-                          </span>{' '}
-                          ({gb(h.load.diskUsed / 1e9)}/{gb(h.load.diskTotal / 1e9)}) · аптайм {Math.floor(h.load.uptimeSec / 86400)} д
-                        </div>
+                        <>
+                          <div className="small muted mono" style={{ marginTop: 2 }}>
+                            ЦП {h.load.cpuPct}% · ОЗУ {memPct}% ({gb(h.load.memUsed / 1e9)}/{gb(h.load.memTotal / 1e9)}) ·{' '}
+                            <span style={diskPct >= 90 ? { color: 'var(--red-fg)', fontWeight: 700 } : undefined}>
+                              диск {diskPct}%
+                            </span>{' '}
+                            ({gb(h.load.diskUsed / 1e9)}/{gb(h.load.diskTotal / 1e9)}) · аптайм {Math.floor(h.load.uptimeSec / 86400)} д
+                          </div>
+                          <div className="small muted mono" style={{ marginTop: 2 }}>
+                            сеть ↑ {mbit(h.load.net.txBps)} · ↓ {mbit(h.load.net.rxBps)} · пик за сутки ↑ {mbit(h.load.net.peakTxBps)} · ↓ {mbit(h.load.net.peakRxBps)}
+                          </div>
+                        </>
                       ) : (
                         <div className="small muted" style={{ marginTop: 2 }}>нагрузка ещё не снята</div>
                       )}
@@ -322,6 +424,9 @@ export function Dashboard() {
                 </div>
               );
             })}
+            {openServer && health.some((h) => h.id === openServer) ? (
+              <ServerCharts serverId={openServer} name={health.find((h) => h.id === openServer)!.name} />
+            ) : null}
           </Panel>
         ) : null}
 

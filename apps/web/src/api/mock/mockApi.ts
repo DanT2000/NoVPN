@@ -579,15 +579,17 @@ export const mockApi: ApiClient = {
     });
     return { days, series };
   },
-  async getTraffic(p: { from?: string; to?: string; serverId?: string | null }) {
+  async getTraffic(p: { from?: string; to?: string; serverId?: string | null; by?: 'hour' | 'day' }) {
     await wait(180);
-    // Синтетика для демо: суточный ряд + «кто израсходовал» из текущих устройств.
+    // Синтетика для демо: ряд по дням/часам + «кто израсходовал» из текущих устройств.
+    const by = p.by ?? 'day';
     const to = p.to ?? new Date().toISOString().slice(0, 10);
     const from = p.from ?? new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10);
-    const days = Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1);
-    const series = Array.from({ length: days }, (_, i) => ({
-      day: new Date(Date.parse(from) + i * 86400000).toISOString().slice(0, 10),
-      bytes: Math.round((8 + 26 * Math.abs(Math.sin(i * 1.3))) * 1e9),
+    const step = by === 'hour' ? 3600000 : 86400000;
+    const n = Math.max(1, Math.round((Date.parse(to.slice(0, 10)) - Date.parse(from.slice(0, 10))) / step) + 1);
+    const series = Array.from({ length: Math.min(n, 744) }, (_, i) => ({
+      key: new Date(Date.parse(from.slice(0, 10)) + i * step).toISOString().slice(0, by === 'hour' ? 13 : 10),
+      bytes: Math.round((8 + 26 * Math.abs(Math.sin(i * 1.3))) * (by === 'hour' ? 4e7 : 1e9)),
     }));
     const devs = state.devices.filter((d) => !p.serverId || d.serverId === p.serverId);
     const byUser = new Map<string, { userId: string | null; userName: string; bytes: number; devices: Array<{ deviceId: string; name: string; protocol: string; serverName: string; bytes: number }> }>();
@@ -601,7 +603,7 @@ export const mockApi: ApiClient = {
       e.devices.push({ deviceId: d.id, name: d.name ?? '', protocol: d.protocol ?? '', serverName: state.servers.find((s) => s.id === d.serverId)?.name ?? '—', bytes });
     });
     return {
-      from, to, serverId: p.serverId ?? null,
+      from, to, by, serverId: p.serverId ?? null,
       since: from, keepDays: 30, series,
       who: [...byUser.values()].sort((a, b) => b.bytes - a.bytes),
     };
@@ -613,6 +615,27 @@ export const mockApi: ApiClient = {
   async runPanelUpdate() {
     await wait(300);
     return { ok: true, status: 200, version: '1.0.0' };
+  },
+  async getServerMetrics(id: string, hours: number) {
+    await wait(160);
+    // Синтетика: точка в минуту, как на проде; нагрузка дышит по времени суток.
+    const n = Math.min(hours * 60, 24 * 60 * 30);
+    const now = Date.now();
+    const series = Array.from({ length: n }, (_, i) => {
+      const t = now - (n - 1 - i) * 60000;
+      const day = ((t / 86400000) % 1 + 1) % 1;
+      const w = 0.5 + 0.5 * Math.sin(day * Math.PI * 2 - Math.PI / 2);
+      return {
+        at: new Date(t).toISOString(),
+        cpuPct: Math.round((5 + 40 * w + 8 * Math.abs(Math.sin(i * 0.7))) * 10) / 10,
+        memUsed: 0.9e9 + 1.4e9 * w, memTotal: 4e9,
+        diskUsed: 11e9 + i * 1e3, diskTotal: 40e9,
+        uptimeSec: 864000 + i * 60,
+        netRxBps: Math.round(1e6 + 9e6 * w * Math.abs(Math.sin(i * 0.31))),
+        netTxBps: Math.round(4e6 + 60e6 * w * Math.abs(Math.sin(i * 0.23))),
+      };
+    });
+    return { serverId: id, name: state.servers.find((s) => s.id === id)?.name ?? id, hours, series };
   },
   async getHealth() {
     await wait(200);
@@ -632,6 +655,7 @@ export const mockApi: ApiClient = {
               diskUsed: [11e9, 27e9, 6e9][i % 3]!,
               diskTotal: 40e9,
               uptimeSec: [864000, 172800, 43200][i % 3]!,
+              net: { rxBps: 3.2e6, txBps: 41e6, peakRxBps: 12e6, peakTxBps: 118e6 },
             }
           : null,
       };

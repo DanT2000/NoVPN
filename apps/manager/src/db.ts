@@ -271,18 +271,19 @@ CREATE TABLE IF NOT EXISTS stats_samples (
 );
 CREATE INDEX IF NOT EXISTS idx_stats_at ON stats_samples(at);
 
--- Посуточный расход по КАЖДОМУ устройству. stats_samples хранит только общий итог,
+-- Почасовой расход по КАЖДОМУ устройству. stats_samples хранит только общий итог,
 -- поэтому «кто именно съел 134 ГБ в пятницу» по нему не ответить. Здесь копим ту же
 -- дельту, которую sync и так вычисляет по счётчикам устройства, — из неё считается
--- любой срез (человек, сервер, протокол). Строк мало (одна на устройство в сутки),
--- старше месяца чистим: подробности нужны только для разбора свежих аномалий.
-CREATE TABLE IF NOT EXISTS traffic_daily (
-  day TEXT NOT NULL,
+-- любой срез: час, день, диапазон дней, человек, сервер, протокол. Ключ — час в UTC
+-- («2026-09-05T14»): день = сумма часов. Строк мало (устройство × час), старше
+-- месяца чистим: подробности нужны только для разбора свежих аномалий.
+CREATE TABLE IF NOT EXISTS traffic_hourly (
+  hour TEXT NOT NULL,
   device_id TEXT NOT NULL,
   bytes INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (day, device_id)
+  PRIMARY KEY (hour, device_id)
 );
-CREATE INDEX IF NOT EXISTS idx_traffic_daily_day ON traffic_daily(day);
+CREATE INDEX IF NOT EXISTS idx_traffic_hourly_hour ON traffic_hourly(hour);
 
 -- Нагрузка серверов (CPU/ОЗУ/диск/сеть). Агент не нужен: читаем /proc и df тем же
 -- sync-циклом по SSH. Нужно, чтобы «здоровье сервера» отвечало не только «работает
@@ -454,6 +455,9 @@ for (const stmt of [
   // Умная маршрутизация: статистика конвертации внешнего источника (LST/TXT/SRS →
   // JSON) — {format, lines, valid, skipped, dups}. NULL, пока не синхронизировали.
   'ALTER TABLE routing_files ADD COLUMN source_stats TEXT',
+  // Учёт расхода по устройствам переведён с посуточного на почасовой (traffic_hourly):
+  // старая таблица прожила меньше суток, её данные не стоят двух параллельных схем.
+  'DROP TABLE IF EXISTS traffic_daily',
 ]) {
   try {
     db.exec(stmt);

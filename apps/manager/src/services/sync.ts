@@ -38,10 +38,11 @@ function clearSyncErr(serverId: string, op: string): void {
   lastSyncErrAt.delete(`${serverId}|__unreachable__`); // сервер ответил — снимаем и «недоступен»
 }
 
-// Нагрузку снимаем не каждый цикл: SSH-заход с секундной паузой на замер CPU не нужен
-// чаще, чем раз в 5 минут (столько же держит и запись в БД).
+// Нагрузку снимаем раз в минуту: реже — и пики сетевой скорости (нужны, чтобы понять,
+// хватает ли канала) размажутся до неузнаваемости. Замер CPU держит SSH ~1 с на
+// сервер — при паре серверов это ничего. Точка в минуту = ~1.5 МБ в месяц на сервер.
 const lastMetricsAt = new Map<string, number>();
-const METRICS_GAP_MS = 5 * 60 * 1000;
+const METRICS_GAP_MS = 60 * 1000;
 
 const asGb = (b: number) => `${(b / 1e9).toFixed(1)} ГБ`;
 
@@ -210,7 +211,7 @@ export async function syncAllServers(): Promise<void> {
             repo.updateDeviceFields(d.id, fields);
             // Тот же прирост кладём в посуточную разбивку — по ней потом видно,
             // кто именно израсходовал трафик в конкретный день.
-            repo.addDailyTraffic(d.id, rxDelta + txDelta);
+            repo.addTrafficSample(d.id, rxDelta + txDelta);
             if (d.userId) affected.add(d.userId);
           }
         } catch (e) {
@@ -244,7 +245,7 @@ export async function syncAllServers(): Promise<void> {
             if ((x.up || 0) + (x.down || 0) > 0) fields.last_seen_at = now;
             repo.updateDeviceFields(d.id, fields);
             // Тот же прирост — в посуточную разбивку (кто израсходовал и когда).
-            repo.addDailyTraffic(d.id, (x.up || 0) + (x.down || 0));
+            repo.addTrafficSample(d.id, (x.up || 0) + (x.down || 0));
             if (d.userId) affected.add(d.userId);
           }
         } catch (e) {
@@ -438,7 +439,7 @@ export async function syncAllServers(): Promise<void> {
     try {
       for (const s of repo.listServers()) if (!s.detached) repo.recordServerStatus(s.id, s.agent === 'online');
       repo.recordStatsSample();
-      repo.pruneDailyTraffic(); // подробности расхода держим месяц
+      repo.pruneTraffic(); // почасовые подробности расхода держим месяц
       if (repo.getSettings().dailyDigest !== false) {
         const digest = repo.buildDailyDigestIfDue();
         if (digest) void notifyAdmin(digest, { key: 'daily-digest', minGapMs: 0 }).catch(() => {});
