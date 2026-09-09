@@ -7,7 +7,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { DIRECT_DOMAINS, INITIAL, SUGGESTED } from '../mock/data';
+import { DIRECT_DOMAINS, FALLBACK_VPN_DOMAINS, INITIAL, SUGGESTED } from '../mock/data';
 import {
   appsInstalled,
   appsRunning,
@@ -264,15 +264,11 @@ export function rulesOf(s: State, srv: ServerLists | null) {
     userDomains.push({ domain: v.domain, route: v.route });
   }
 
-  // Списки с сервера главнее встроенных: встроенные — лишь запас на случай,
-  // когда синхронизация ещё не проходила.
-  const list = from('list');
-  const vpnFromLists = srv?.vpnDomains?.length
-    ? srv.vpnDomains
-    : list.filter((v) => v.route === 'vpn').map((v) => v.domain);
-  const directFromLists = srv?.directDomains?.length
-    ? [...DIRECT_DOMAINS, ...srv.directDomains]
-    : [...DIRECT_DOMAINS, ...list.filter((v) => v.route === 'direct').map((v) => v.domain)];
+  // Списки с сервера главнее встроенных: встроенный запас (FALLBACK_VPN_DOMAINS) —
+  // только пока синхронизация ещё не проходила. В разделе «Сайты» его нет: там лишь
+  // то, что человек добавил сам.
+  const vpnFromLists = srv?.vpnDomains?.length ? srv.vpnDomains : FALLBACK_VPN_DOMAINS;
+  const directFromLists = srv?.directDomains?.length ? [...DIRECT_DOMAINS, ...srv.directDomains] : DIRECT_DOMAINS;
 
   const node = nodeFor(s);
   const useLists = listsOn('sites');
@@ -375,6 +371,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             // Подключение при запуске всегда сброшено: движок ещё не поднят.
             conn: 'off',
             settings: { ...x.settings, ...(saved.settings ?? {}) },
+            // Миграция: у уже установленных копий на диске лежат старые встроенные
+            // сайты («из списка»). Их убираем — раздел «Сайты» теперь только про то,
+            // что человек добавил сам; сами эти домены и так идут через VPN по AutoRoute.
+            sites: (saved.sites ?? x.sites).filter((v) => v.source !== 'list'),
           }));
         }
         const saved_lists = await listsLoad().catch(() => null);

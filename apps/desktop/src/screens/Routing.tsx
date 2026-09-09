@@ -415,7 +415,7 @@ function SitesTab() {
             <span className="item-meta mono">
               {v.domain}
               {v.enabled === false ? ' · выключено' : ''}
-              {advanced ? (v.source === 'list' ? ' · из списка' : ' · вручную') : ''}
+              {advanced ? (v.source === 'browser' ? ' · из браузера' : ' · вручную') : ''}
             </span>
           </span>
           <span className="item-tail" style={{ opacity: v.enabled === false ? 0.5 : 1 }}>

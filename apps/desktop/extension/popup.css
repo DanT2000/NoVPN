@@ -202,3 +202,15 @@ body.blocked main {
   opacity: 0.4;
   pointer-events: none;
 }
+
+/* ── Попутные домены ─────────────────────────────────────── */
+.rel { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(127, 127, 127, 0.25); }
+.rel-title { font-size: 12px; line-height: 1.35; opacity: 0.85; margin-bottom: 6px; }
+.rel-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 168px; overflow-y: auto; }
+.rel-list li { margin: 0; }
+.rel-list label { display: flex; align-items: center; gap: 8px; padding: 4px 2px; font-size: 12.5px; cursor: pointer; }
+.rel-list label span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Consolas, monospace; }
+.rel-list label small { opacity: 0.55; font-variant-numeric: tabular-nums; }
+.rel-actions { display: flex; align-items: center; gap: 12px; }
+.rel-apply { flex: 1; padding: 7px 10px; border-radius: 8px; border: 0; background: #0d7dd4; color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.rel-apply:disabled { opacity: 0.6; cursor: default; }

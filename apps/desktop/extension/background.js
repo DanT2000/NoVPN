@@ -7,6 +7,92 @@
 
 const HOST = 'ru.appswire.novpn';
 
+/* «Попутные домены» — как в ZeroOmega. Сайт редко живёт на одном домене: картинки на
+   cdn.*, API на api.*, видео на своём CDN. Человек нажал «через VPN» на сайте, а
+   половина страницы всё равно идёт напрямую и не грузится. Поэтому смотрим, какие
+   сторонние хосты подгружала вкладка, и предлагаем отправить их тем же маршрутом.
+
+   Только наблюдаем (webRequest.onCompleted), ничего не блокируем и не читаем: нужен
+   лишь список хостов по вкладке. Данные живут в памяти работника и никуда не уходят. */
+const related = new Map(); // tabId -> Map(host -> сколько раз)
+const RELATED_CAP = 200;
+
+/* Общая инфраструктура, которую нет смысла тащить в VPN: метрика, реклама, шрифты,
+   публичные CDN — они есть на каждом сайте и работают откуда угодно. */
+const NOISE = new Set([
+  'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'googlesyndication.com',
+  'googleadservices.com', 'gstatic.com', 'googleapis.com', 'google.com', 'recaptcha.net',
+  'cloudflare.com', 'cloudflareinsights.com', 'jsdelivr.net', 'unpkg.com', 'cdnjs.com',
+  'facebook.net', 'facebook.com', 'fbcdn.net', 'twitter.com', 'x.com', 'sentry.io',
+  'hotjar.com', 'criteo.com', 'adsrvr.org', 'adnxs.com', 'rubiconproject.com',
+  'yandex.ru', 'yandex.net', 'mc.yandex.ru', 'yastatic.net', 'vk.com', 'mail.ru',
+  'top-fwz1.mail.ru', 'bing.com', 'microsoft.com', 'live.com', 'apple.com', 'mozilla.org',
+]);
+
+const TWO_LEVEL = new Set([
+  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'com.br', 'com.tr',
+  'co.jp', 'ne.jp', 'co.kr', 'com.ua', 'net.ua', 'org.ua', 'com.ru', 'msk.ru', 'spb.ru',
+  'com.cn', 'com.hk', 'com.tw', 'co.in', 'co.za', 'com.mx', 'com.ar',
+]);
+
+/** Регистрируемый домен: cdn.static.example.com → example.com, a.b.co.uk → b.co.uk.
+    Правило в приложении — «домен и поддомены», поэтому предлагаем именно корень. */
+function baseDomain(host) {
+  const p = host.split('.');
+  if (p.length <= 2) return host;
+  const last2 = p.slice(-2).join('.');
+  return TWO_LEVEL.has(last2) ? p.slice(-3).join('.') : last2;
+}
+
+function noteHost(tabId, url) {
+  let host;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+    host = u.hostname.replace(/^www\./, '');
+  } catch {
+    return;
+  }
+  let m = related.get(tabId);
+  if (!m) {
+    m = new Map();
+    related.set(tabId, m);
+  }
+  if (m.size >= RELATED_CAP && !m.has(host)) return;
+  m.set(host, (m.get(host) || 0) + 1);
+}
+
+chrome.webRequest.onCompleted.addListener(
+  (d) => {
+    if (d.tabId < 0) return;
+    noteHost(d.tabId, d.url);
+  },
+  { urls: ['<all_urls>'] },
+);
+// Новая навигация во вкладке — прошлые хосты к ней уже не относятся.
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.url || info.status === 'loading') related.delete(tabId);
+});
+chrome.tabs.onRemoved.addListener((tabId) => related.delete(tabId));
+
+/** Кандидаты «тоже отправить»: корневые домены сторонних хостов вкладки, без шума
+    и без самого сайта, по убыванию частоты. Не больше восьми — иначе это не подсказка. */
+function relatedFor(tabId, domain) {
+  const m = related.get(tabId);
+  if (!m) return [];
+  const self = baseDomain(domain);
+  const score = new Map();
+  for (const [host, n] of m) {
+    const base = baseDomain(host);
+    if (base === self || NOISE.has(base) || NOISE.has(host)) continue;
+    score.set(base, (score.get(base) || 0) + n);
+  }
+  return [...score.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([base, n]) => ({ domain: base, hits: n }));
+}
+
 /** Один запрос — одно соединение. Ответ приходит один. */
 function ask(message) {
   return new Promise((resolve) => {
@@ -51,6 +137,11 @@ function ask(message) {
 }
 
 chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
+  // Попутные домены отвечаем сами — это память работника, приложение тут не нужно.
+  if (req && req.type === 'related') {
+    sendResponse({ ok: true, items: relatedFor(Number(req.tabId), String(req.domain || '')) });
+    return false;
+  }
   ask(req).then(sendResponse);
   return true; // ответ придёт позже
 });

@@ -16,6 +16,59 @@ function domainOf(url) {
 const send = (msg) => chrome.runtime.sendMessage(msg);
 
 let domain = null;
+let tabId = null;
+
+/* Попутные домены. После выбора маршрута спрашиваем фон, какие сторонние домены
+   подгружала вкладка, и предлагаем отправить их тем же путём. Молча ничего не
+   добавляем: человек видит список, снимает лишнее и подтверждает. */
+const ROUTE_WORD = { vpn: 'через VPN', direct: 'напрямую' };
+
+function hideRelated() {
+  $('related').hidden = true;
+  $('related-list').textContent = '';
+}
+
+async function suggestRelated(route) {
+  hideRelated();
+  if (tabId == null) return;
+  const r = await send({ type: 'related', tabId, domain });
+  const items = r && r.ok ? r.items : [];
+  if (!items.length) return;
+
+  $('related-title').textContent = `Этот сайт подгружает ещё ${items.length === 1 ? 'один домен' : `${items.length} домена`} — отправить ${ROUTE_WORD[route]} тоже?`;
+  const list = $('related-list');
+  for (const it of items) {
+    const li = document.createElement('li');
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = true;
+    cb.dataset.domain = it.domain;
+    const text = document.createElement('span');
+    text.textContent = it.domain;
+    const hits = document.createElement('small');
+    hits.textContent = `${it.hits}`;
+    hits.title = 'сколько запросов ушло на этот домен';
+    label.append(cb, text, hits);
+    li.append(label);
+    list.append(li);
+  }
+  const apply = $('related-apply');
+  apply.textContent = `Отправить ${ROUTE_WORD[route]}`;
+  apply.onclick = async () => {
+    const picked = [...list.querySelectorAll('input:checked')].map((c) => c.dataset.domain);
+    apply.disabled = true;
+    let ok = 0;
+    for (const d of picked) {
+      const res = await send({ type: 'set', domain: d, route });
+      if (res && res.ok) ok += 1;
+    }
+    apply.disabled = false;
+    hideRelated();
+    note(ok ? `Готово: ещё ${ok} ${ok === 1 ? 'домен' : 'домена'} ${ROUTE_WORD[route]}.` : 'Ничего не добавлено.', !ok);
+  };
+  $('related').hidden = false;
+}
 
 function paintRoute(route, source) {
   document.querySelectorAll('.choice').forEach((b) => {
@@ -38,6 +91,7 @@ function note(text, warn) {
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   domain = tab && tab.url ? domainOf(tab.url) : null;
+  tabId = tab && typeof tab.id === 'number' ? tab.id : null;
 
   if (!domain) {
     document.body.classList.add('blocked');
@@ -76,11 +130,15 @@ document.querySelectorAll('.choice').forEach((btn) => {
       return;
     }
     note('Готово. Правило уже действует.');
+    void suggestRelated(route);
   });
 });
 
+$('related-skip').addEventListener('click', hideRelated);
+
 $('clear').addEventListener('click', async () => {
   if (!domain) return;
+  hideRelated();
   paintRoute(null, null);
   const r = await send({ type: 'remove', domain });
   if (!r || !r.ok) {

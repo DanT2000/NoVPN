@@ -5,7 +5,6 @@
 
 import appsPreset from '../data/apps.json';
 import sitesPreset from '../data/sites.json';
-import { lookup } from './catalog';
 import type { AppRule, RuleList, Server, SiteRule, State } from '../state/types';
 
 interface PresetApp {
@@ -43,13 +42,17 @@ export const APPS: AppRule[] = P_APPS.map((a) => ({
   source: 'list',
 }));
 
-export const SITES: SiteRule[] = P_SITES.filter((v) => v.route === 'vpn').map((v, i) => ({
-  id: `s${i}`,
-  title: v.name ?? lookup(v.domain)?.name ?? v.domain,
-  domain: v.domain,
-  route: 'vpn',
-  source: 'list',
-}));
+/** Встроенных «сайтов» больше нет. Пресет VPN-сайтов дублировал большие списки
+ *  AutoRoute («Недоступные ресурсы») и только путал: «YouTube · из списка» читалось как
+ *  своё правило, а убрать его было нельзя. Раздел «Сайты» — только то, что человек
+ *  добавил сам, в приложении или через расширение. Пресет остаётся источником
+ *  DIRECT_DOMAINS ниже: это слой логики, в интерфейсе он не показывается. */
+export const SITES: SiteRule[] = [];
+
+/** Запас на первый запуск: пока списки с сервера ещё не скачались, эти домены идут
+ *  через VPN, чтобы приложение не было «пустым». Как только AutoRoute синхронизирован —
+ *  он главнее (см. rulesOf в store). В разделе «Сайты» этот запас не показывается. */
+export const FALLBACK_VPN_DOMAINS: string[] = P_SITES.filter((v) => v.route === 'vpn').map((v) => v.domain);
 
 /** Домены, обязанные идти напрямую. Отдельным слоем: человеку их менять
     незачем, а правила из него сильнее всего остального. */
