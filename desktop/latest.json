@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "9a66dbd351bb840978a8853a48077f604a844a29c1baf189ca4f25dd003f2835",
-  "signature": "RbAdbLQQYWryeBWJhtz9nAcYb/PiDC3JZLu1ROMYuHs42dkLKk984+n0UMUiebxqZKSoIAAjG+WKZVDDQ6rzCQ==",
-  "sizeBytes": 16536927,
-  "notes": "Находятся Lesta Game Center и Мир танков. В списке приложений показываются только те, что есть на компьютере или добавлены вручную — «не найдено» больше не мозолит глаза."
+  "sha256": "d9bec9abece94bf2a9944b5c0bfb22b2ef42e1f148ee2337bdeb3bd132ac0c4d",
+  "signature": "fQX/tAGURcGO5SfbyI6z6sCK7PTqGD7A4NXQYkmE7udtk0MNswWKm3H16M9LKqSKHhduu2mN2QD/G23xQglDBQ==",
+  "sizeBytes": 16535413,
+  "notes": "Раздел «Сайты» — только ваши правила (встроенный список убран). Расширение 0.2: попутные домены — сайт предлагает отправить тем же маршрутом свои CDN и API. Подсказка про доступ к сайтам в Firefox."
 }
