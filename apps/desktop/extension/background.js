@@ -29,7 +29,16 @@ function ask(message) {
     port.onMessage.addListener((msg) => finish(msg));
     port.onDisconnect.addListener(() => {
       const err = chrome.runtime.lastError;
-      finish({ ok: false, error: err ? 'Приложение NoVPN не отвечает' : 'Соединение закрыто' });
+      // Причины разные, и человеку важно знать какая: хост не зарегистрирован
+      // (приложение не ставили или ни разу не запускали) — это одно; браузер
+      // отказал в доступе (расширение установлено под другим ID, чем ждёт
+      // приложение) — совсем другое, и «перезапустите NoVPN» тут не поможет.
+      const m = String((err && err.message) || '').toLowerCase();
+      let error = 'Соединение закрыто';
+      if (m.includes('not found')) error = 'Приложение NoVPN не установлено или ещё ни разу не запускалось — откройте его один раз';
+      else if (m.includes('forbidden')) error = 'Расширение установлено под другим ID — переустановите его из свежего архива с сайта';
+      else if (err) error = 'Приложение NoVPN не отвечает';
+      finish({ ok: false, error });
     });
     // Приложение может быть занято подключением — но молчать бесконечно не должно.
     setTimeout(() => finish({ ok: false, error: 'Приложение NoVPN не отвечает' }), 4000);

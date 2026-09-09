@@ -77,14 +77,19 @@ function AppsTab() {
     return !!d && [...vpnDomains].some((x) => x === d || x.endsWith('.' + d) || d.endsWith('.' + x));
   };
 
+  // В списке — только то, что есть на этом компьютере (найдено) или человек добавил
+  // сам. Каталожные приложения, которых тут нет (Slack, Signal…), не показываем:
+  // строка «не найдено» с выключенным правилом только путает. Добавить что угодно
+  // по-прежнему можно кнопкой «Добавить» (из установленных / запущенных / .exe).
+  const present = s.apps.filter((a) => a.found || a.source === 'manual');
   const needle = q.trim().toLowerCase();
   const shown = needle
-    ? s.apps.filter(
+    ? present.filter(
         (a) =>
           a.name.toLowerCase().includes(needle) ||
           a.processes.some((pr) => pr.toLowerCase().includes(needle)),
       )
-    : s.apps;
+    : present;
 
   return (
     <>
@@ -101,7 +106,7 @@ function AppsTab() {
       </div>
       {needle ? (
         <div className="list-count">
-          показано {shown.length} из {s.apps.length}
+          показано {shown.length} из {present.length}
         </div>
       ) : null}
 

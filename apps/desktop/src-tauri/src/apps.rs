@@ -102,6 +102,14 @@ fn known_processes(name: &str) -> Option<Vec<String>> {
         ("cursor", &["Cursor.exe"]),
         ("figma", &["Figma.exe"]),
         ("notion", &["Notion.exe"]),
+        // Игровые центры: в реестре они «Lesta Game Center» / «Wargaming.net Game
+        // Center» / «Мир танков», а трафик идёт через лаунчер и сами игры.
+        ("lesta game center", &["lgc.exe", "WorldOfTanks.exe", "Tanki.exe"]),
+        ("lesta", &["lgc.exe", "WorldOfTanks.exe", "Tanki.exe"]),
+        ("мир танков", &["Tanki.exe", "WorldOfTanks.exe", "lgc.exe"]),
+        ("world of tanks", &["WorldOfTanks.exe", "wgc.exe"]),
+        ("wargaming.net game center", &["wgc.exe", "WorldOfTanks.exe"]),
+        ("wargaming", &["wgc.exe", "WorldOfTanks.exe"]),
     ];
     for (key, procs) in table {
         // Совпадение по границе слова, а не по любой подстроке: иначе «X» матчил
