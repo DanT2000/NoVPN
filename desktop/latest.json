@@ -8,5 +8,5 @@
   "sha256": "377938fc693b8d4c146ec2b2355df2449746d5cdf26fc0ca6f7206e8da4d6a74",
   "signature": "AOHAycFNdMIFtKrr38TMOlf4AP4oIgcE8xyJlRdRA2Np/01GvlgIXbfjqilfzOTsCYZhiSEWc48I+YCCvmFTCg==",
   "sizeBytes": 16539846,
-  "notes": "Приложение больше не реагирует на клавишу Scroll Lock (её используют некоторые скриншот-программы) — не появляется случайная рамка на пункте меню."
+  "notes": "Находятся Lesta Game Center и Мир танков. В списке приложений показываются только те, что есть на компьютере или добавлены вручную — «не найдено» больше не мозолит глаза."
 }
