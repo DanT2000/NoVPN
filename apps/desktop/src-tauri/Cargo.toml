@@ -36,6 +36,9 @@ tauri-plugin-dialog = "2"
 # от системного хранилища сертификатов тут лишний риск
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tokio = { version = "1", features = ["process", "time", "io-util"] }
+# Распаковка архива расширения в папку приложения (extension.rs). Только deflate:
+# архив собирает наш же скрипт, других методов сжатия там нет.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

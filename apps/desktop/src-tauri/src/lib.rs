@@ -18,3 +18,4 @@ pub mod store;
 pub mod selftest;
 pub mod sub;
 pub mod update;
+pub mod extension;

@@ -212,6 +212,30 @@ export const updateCheck = () => callOrThrow<UpdateInfo>('update_check');
 /** Скачать и запустить установщик новой версии. */
 export const updateInstall = () => callOrThrow<void>('update_install');
 
+/* ── Расширение в папке приложения ────────────────────────── */
+
+export interface ExtKindInfo {
+  kind: 'chrome' | 'firefox' | string;
+  /** Папка, которую человек указывает браузеру в «Загрузить распакованное». */
+  path: string;
+  version: string | null;
+  installed: boolean;
+}
+export interface ExtInfo {
+  dir: string;
+  items: ExtKindInfo[];
+  /** Какие папки только что обновились. */
+  updated: string[];
+  error: string | null;
+}
+
+/** Что лежит в папке расширения сейчас, без сети. */
+export const extensionInfo = () => call<ExtInfo>('extension_info');
+/** Скачать архивы с панели и обновить папки, если изменились. */
+export const extensionSync = (origin: string) => callOrThrow<ExtInfo>('extension_sync', { origin });
+/** Открыть папку расширения (chrome | firefox) в проводнике. */
+export const openExtensionDir = (kind: string) => call('open_extension_dir', { kind }).catch(() => null);
+
 /** Запущено ли приложение с правами администратора. */
 export const isElevated = () => call<boolean>('is_elevated').then((v) => v ?? false);
 /** Перезапуск с запросом прав. Согласие даёт человек в окне Windows. */

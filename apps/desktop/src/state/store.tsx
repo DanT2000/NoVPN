@@ -29,6 +29,7 @@ import {
   explainDomain,
   updateCheck,
   updateInstall,
+  extensionSync,
 } from '../lib/tauri';
 import type { MetaResult, ServerLists } from '../lib/tauri';
 import type {
@@ -50,6 +51,15 @@ import type {
    маршрутизация» выбирает, каким профилем подключаться. Выключить умную можно
    только если сервер выдал полный профиль (контракт, раздел 1). Чужие подписки
    (без meta.novpn) — один профиль, всегда smart. */
+
+/** Origin панели из ссылки-подписки: с него же раздаются архивы расширения. */
+export function originOf(url: string | undefined | null): string {
+  try {
+    return url ? new URL(url).origin : '';
+  } catch {
+    return '';
+  }
+}
 
 /** Ключ группировки: серверы панели — по serverId, чужие — по имени. */
 export function serverKey(v: Server): string {
@@ -444,6 +454,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               if (info.available) void updateInstall().catch(() => null);
             })
             .catch(() => null);
+        }
+        // Распакованная копия расширения в папке приложения. Человек один раз указал
+        // её браузеру — дальше держим свежей сами: при каждом запуске (после
+        // самообновления в том числе) и раз в час вместе со списками. Тихо: ошибка
+        // сети тут не повод дёргать человека, покажем её в настройках при нажатии.
+        const extOrigin = originOf(saved?.subscription?.url);
+        if (autoUpdApp && extOrigin && cached?.servers?.length) {
+          void extensionSync(extOrigin).catch(() => null);
         }
       } finally {
         loaded.current = true;
@@ -916,6 +934,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         void metaFetch()
           .then((m) => applyMeta(m))
           .catch(() => null);
+        // Заодно освежаем папку расширения: раз в час вместе со списками, тихо.
+        const extOrigin = originOf(s.subscription.url);
+        if (s.settings.autoUpdateApp && extOrigin) void extensionSync(extOrigin).catch(() => null);
         void listsSync()
           .then((r) => {
             setSrv(r);

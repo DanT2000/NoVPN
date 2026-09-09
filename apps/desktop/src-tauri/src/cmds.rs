@@ -701,7 +701,7 @@ pub fn open_engine_log() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn open_in_explorer(path: &std::path::Path) -> Result<(), String> {
+pub fn open_in_explorer(path: &std::path::Path) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     std::process::Command::new("explorer")
@@ -713,7 +713,7 @@ fn open_in_explorer(path: &std::path::Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn open_in_explorer(_path: &std::path::Path) -> Result<(), String> {
+pub fn open_in_explorer(_path: &std::path::Path) -> Result<(), String> {
     Err("Поддерживается только в Windows".into())
 }
 

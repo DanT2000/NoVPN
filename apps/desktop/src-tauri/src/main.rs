@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use novpn_desktop::{cmds, deeplink, host, selftest, update};
+use novpn_desktop::{cmds, deeplink, extension, host, selftest, update};
 
 use std::sync::Mutex;
 use tauri::{
@@ -234,6 +234,9 @@ fn main() {
             cmds::meta_fetch,
             update::update_check,
             update::update_install,
+            extension::extension_info,
+            extension::extension_sync,
+            extension::open_extension_dir,
             cmds::browser_rules,
             cmds::open_url,
             cmds::open_config_dir,

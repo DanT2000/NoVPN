@@ -17,8 +17,11 @@ import {
   vpnPort,
   browsersInstalled,
   openUrl,
+  extensionInfo,
+  extensionSync,
+  openExtensionDir,
 } from '../lib/tauri';
-import type { InstalledBrowser, UpdateInfo } from '../lib/tauri';
+import type { ExtInfo, InstalledBrowser, UpdateInfo } from '../lib/tauri';
 import { IconChevron, IconRefresh } from '../components/icons';
 import type { Theme, UiScale } from '../state/types';
 
@@ -150,6 +153,94 @@ function AdvancedSettings() {
         Открыть папку настроек
       </button>
     </div>
+  );
+}
+
+/* Расширение живёт распакованным в папке приложения: человек один раз указывает
+   её браузеру в «Загрузить распакованное», дальше папка обновляется сама. Здесь —
+   кнопка «Скачать», путь к папке и короткая инструкция. Вне Tauri (прототип в
+   браузере) остаются прямые ссылки на архивы. */
+function ExtensionFolder({ origin }: { origin: string }) {
+  const [info, setInfo] = useState<ExtInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; warn?: boolean } | null>(null);
+  useEffect(() => {
+    if (inTauri) void extensionInfo().then((v) => setInfo(v));
+  }, []);
+
+  const chrome = info?.items.find((i) => i.kind === 'chrome');
+  const installed = !!chrome?.installed;
+
+  const sync = () => {
+    setBusy(true);
+    setMsg(null);
+    void extensionSync(origin)
+      .then((r) => {
+        setInfo(r);
+        if (r.error) setMsg({ text: `Не всё скачалось: ${r.error}`, warn: true });
+        else if (r.updated.length) setMsg({ text: installed ? 'Обновлено. Нажмите «Обновить» на странице расширений браузера или перезапустите его.' : 'Скачано. Теперь укажите папку браузеру — как описано ниже.' });
+        else setMsg({ text: 'Уже последняя версия.' });
+      })
+      .catch((e: unknown) => setMsg({ text: String(e), warn: true }))
+      .finally(() => setBusy(false));
+  };
+
+  const copyPath = (p: string) => {
+    void navigator.clipboard?.writeText(p).then(
+      () => setMsg({ text: 'Путь скопирован — вставьте его в окно выбора папки.' }),
+      () => setMsg({ text: p }),
+    );
+  };
+
+  if (!inTauri) {
+    return (
+      <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+        <button className="btn btn-secondary btn-sm" onClick={() => void openUrl(`${origin}/extension/novpn-extension-chrome.zip`)}>
+          ⬇ Скачать для Chrome / Edge / Яндекс
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={() => void openUrl(`${origin}/extension/novpn-extension-firefox.zip`)}>
+          ⬇ Для Firefox
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {installed && chrome ? (
+        <div className="item" style={{ cursor: 'auto' }}>
+          <span className="item-main">
+            <span className="item-name">Скачано{chrome.version ? ` · версия ${chrome.version}` : ''}</span>
+            <span className="item-meta mono" style={{ wordBreak: 'break-all' }}>{chrome.path}</span>
+          </span>
+          <span className="item-tail">
+            <button className="btn btn-secondary btn-sm" onClick={() => void openExtensionDir('chrome')}>
+              Открыть папку
+            </button>
+          </span>
+        </div>
+      ) : null}
+      <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+        <button className={`btn btn-sm ${installed ? 'btn-secondary' : 'btn-primary'}`} onClick={sync} disabled={busy}>
+          {busy ? 'Скачиваем…' : installed ? 'Проверить обновление' : '⬇ Скачать расширение'}
+        </button>
+        {installed && chrome ? (
+          <>
+            <button className="btn btn-secondary btn-sm" onClick={() => copyPath(chrome.path)}>
+              Скопировать путь
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => void openExtensionDir('firefox')}>
+              Папка для Firefox
+            </button>
+          </>
+        ) : null}
+      </div>
+      {msg ? (
+        <div className="hint" style={{ marginTop: 8, color: msg.warn ? 'var(--danger, #d0483e)' : undefined }}>
+          {msg.text}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -287,29 +378,16 @@ export function Settings() {
           </div>
         ))
       )}
-      {/* Расширения в магазинах ещё нет — даём файл для ручной установки прямо отсюда. */}
-      {extOrigin ? (
-        <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => void openUrl(`${extOrigin}/extension/novpn-extension-chrome.zip`)}
-          >
-            ⬇ Скачать для Chrome / Edge / Яндекс
-          </button>
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => void openUrl(`${extOrigin}/extension/novpn-extension-firefox.zip`)}
-          >
-            ⬇ Для Firefox
-          </button>
-        </div>
-      ) : null}
+      {/* Расширения в магазинах ещё нет — держим распакованную копию в папке приложения. */}
+      {extOrigin ? <ExtensionFolder origin={extOrigin} /> : null}
       <div className="hint" style={{ marginTop: 10 }}>
-        Расширение пока ставится вручную: скачайте архив кнопкой выше, распакуйте, откройте в
-        браузере страницу расширений, включите «Режим разработчика» и нажмите «Загрузить
-        распакованное расширение». Пошагово — в инструкции на сайте. В Firefox после установки
-        откройте about:addons → NoVPN → «Разрешения» и включите доступ ко всем сайтам, иначе
-        попутные домены предлагаться не будут.
+        Расширение ставится из папки приложения и дальше обновляется само — при запуске NoVPN и
+        раз в час. Chrome, Edge, Яндекс: откройте страницу расширений (chrome://extensions),
+        включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и укажите
+        папку выше. После обновления папки нажмите «Обновить» на той же странице или
+        перезапустите браузер. Firefox: about:debugging → «Этот Firefox» → «Загрузить временное
+        дополнение» → manifest.json из папки для Firefox; затем в about:addons → NoVPN →
+        «Разрешения» включите доступ ко всем сайтам, иначе попутные домены предлагаться не будут.
       </div>
 
       <div className="section-label">Обновления</div>
