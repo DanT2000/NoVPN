@@ -16,7 +16,7 @@ import { buildWhitelistXrayConfig } from '@novpn/shared';
 import type { ProxyFallback } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -1562,7 +1562,31 @@ function speedtestIp(req: Request): string | null {
   const ip = clientIp(req).replace(/^::ffff:/, '');
   return isAllowEntry(ip) ? ip : null;
 }
-router.get('/api/admin/my-ip', requireAdmin, (req, res) => res.json({ ip: speedtestIp(req) }));
+/** Частные диапазоны: такой адрес панель видит, когда админ и панель в одной локальной
+ *  сети (дом). До VPN-сервера он никогда не доходит — там виден публичный адрес роутера. */
+function isPrivateIp(ip: string): boolean {
+  return /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip);
+}
+/** Публичный адрес админа для списка доступа. Если панель видит частный адрес (общая
+ *  локалка с админом), спрашиваем сам VPN-сервер, с какого адреса к нему пришла
+ *  SSH-сессия панели: это публичный адрес той же локалки, с него пойдёт и тест. */
+async function speedtestPublicIp(req: Request, s: { id: string }): Promise<{ ip: string | null; source: 'request' | 'server' | null }> {
+  const own = speedtestIp(req);
+  if (own && !isPrivateIp(own)) return { ip: own, source: 'request' };
+  const fallback = { ip: own, source: own ? ('request' as const) : null };
+  if (!(await sshHasSshAccess(s.id))) return fallback;
+  const peer = await sshPeerIp(s as Parameters<typeof sshPeerIp>[0]).catch(() => null);
+  return peer ? { ip: peer, source: 'server' } : fallback;
+}
+router.get('/api/admin/my-ip', requireAdmin, async (req, res) => {
+  const sid = typeof req.query.server === 'string' ? req.query.server : '';
+  const s = sid ? repo.getServer(sid) : null;
+  if (!s) {
+    const ip = speedtestIp(req);
+    return res.json({ ip, source: ip ? 'request' : null });
+  }
+  res.json(await speedtestPublicIp(req, s));
+});
 
 router.post('/api/admin/servers/:id/speedtest/install', requireAdmin, async (req, res) => {
   const s = repo.getServer(req.params.id!);
@@ -1602,8 +1626,9 @@ router.post('/api/admin/servers/:id/speedtest/open', requireAdmin, async (req, r
   const s = repo.getServer(req.params.id!);
   if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
   if (!s.speedtest) return res.status(400).json(err('state', 'Тест скорости на этом сервере не установлен.'));
-  const ip = speedtestIp(req);
+  const { ip } = await speedtestPublicIp(req, s);
   if (!ip) return res.status(400).json(err('ip', 'Не удалось определить ваш адрес (IPv6 не поддерживается) — впишите его в список вручную.'));
+  if (isPrivateIp(ip)) return res.status(400).json(err('ip', `Панель видит только ваш локальный адрес (${ip}), а сервер не ответил, какой адрес у вашей сети снаружи. Впишите публичный адрес в список вручную.`));
   try {
     if (!s.speedtest.allow.includes(ip)) {
       const allow = [...s.speedtest.allow, ip].slice(-50);

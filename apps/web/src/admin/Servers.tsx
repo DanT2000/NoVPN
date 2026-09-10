@@ -345,8 +345,10 @@ function SpeedtestPanel({ server }: { server: Server }) {
     setAllowText(allowKey.split(',').filter(Boolean).join('\n'));
   }, [server.id, allowKey]);
   useEffect(() => {
-    void api.myIp().then((r) => setMyIp(r.ip)).catch(() => null);
-  }, []);
+    // С id сервера: если панель видит только локальный адрес админа (общая локалка),
+    // она переспросит сервер, с какого публичного адреса к нему приходит.
+    void api.myIp(server.id).then((r) => setMyIp(r.ip)).catch(() => null);
+  }, [server.id]);
   const parse = () => allowText.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
   const fail = (e: unknown) => showToast(e instanceof Error ? e.message : 'Не получилось');
 

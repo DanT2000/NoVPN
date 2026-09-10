@@ -126,7 +126,8 @@ export const httpApi: ApiClient = {
   speedtestOpen: (id: string) =>
     req<{ ok: boolean; url: string; ip: string; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/open`, {}),
   speedtestRemove: (id: string) => req<{ ok: boolean; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/remove`, {}),
-  myIp: () => req<{ ip: string | null }>('GET', '/api/admin/my-ip'),
+  myIp: (serverId?: string) =>
+    req<{ ip: string | null; source: 'request' | 'server' | null }>('GET', `/api/admin/my-ip${serverId ? `?server=${encodeURIComponent(serverId)}` : ''}`),
   getServerProxy: (id: string) => req<{ proxy: ServerProxyConfig | null; host: string }>('GET', `/api/admin/servers/${id}/proxy`),
   provisionServer: (id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }) =>
     req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports, ...(opts?.migrate ? { migrate: true } : {}) }),

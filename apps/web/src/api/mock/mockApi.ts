@@ -389,7 +389,7 @@ export const mockApi: ApiClient = {
   },
 
   async myIp() {
-    return { ip: '203.0.113.7' };
+    return { ip: '203.0.113.7', source: 'request' as const };
   },
   async speedtestInstall(id: string, allow: string[] = []) {
     await wait(600);

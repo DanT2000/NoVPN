@@ -225,8 +225,9 @@ export interface ApiClient {
   speedtestAllow(id: string, allow: string[]): Promise<{ ok: boolean; server: Server }>;
   speedtestOpen(id: string): Promise<{ ok: boolean; url: string; ip: string; server: Server }>;
   speedtestRemove(id: string): Promise<{ ok: boolean; server: Server }>;
-  /** Адрес админа, каким его видит панель (для списка доступа к тесту скорости). */
-  myIp(): Promise<{ ip: string | null }>;
+  /** Публичный адрес админа для списка доступа к тесту скорости. С serverId панель
+   *  переспросит сервер, если сама видит только локальный адрес (общая локалка). */
+  myIp(serverId?: string): Promise<{ ip: string | null; source: 'request' | 'server' | null }>;
   getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
   provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }): Promise<{ ok: boolean; running: boolean }>;
   provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;

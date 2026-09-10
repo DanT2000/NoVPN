@@ -1283,3 +1283,12 @@ echo "RM_OK=1"`;
   const out = await runScript(creds(server.id), script, 60000);
   if (!grab(out, 'RM_OK')) throw new Error('Не удалось удалить тест скорости.');
 }
+
+/** С какого адреса панель приходит на сервер по SSH — это публичный адрес сети, где
+ *  стоит панель. Нужен для списка доступа к тесту скорости, когда админ сидит в той же
+ *  локалке, что и панель: панель видит его как 192.168.x.x, а сервер увидит роутер. */
+export async function sshPeerIp(server: Server): Promise<string | null> {
+  const out = await runScript(creds(server.id), 'echo "PEER=$(echo "$SSH_CONNECTION" | cut -d" " -f1)"', 20000);
+  const ip = grab(out, 'PEER');
+  return ip && isAllowEntry(ip) ? ip : null;
+}
