@@ -84,9 +84,13 @@ export interface ServerSelfTest {
   /** Узел, до которого мерили (город, оператор). */
   server: string | null;
   isp: string | null;
-  /** Чем мерили: ookla (официальный CLI) или speedtest-cli (python, запасной). */
+  /** Чем мерили: cloudflare (свой многопоточный тест) — или старые ookla / speedtest-cli. */
   tool: string;
   url?: string | null;
+  /** Загрузка процессора сервера во время фазы скачивания, %. ≥90 — упёрлись в CPU, а не в сеть. */
+  cpuPct?: number | null;
+  /** Расшифровка: сколько дал каждый источник и коды ответов. */
+  note?: string | null;
 }
 
 /** Тест скорости на сервере: меряет реальный канал между браузером админа и сервером. */

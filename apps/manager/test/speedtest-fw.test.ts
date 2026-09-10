@@ -59,15 +59,17 @@ test('сгенерированные скрипты проходят bash -n', {
   }
 });
 
-test('самотест: разбор CFTEST (байты и секунды по потокам), ошибка без вывода', () => {
-  const r = parseSelfTest('junk\nCFTEST=1500000000 12.3 300000000 12.1 0.0021 AMS 1.2.3.4 8\n');
+test('самотест: разбор CFTEST2 (байты и миллисекунды, cpu, источники), ошибка без вывода', () => {
+  const r = parseSelfTest('junk\nCFTEST2=1500000000 12300 300000000 12100 0.0021 DUS 1.2.3.4 8 47 cf=900000000 scw=400000000 ovh=200000000 up=200 codes=cf:200,scw:206,ovh:206\n');
   assert.equal(r.downloadMbps, 975.6);
   assert.equal(r.uploadMbps, 198.3);
   assert.equal(r.pingMs, 2.1);
-  assert.equal(r.server, 'Cloudflare AMS · 8 потоков');
+  assert.equal(r.cpuPct, 47);
+  assert.match(r.server ?? '', /^Cloudflare DUS \+ Scaleway \+ OVH · 8 потоков$/);
+  assert.match(r.note ?? '', /Cloudflare 585\.4 · Scaleway Paris 260\.2 · OVH 130\.1 Мбит\/с; ответы cf:200,scw:206,ovh:206, отдача 200/);
   assert.equal(r.tool, 'cloudflare');
   assert.throws(() => parseSelfTest('SELF_FAIL: ничего не вышло'), /ничего не вышло/);
   // В скрипте нет ни одной шаблонной подстановки TS: «${» в shell-скрипт попасть не должно.
   assert.ok(!SELF_SPEEDTEST_SCRIPT.includes('${'));
-  assert.ok(SELF_SPEEDTEST_SCRIPT.includes('speed.cloudflare.com'));
+  assert.ok(SELF_SPEEDTEST_SCRIPT.includes('ping.online.net'));
 });

@@ -1299,8 +1299,10 @@ export async function sshPeerIp(server: Server): Promise<string | null> {
 // этого не годится: узел он выбирает по GeoIP адреса сервера (адрес «в Нидерландах»,
 // ближайшими вышли египетские узлы) и меряет одним потоком — получались 58/166 Мбит на
 // гигабитном канале. Меряем сами: 8 параллельных потоков до ближайшего узла Cloudflare
-// (anycast — узел выбирается реальным маршрутом), скачивание и отдача по 12 секунд,
-// без установки пакетов. Суммарные байты всех потоков / время самого долгого.
+// (anycast — узел выбирается реальным маршрутом) плюс Scaleway Paris (чистый HTTP, без
+// TLS: виден сетевой потолок без затрат CPU) и OVH; скачивание и отдача по 12 секунд, без
+// установки пакетов. Суммарные байты всех потоков / время самого долгого (целые мс:
+// первая версия считала время через awk с плавающей точкой и на сервере получала 0).
 
 export interface SelfTestResult {
   downloadMbps: number;
@@ -1310,6 +1312,8 @@ export interface SelfTestResult {
   isp: string | null;
   tool: string;
   url: string | null;
+  cpuPct: number | null;
+  note: string | null;
 }
 
 export const SELF_SPEEDTEST_SCRIPT = `set +e
@@ -1318,56 +1322,93 @@ STREAMS=8; SECS=12
 TMP=$(mktemp -d /tmp/novpn-st.XXXXXX)
 command -v curl >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get install -y -qq curl >/dev/null 2>&1; }
 command -v curl >/dev/null 2>&1 || { echo "SELF_FAIL: на сервере нет curl"; exit 1; }
+now_ms() { date +%s%3N; }
 # Узел Cloudflare, до которого меряем (colo), и адрес сервера, каким его видит мир.
 TRACE=$(curl -s -m 10 "$CF/cdn-cgi/trace" 2>/dev/null)
 COLO=$(echo "$TRACE" | sed -n 's/^colo=//p' | head -1); MYIP=$(echo "$TRACE" | sed -n 's/^ip=//p' | head -1)
 # Задержка: время TCP-соединения (ICMP на серверах часто закрыт).
 PING=$(curl -s -o /dev/null -m 10 -w '%{time_connect}' "$CF/cdn-cgi/trace" 2>/dev/null)
-# Скачивание: STREAMS потоков, каждый качает куски по 100 МБ, пока не выйдут SECS секунд.
+# Источники скачивания. cf — HTTPS, куски по 50 МБ (больше ~60 МБ Cloudflare отвечает 403). scw (Scaleway, Париж) — чистый HTTP:
+# без затрат CPU на шифрование виден сетевой потолок. ovh — HTTPS, второй независимый узел.
+src_url() { case "$1" in
+  cf) echo "$CF/__down?bytes=50000000";;
+  scw) echo "http://ping.online.net/1000Mo.dat";;
+  ovh) echo "https://proof.ovh.net/files/1Gb.dat";;
+esac; }
+# Один поток: качает куски (Cloudflare — по 50 МБ, файлы — Range по 100 МБ), пока не выйдут SECS секунд. Время — целые
+# миллисекунды, без awk и плавающей точки: на серверном awk это уже давало нули.
 down_stream() {
-  s=$(date +%s.%N); end=$(( $(date +%s) + SECS )); tot=0
+  # Cloudflare на Range отвечает 403 — ему размер задаёт параметр bytes; файлы Scaleway/OVH режем Range по 100 МБ.
+  url=$(src_url "$1"); case "$1" in cf) RANGE=;; *) RANGE="-r 0-99999999";; esac
+  s=$(now_ms); end=$(( $(date +%s) + SECS )); tot=0; code=
   while [ $(date +%s) -lt $end ]; do
-    b=$(curl -s -o /dev/null -m $SECS -w '%{size_download}' "$CF/__down?bytes=100000000" 2>/dev/null); [ -n "$b" ] || b=0
+    r=$(curl -s -o /dev/null -m $SECS $RANGE -w '%{size_download} %{http_code}' "$url" 2>/dev/null)
+    b=$(echo "$r" | cut -d' ' -f1); c=$(echo "$r" | cut -d' ' -f2); [ -n "$b" ] || b=0; [ -n "$code" ] || code=$c
     tot=$((tot + b)); [ "$b" -gt 0 ] 2>/dev/null || break
   done
-  e=$(date +%s.%N); echo "$tot $(awk "BEGIN{print $e-$s}")"
+  e=$(now_ms); echo "$1 $tot $((e - s)) $code" > "$2"
 }
-i=0; while [ $i -lt $STREAMS ]; do down_stream > "$TMP/d$i" & i=$((i+1)); done; wait
-DBYTES=$(cat "$TMP"/d* | awk '{b+=$1} END{print b+0}'); DTIME=$(cat "$TMP"/d* | awk 'BEGIN{m=0}{if($2>m)m=$2}END{print m+0}')
-# Отдача: файл из нулей, STREAMS потоков POST по 50 МБ, пока не выйдут SECS секунд.
+cpu_line() { head -1 /proc/stat; }
+C0=$(cpu_line)
+i=0; while [ $i -lt $STREAMS ]; do
+  case $((i % 4)) in 2) src=scw;; 3) src=ovh;; *) src=cf;; esac
+  down_stream $src "$TMP/d$i" & i=$((i+1))
+done; wait
+C1=$(cpu_line)
+CPU=$(printf '%s\n%s\n' "$C0" "$C1" | awk 'NR==1{for(i=2;i<=NF;i++)t0+=$i; i0=$5+$6} NR==2{for(i=2;i<=NF;i++)t1+=$i; i1=$5+$6} END{d=t1-t0; if(d>0) printf "%d", 100*(1-(i1-i0)/d); else print 0}')
+DBYTES=0; DMS=0; SCF=0; SSCW=0; SOVH=0; CODES=
+for f in "$TMP"/d*; do
+  read src bytes ms code < "$f"
+  DBYTES=$((DBYTES + bytes)); [ "$ms" -gt "$DMS" ] 2>/dev/null && DMS=$ms; CODES="$CODES $src:$code"
+  case "$src" in cf) SCF=$((SCF + bytes));; scw) SSCW=$((SSCW + bytes));; ovh) SOVH=$((SOVH + bytes));; esac
+done
+# Отдача: файл из нулей, STREAMS потоков POST по 50 МБ до Cloudflare, пока не выйдут SECS секунд.
 head -c 50000000 /dev/zero > "$TMP/up.bin" 2>/dev/null
 up_stream() {
-  s=$(date +%s.%N); end=$(( $(date +%s) + SECS )); tot=0
+  s=$(now_ms); end=$(( $(date +%s) + SECS )); tot=0; code=
   while [ $(date +%s) -lt $end ]; do
-    b=$(curl -s -o /dev/null -m $SECS -X POST --data-binary "@$TMP/up.bin" -H 'Content-Type: application/octet-stream' -w '%{size_upload}' "$CF/__up" 2>/dev/null); [ -n "$b" ] || b=0
+    r=$(curl -s -o /dev/null -m $SECS -X POST --data-binary "@$TMP/up.bin" -H 'Content-Type: application/octet-stream' -H 'Expect:' -w '%{size_upload} %{http_code}' "$CF/__up" 2>/dev/null)
+    b=$(echo "$r" | cut -d' ' -f1); c=$(echo "$r" | cut -d' ' -f2); [ -n "$b" ] || b=0; [ -n "$code" ] || code=$c
     tot=$((tot + b)); [ "$b" -gt 0 ] 2>/dev/null || break
   done
-  e=$(date +%s.%N); echo "$tot $(awk "BEGIN{print $e-$s}")"
+  e=$(now_ms); echo "cf $tot $((e - s)) $code" > "$1"
 }
-i=0; while [ $i -lt $STREAMS ]; do up_stream > "$TMP/u$i" & i=$((i+1)); done; wait
-UBYTES=$(cat "$TMP"/u* | awk '{b+=$1} END{print b+0}'); UTIME=$(cat "$TMP"/u* | awk 'BEGIN{m=0}{if($2>m)m=$2}END{print m+0}')
+i=0; while [ $i -lt $STREAMS ]; do up_stream "$TMP/u$i" & i=$((i+1)); done; wait
+UBYTES=0; UMS=0; UCODE=
+for f in "$TMP"/u*; do
+  read src bytes ms code < "$f"
+  UBYTES=$((UBYTES + bytes)); [ "$ms" -gt "$UMS" ] 2>/dev/null && UMS=$ms; [ -n "$UCODE" ] || UCODE=$code
+done
 rm -rf "$TMP"
-[ "$DBYTES" -gt 0 ] 2>/dev/null || { echo "SELF_FAIL: Cloudflare недоступен с сервера (ни байта не скачалось)"; exit 1; }
-echo "CFTEST=$DBYTES $DTIME $UBYTES $UTIME $PING $COLO $MYIP $STREAMS"
+case "$DBYTES" in ''|*[!0-9]*) DBYTES=0;; esac
+[ "$DBYTES" -gt 0 ] || { echo "SELF_FAIL: ни один источник не отдал ни байта (коды:$CODES)"; exit 1; }
+echo "CFTEST2=$DBYTES $DMS $UBYTES $UMS $PING $COLO $MYIP $STREAMS $CPU cf=$SCF scw=$SSCW ovh=$SOVH up=$UCODE codes=$(echo $CODES | tr ' ' ',')"
 `;
 
 const mbps = (v: number): number => Math.round(v * 10) / 10;
 
-/** Разбор вывода самотеста: CFTEST=<байт скачано> <сек> <байт отдано> <сек> <tcp-connect сек> <colo> <ip> <потоков>. */
+/** Разбор вывода самотеста:
+ *  CFTEST2=<байт скачано> <мс> <байт отдано> <мс> <tcp-connect с> <colo> <ip> <потоков> <cpu%> cf=<байт> scw=<байт> ovh=<байт> up=<код> codes=<src:код,…> */
 export function parseSelfTest(out: string): SelfTestResult {
-  const cf = grab(out, 'CFTEST');
+  const cf = grab(out, 'CFTEST2');
   if (cf) {
-    const [db, dt, ub, ut, ping, colo, ip, streams] = cf.trim().split(/\s+/);
+    const parts = cf.trim().split(/\s+/);
+    const [db, dms, ub, ums, ping, colo, ip, streams, cpu] = parts;
+    const kv = new Map(parts.slice(9).map((x) => x.split('=') as [string, string]));
     const n = (v?: string): number => Number(v) || 0;
-    const rate = (bytes: number, secs: number): number => (secs > 0 ? mbps((bytes * 8) / secs / 1e6) : 0);
+    const rate = (bytes: number, ms: number): number => (ms > 0 ? mbps((bytes * 8) / (ms / 1000) / 1e6) : 0);
+    const per = (k: string): string => `${rate(n(kv.get(k)), n(dms))}`;
+    const note = `Cloudflare ${per('cf')} · Scaleway Paris ${per('scw')} · OVH ${per('ovh')} Мбит/с; ответы ${kv.get('codes') ?? '?'}, отдача ${kv.get('up') ?? '?'}`;
     return {
-      downloadMbps: rate(n(db), n(dt)),
-      uploadMbps: rate(n(ub), n(ut)),
+      downloadMbps: rate(n(db), n(dms)),
+      uploadMbps: rate(n(ub), n(ums)),
       pingMs: n(ping) > 0 ? Math.round(n(ping) * 10000) / 10 : null,
-      server: `Cloudflare ${colo || '?'} · ${streams || 8} потоков`,
+      server: `Cloudflare ${colo || '?'} + Scaleway + OVH · ${streams || 8} потоков`,
       isp: ip ? `адрес сервера ${ip}` : null,
       tool: 'cloudflare',
       url: null,
+      cpuPct: cpu !== undefined && cpu !== '' ? Math.max(0, Math.min(100, n(cpu))) : null,
+      note,
     };
   }
   const fail = /SELF_FAIL:([^\n]*)/.exec(out)?.[1]?.trim();

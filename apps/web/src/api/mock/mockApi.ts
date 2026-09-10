@@ -401,7 +401,7 @@ export const mockApi: ApiClient = {
   async speedtestSelf(id: string) {
     await wait(900);
     const s = state.servers.find((x) => x.id === id)!;
-    const result = { at: new Date().toISOString(), downloadMbps: 9412.3, uploadMbps: 8877.1, pingMs: 1.4, server: 'Cloudflare CDG · 8 потоков', isp: 'адрес сервера 203.0.113.9', tool: 'cloudflare', url: null };
+    const result = { at: new Date().toISOString(), downloadMbps: 9412.3, uploadMbps: 8877.1, pingMs: 1.4, server: 'Cloudflare CDG + Scaleway + OVH · 8 потоков', isp: 'адрес сервера 203.0.113.9', tool: 'cloudflare', url: null, cpuPct: 41, note: 'Cloudflare 5100 · Scaleway Paris 2800 · OVH 1512 Мбит/с; ответы cf:200,scw:206,ovh:206, отдача 200' };
     s.selfTests = [result, ...(s.selfTests ?? [])].slice(0, 10);
     log(`Самотест «${s.name}»: ↓ ${result.downloadMbps} ↑ ${result.uploadMbps} Мбит/с`);
     return { ok: true, result, server: clone(s) };
