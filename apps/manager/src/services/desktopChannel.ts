@@ -92,11 +92,16 @@ function copyDir(src: string, dst: string): void {
   }
 }
 
-/** Первичный сид /data/desktop из встроенной версии образа (если ещё пусто). */
+/** Первичный сид /data/desktop из встроенной версии образа (если ещё пусто).
+ *  Инструкция (guide/) — часть образа, а не релиз: её обновляем при КАЖДОМ старте,
+ *  иначе в томе навсегда осталась бы версия первого деплоя, а правки в репозитории
+ *  никогда не доезжали бы до /guide/<id>. */
 export function seedDesktopDir(): void {
   try {
-    if (fs.existsSync(path.join(config.desktopDir, 'latest.json'))) return; // уже засеяно
     if (!config.desktopSeedDir || !fs.existsSync(config.desktopSeedDir)) return;
+    const seedGuide = path.join(config.desktopSeedDir, 'guide');
+    if (fs.existsSync(seedGuide)) copyDir(seedGuide, path.join(config.desktopDir, 'guide'));
+    if (fs.existsSync(path.join(config.desktopDir, 'latest.json'))) return; // уже засеяно
     copyDir(config.desktopSeedDir, config.desktopDir);
     console.log('[desktop] /data/desktop засеян встроенной версией из образа');
   } catch (e) {

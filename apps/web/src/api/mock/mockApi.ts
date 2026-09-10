@@ -388,6 +388,36 @@ export const mockApi: ApiClient = {
     return clone(s);
   },
 
+  async myIp() {
+    return { ip: '203.0.113.7' };
+  },
+  async speedtestInstall(id: string, allow: string[] = []) {
+    await wait(600);
+    const s = state.servers.find((x) => x.id === id)!;
+    s.speedtest = { port: 3000, allow, installedAt: new Date().toISOString() };
+    log(`Установлен тест скорости на «${s.name}»`);
+    return { ok: true, server: clone(s) };
+  },
+  async speedtestAllow(id: string, allow: string[]) {
+    await wait(300);
+    const s = state.servers.find((x) => x.id === id)!;
+    if (s.speedtest) s.speedtest = { ...s.speedtest, allow };
+    return { ok: true, server: clone(s) };
+  },
+  async speedtestOpen(id: string) {
+    await wait(300);
+    const s = state.servers.find((x) => x.id === id)!;
+    const ip = '203.0.113.7';
+    if (s.speedtest && !s.speedtest.allow.includes(ip)) s.speedtest = { ...s.speedtest, allow: [...s.speedtest.allow, ip] };
+    return { ok: true, url: `http://${s.host}:${s.speedtest?.port ?? 3000}/?Run`, ip, server: clone(s) };
+  },
+  async speedtestRemove(id: string) {
+    await wait(300);
+    const s = state.servers.find((x) => x.id === id)!;
+    s.speedtest = null;
+    return { ok: true, server: clone(s) };
+  },
+
   async installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }) {
     await wait(600);
     const s = state.servers.find((x) => x.id === id)!;

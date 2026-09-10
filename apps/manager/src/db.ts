@@ -458,6 +458,8 @@ for (const stmt of [
   // Учёт расхода по устройствам переведён с посуточного на почасовой (traffic_hourly):
   // старая таблица прожила меньше суток, её данные не стоят двух параллельных схем.
   'DROP TABLE IF EXISTS traffic_daily',
+  // Тест скорости на сервере: {port, allow[], installedAt} JSON; NULL = не установлен.
+  'ALTER TABLE servers ADD COLUMN speedtest TEXT',
 ]) {
   try {
     db.exec(stmt);

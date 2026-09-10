@@ -220,6 +220,13 @@ export interface ApiClient {
   addServer(input: AddServerInput): Promise<Server>;
   editServer(id: string, input: EditServerInput): Promise<Server>;
   installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
+  /** Тест скорости на сервере: установка, список адресов, открыть для себя, удалить. */
+  speedtestInstall(id: string, allow?: string[]): Promise<{ ok: boolean; server: Server }>;
+  speedtestAllow(id: string, allow: string[]): Promise<{ ok: boolean; server: Server }>;
+  speedtestOpen(id: string): Promise<{ ok: boolean; url: string; ip: string; server: Server }>;
+  speedtestRemove(id: string): Promise<{ ok: boolean; server: Server }>;
+  /** Адрес админа, каким его видит панель (для списка доступа к тесту скорости). */
+  myIp(): Promise<{ ip: string | null }>;
   getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
   provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }): Promise<{ ok: boolean; running: boolean }>;
   provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;

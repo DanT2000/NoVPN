@@ -17,6 +17,36 @@ const mb = (bytes: number): string => (bytes >= 1048576 ? `${(bytes / 1048576).t
 
 const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
 
+/** Порядок в списке: наш NoVPN Desktop первым (инструкция и «Добавить подписку» в один
+ *  клик), затем Happ — проверен на всех системах, — потом остальные. */
+const rank = (a: AppClient): number => (a.id === 'novpn-desktop' ? 0 : a.id === 'happ' ? 1 : 2);
+
+/** Короткая инструкция к NoVPN Desktop прямо в карточке — человек видит, что делать, не
+ *  уходя со страницы. Полная инструкция открывается кнопкой рядом. */
+function NovpnHowto({ hasTap }: { hasTap: boolean }) {
+  return (
+    <details style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--accent, #4c8dff)' }}>Как установить — 4 шага</summary>
+      <ol style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.45 }}>
+        <li>Нажмите <b>«Скачать»</b> и запустите файл. Ставится за пару секунд, без прав администратора.</li>
+        <li>
+          Если Windows покажет окно <b>«Защитник SmartScreen»</b> — нажмите <b>«Подробнее»</b>, затем{' '}
+          <b>«Выполнить в любом случае»</b>. Приложение новое, у Windows ещё нет его репутации.
+        </li>
+        <li>
+          {hasTap
+            ? 'Вернитесь сюда и нажмите «Добавить подписку» — приложение откроется с уже вставленной ссылкой. Или скопируйте ссылку выше и вставьте её вручную.'
+            : 'Скопируйте ссылку-подписку и вставьте её в приложении на первом экране.'}
+        </li>
+        <li>
+          Пройдите быструю настройку и нажмите <b>«Запустить»</b>. Через VPN пойдёт только нужное, остальное — напрямую.
+          Значок приложения — в трее рядом с часами.
+        </li>
+      </ol>
+    </details>
+  );
+}
+
 function detectPlatform(): AppPlatform {
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   if (/android/i.test(ua)) return 'Android';
@@ -77,7 +107,8 @@ export function Connect() {
       .filter((a) => a.enabled)
       .filter((a) => (b === 'xray' ? a.compat.includes('xray') : a.compat.includes('amneziawg') || a.compat.includes('amnezia-app')))
       .map((a) => ({ app: a, entry: a.platforms.find((p) => p.platform === platform) }))
-      .filter((x): x is { app: AppClient; entry: NonNullable<typeof x.entry> } => Boolean(x.entry));
+      .filter((x): x is { app: AppClient; entry: NonNullable<typeof x.entry> } => Boolean(x.entry))
+      .sort((x, y) => rank(x.app) - rank(y.app));
 
   return (
     <div className="stack" style={{ gap: 16, paddingTop: 12 }}>
@@ -252,7 +283,20 @@ function AppList({
                   Добавить подписку
                 </button>
               ) : null}
+              {/* Полная инструкция — страница /guide/<id>; пока гайд есть только у NoVPN Desktop. */}
+              {app.id === 'novpn-desktop' ? (
+                <button className="btn btn-outline btn-sm" onClick={() => openUrl('/guide/novpn-desktop')}>
+                  📖 Инструкция
+                </button>
+              ) : null}
+              {/* Сайт приложения, если это не та же ссылка, что «Установить» (Happ: магазин и сайт разные). */}
+              {app.id !== 'novpn-desktop' && /^https?:\/\//i.test(app.source || '') && normalizeUrl(app.source) !== normalizeUrl(entry.url || '') ? (
+                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(app.source))}>
+                  Сайт
+                </button>
+              ) : null}
             </div>
+            {app.id === 'novpn-desktop' ? <NovpnHowto hasTap={!!oneTap} /> : null}
           </div>
         );
       })}

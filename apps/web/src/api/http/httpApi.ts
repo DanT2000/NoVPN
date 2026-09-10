@@ -119,6 +119,14 @@ export const httpApi: ApiClient = {
   editServer: (id: string, input: EditServerInput) => req<Server>('PATCH', `/api/admin/servers/${id}`, input),
   installServerProxies: (id: string, types: { http: boolean; https: boolean; socks: boolean }) =>
     req<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
+  speedtestInstall: (id: string, allow?: string[]) =>
+    req<{ ok: boolean; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/install`, { allow: allow ?? [] }),
+  speedtestAllow: (id: string, allow: string[]) =>
+    req<{ ok: boolean; server: Server }>('PUT', `/api/admin/servers/${id}/speedtest/allow`, { allow }),
+  speedtestOpen: (id: string) =>
+    req<{ ok: boolean; url: string; ip: string; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/open`, {}),
+  speedtestRemove: (id: string) => req<{ ok: boolean; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/remove`, {}),
+  myIp: () => req<{ ip: string | null }>('GET', '/api/admin/my-ip'),
   getServerProxy: (id: string) => req<{ proxy: ServerProxyConfig | null; host: string }>('GET', `/api/admin/servers/${id}/proxy`),
   provisionServer: (id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }) =>
     req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports, ...(opts?.migrate ? { migrate: true } : {}) }),

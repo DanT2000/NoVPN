@@ -80,6 +80,7 @@ export function rowToServer(r: any): Server {
     detached: b(r.detached),
     sshKeyAuth: !!r.ssh_key_enc,
     flagEmoji: r.flag_emoji ?? null,
+    speedtest: j<Server['speedtest']>(r.speedtest, null),
   };
 }
 

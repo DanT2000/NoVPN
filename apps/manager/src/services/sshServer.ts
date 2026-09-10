@@ -1175,3 +1175,111 @@ export async function sshAddProxyUser(server: Server, login: string, pass: strin
 export async function sshRevokeProxyUser(server: Server, login: string): Promise<void> {
   await withServerLock(server.id, () => runScript(creds(server.id), buildProxyUserScript('remove', login, ''), 60000));
 }
+
+// ── Тест скорости на сервере ────────────────────────────────────────────────
+// OpenSpeedTest в Docker: страница открывается в браузере админа и меряет канал
+// между ним и ЭТИМ сервером — реальные цифры, а не «нарисованные» графиками. Порт
+// открыт только адресам из списка (иначе это публичный генератор трафика на нашем
+// сервере); пустой список = закрыт для всех.
+
+/** Один адрес из списка доступа: IPv4 или IPv4/CIDR. Список уходит в shell-скрипт и
+ *  правила iptables — ничего, кроме цифр, точек и слэша, туда попасть не должно. */
+export function isAllowEntry(s: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(s.trim());
+  if (!m) return false;
+  if ([m[1], m[2], m[3], m[4]].some((o) => Number(o) > 255)) return false;
+  return m[5] === undefined || Number(m[5]) <= 32;
+}
+
+/** Скрипт файрвола теста: цепочка NOVPN_SPEED пропускает адреса из списка и режет
+ *  остальных. Docker публикует порт через DNAT, и правила INPUT его не видят — поэтому
+ *  проверка стоит в DOCKER-USER по исходному порту назначения (как советует сама
+ *  документация Docker), а INPUT — на случай прямого доступа. Скрипт лежит на сервере
+ *  и запускается при загрузке после docker, иначе после перезагрузки порт был бы
+ *  открыт всем. IPv6 режем целиком: список адресов — только IPv4. */
+export function speedtestFwScript(port: number, allow: string[]): string {
+  const ips = allow.filter(isAllowEntry).join(' ');
+  return `#!/bin/sh
+PORT=${port}
+ALLOW="${ips}"
+iptables -N NOVPN_SPEED 2>/dev/null || true
+iptables -F NOVPN_SPEED
+for ip in $ALLOW; do iptables -A NOVPN_SPEED -s "$ip" -j RETURN; done
+iptables -A NOVPN_SPEED -j DROP
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport $PORT --ctdir ORIGINAL -j NOVPN_SPEED 2>/dev/null || iptables -I DOCKER-USER 1 -p tcp -m conntrack --ctorigdstport $PORT --ctdir ORIGINAL -j NOVPN_SPEED
+iptables -C INPUT -p tcp --dport $PORT -j NOVPN_SPEED 2>/dev/null || iptables -I INPUT 1 -p tcp --dport $PORT -j NOVPN_SPEED
+if command -v ip6tables >/dev/null 2>&1; then ip6tables -C INPUT -p tcp --dport $PORT -j DROP 2>/dev/null || ip6tables -I INPUT 1 -p tcp --dport $PORT -j DROP 2>/dev/null || true; fi
+exit 0
+`;
+}
+
+/** Скрипт установки — отдельной функцией, чтобы тест мог прогнать его через `bash -n`. */
+export function speedtestInstallScript(port: number, allow: string[]): string {
+  const fw = speedtestFwScript(port, allow);
+  return `set -e
+PORT=${port}
+command -v docker >/dev/null 2>&1 || { echo "SPEED_FAIL: на сервере нет Docker — сначала «Установить / переустановить ПО»"; exit 1; }
+# Образ: Docker Hub, а если он недоступен (РФ) — зеркало gcr.
+docker image inspect openspeedtest/latest >/dev/null 2>&1 || docker pull -q openspeedtest/latest >/dev/null 2>&1 || { docker pull -q mirror.gcr.io/openspeedtest/latest >/dev/null 2>&1 && docker tag mirror.gcr.io/openspeedtest/latest openspeedtest/latest; } || true
+docker image inspect openspeedtest/latest >/dev/null 2>&1 || { echo "SPEED_FAIL: образ openspeedtest/latest не скачался (Docker Hub и зеркало недоступны)"; exit 1; }
+docker rm -f novpn-speedtest >/dev/null 2>&1 || true
+docker run -d --name novpn-speedtest --restart unless-stopped -p $PORT:3000 openspeedtest/latest >/dev/null || { echo "SPEED_FAIL: контейнер не запустился (порт $PORT занят?)"; exit 1; }
+mkdir -p /opt/novpn
+cat > /opt/novpn/speedtest-fw.sh <<'FW'
+${fw}FW
+chmod 755 /opt/novpn/speedtest-fw.sh
+cat > /etc/systemd/system/novpn-speedtest-fw.service <<'SVC'
+[Unit]
+Description=NoVPN speedtest firewall (allowlist)
+After=docker.service network-online.target
+Wants=docker.service
+[Service]
+Type=oneshot
+ExecStart=/opt/novpn/speedtest-fw.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+SVC
+systemctl daemon-reload; systemctl enable novpn-speedtest-fw >/dev/null 2>&1 || true
+/opt/novpn/speedtest-fw.sh
+sleep 2
+docker ps --format '{{.Names}}' | grep -qx novpn-speedtest || { echo "SPEED_FAIL: контейнер упал сразу после запуска"; docker logs --tail 5 novpn-speedtest 2>&1 || true; exit 1; }
+echo "SPEED_OK=$PORT"`;
+}
+
+export async function sshInstallSpeedtest(server: Server, port: number, allow: string[]): Promise<void> {
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Некорректный порт теста скорости.');
+  const out = await runScript(creds(server.id), speedtestInstallScript(port, allow), 240000);
+  if (!grab(out, 'SPEED_OK')) {
+    const fail = /SPEED_FAIL:([^\n]*)/.exec(out)?.[1]?.trim();
+    throw new Error(fail || 'Не удалось установить тест скорости.');
+  }
+}
+
+/** Переписать список адресов на сервере и применить сразу (без переустановки). */
+export async function sshApplySpeedtestAllow(server: Server, port: number, allow: string[]): Promise<void> {
+  const fw = speedtestFwScript(port, allow);
+  const script = `set -e
+mkdir -p /opt/novpn
+cat > /opt/novpn/speedtest-fw.sh <<'FW'
+${fw}FW
+chmod 755 /opt/novpn/speedtest-fw.sh
+/opt/novpn/speedtest-fw.sh
+echo "FW_OK=1"`;
+  const out = await runScript(creds(server.id), script, 60000);
+  if (!grab(out, 'FW_OK')) throw new Error('Не удалось применить список адресов на сервере.');
+}
+
+export async function sshRemoveSpeedtest(server: Server, port: number): Promise<void> {
+  const script = `docker rm -f novpn-speedtest >/dev/null 2>&1 || true
+systemctl disable --now novpn-speedtest-fw >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/novpn-speedtest-fw.service /opt/novpn/speedtest-fw.sh; systemctl daemon-reload 2>/dev/null || true
+iptables -D DOCKER-USER -p tcp -m conntrack --ctorigdstport ${port} --ctdir ORIGINAL -j NOVPN_SPEED 2>/dev/null || true
+iptables -D INPUT -p tcp --dport ${port} -j NOVPN_SPEED 2>/dev/null || true
+iptables -F NOVPN_SPEED 2>/dev/null; iptables -X NOVPN_SPEED 2>/dev/null
+ip6tables -D INPUT -p tcp --dport ${port} -j DROP 2>/dev/null || true
+echo "RM_OK=1"`;
+  const out = await runScript(creds(server.id), script, 60000);
+  if (!grab(out, 'RM_OK')) throw new Error('Не удалось удалить тест скорости.');
+}

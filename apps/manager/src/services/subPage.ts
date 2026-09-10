@@ -35,6 +35,21 @@ function storeLabel(url: string): string {
 
 const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
 
+/** Короткая инструкция к NoVPN Desktop прямо в карточке: человек открыл страницу с
+ *  телефона или с компьютера — и видит, что делать, не уходя на отдельную страницу.
+ *  Полная инструкция — по кнопке рядом. */
+function novpnHowto(hasTap: boolean): string {
+  const add = hasTap
+    ? 'Вернитесь на эту страницу и нажмите <b>«Добавить подписку»</b> — приложение откроется с уже вставленной ссылкой. Или скопируйте ссылку выше и вставьте её в приложении вручную.'
+    : 'Скопируйте ссылку выше и вставьте её в приложении на первом экране.';
+  return `<details class="howto"><summary>Как установить — 4 шага</summary><ol>
+<li>Нажмите <b>«Скачать»</b> и запустите файл. Ставится за пару секунд, без прав администратора.</li>
+<li>Если Windows покажет окно <b>«Защитник SmartScreen»</b> — нажмите <b>«Подробнее»</b>, затем <b>«Выполнить в любом случае»</b>. Приложение новое, у Windows ещё нет его репутации.</li>
+<li>${add}</li>
+<li>Пройдите быструю настройку и нажмите <b>«Запустить»</b>. Через VPN пойдёт только нужное, остальное — напрямую. Значок приложения — в трее рядом с часами.</li>
+</ol></details>`;
+}
+
 export function renderSubPage(opts: {
   appName: string;
   user: User;
@@ -51,11 +66,11 @@ export function renderSubPage(opts: {
   // где-то нет». Используем её и для основной ссылки, и для «Добавить подписку» (one-tap).
   const sub = whitelist && configCount > 0 ? `${subUrl}/full` : subUrl;
 
-  // Только клиенты, умеющие Xray: подписка — это Xray. Наше приложение NoVPN
-  // Desktop — первым как приоритетное (у него one-tap «Добавить подписку» и гайд).
-  const xrayApps = apps
-    .filter((a) => a.enabled && a.compat.includes('xray'))
-    .sort((a, b) => (a.id === 'novpn-desktop' ? -1 : b.id === 'novpn-desktop' ? 1 : 0));
+  // Только клиенты, умеющие Xray: подписка — это Xray. Порядок: наш NoVPN Desktop
+  // первым (one-tap «Добавить подписку» и инструкция прямо в карточке), затем Happ —
+  // он проверен на всех системах, — потом остальные.
+  const rank = (a: AppClient): number => (a.id === 'novpn-desktop' ? 0 : a.id === 'happ' ? 1 : 2);
+  const xrayApps = apps.filter((a) => a.enabled && a.compat.includes('xray')).sort((a, b) => rank(a) - rank(b));
 
   const cards = PLATFORMS.map((plat) => {
     const list = xrayApps
@@ -79,9 +94,16 @@ export function renderSubPage(opts: {
         const guide = hasGuide(a.id)
           ? `<a class="btn btn-sec" href="/guide/${encodeURIComponent(a.id)}" target="_blank" rel="noopener">📖 Инструкция</a>`
           : '';
+        // Сайт приложения — когда это не та же ссылка, что «Установить»: у Happ на iOS и
+        // macOS магазин и сайт разные, и ссылка на сам сайт нужна отдельно.
+        const site =
+          a.id !== 'novpn-desktop' && /^https?:\/\//i.test(a.source || '') && normUrl(a.source) !== normUrl(e!.url || '')
+            ? `<a class="btn btn-sec" href="${esc(normUrl(a.source))}" target="_blank" rel="noopener">Сайт</a>`
+            : '';
+        const howto = a.id === 'novpn-desktop' ? novpnHowto(!!tap) : '';
         return `<div class="app">${icon}<div class="app-b"><div class="app-n">${esc(a.client)}</div>${
           a.instruction ? `<div class="app-i">${esc(a.instruction)}</div>` : ''
-        }<div class="row">${dl}${install}${add}${guide}</div></div></div>`;
+        }<div class="row">${dl}${install}${add}${guide}${site}</div>${howto}</div></div>`;
       })
       .join('');
     return `<section class="plat" data-plat="${esc(plat)}" hidden>${items}</section>`;
@@ -137,6 +159,14 @@ export function renderSubPage(opts: {
   .app-b{min-width:0;flex:1}
   .app-n{font-weight:600}
   .app-i{color:var(--mut);font-size:13px;margin-top:2px}
+  .howto{margin-top:10px;font-size:13px;color:var(--mut)}
+  .howto summary{cursor:pointer;color:var(--acc);font-weight:600;list-style:none}
+  .howto summary::-webkit-details-marker{display:none}
+  .howto summary::before{content:"▸ "}
+  .howto[open] summary::before{content:"▾ "}
+  .howto ol{margin:8px 0 0;padding-left:18px}
+  .howto li{margin:5px 0;line-height:1.45}
+  .howto b{color:var(--tx)}
   .step{color:var(--mut);font-size:13px;margin:18px 0 8px}
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#000c;color:#fff;
          padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}

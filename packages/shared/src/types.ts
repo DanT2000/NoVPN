@@ -69,6 +69,16 @@ export interface Server {
   /** Сводка маршрутизации этого сервера — чтобы режим был виден на карточке, а не
    *  только внутри формы «Изменить». Подробности правит EndpointConfigPanel. */
   routing?: ServerRoutingSummary;
+  /** Тест скорости на сервере (OpenSpeedTest в Docker). null/нет — не установлен. */
+  speedtest?: ServerSpeedtest | null;
+}
+
+/** Тест скорости на сервере: меряет реальный канал между браузером админа и сервером. */
+export interface ServerSpeedtest {
+  port: number;
+  /** IPv4-адреса или подсети (CIDR), которым открыт доступ к странице теста. Пусто = закрыт для всех. */
+  allow: string[];
+  installedAt: string;
 }
 
 /** Режим одного профиля в подписке. `smart` — умная маршрутизация: список AutoRoute

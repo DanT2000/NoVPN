@@ -16,7 +16,7 @@ import { buildWhitelistXrayConfig } from '@novpn/shared';
 import type { ProxyFallback } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, REALITY_SNI } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -1538,6 +1538,95 @@ router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, 
     res.json({ ok: true, proxy: p, server: repo.getServer(s.id) });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки прокси.'));
+  }
+});
+
+// ── Тест скорости на сервере (OpenSpeedTest в Docker) ──
+// Страница теста открыта только адресам из списка: иначе это публичный генератор
+// трафика на нашем сервере. «Открыть тест» сам добавляет текущий адрес админа —
+// адрес меняется (дом, 4G), и просить вписывать его руками каждый раз глупо.
+const SPEEDTEST_PORT = 3000;
+function normalizeAllow(list: unknown): string[] | null {
+  if (!Array.isArray(list)) return null;
+  const out: string[] = [];
+  for (const v of list) {
+    const s = String(v ?? '').trim();
+    if (!s) continue;
+    if (!isAllowEntry(s)) return null;
+    if (!out.includes(s)) out.push(s);
+  }
+  return out.slice(0, 50);
+}
+/** Адрес админа как IPv4 для списка доступа; IPv6 и «unknown» → null. */
+function speedtestIp(req: Request): string | null {
+  const ip = clientIp(req).replace(/^::ffff:/, '');
+  return isAllowEntry(ip) ? ip : null;
+}
+router.get('/api/admin/my-ip', requireAdmin, (req, res) => res.json({ ip: speedtestIp(req) }));
+
+router.post('/api/admin/servers/:id/speedtest/install', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  const allow = normalizeAllow(req.body?.allow ?? s.speedtest?.allow ?? []);
+  if (!allow) return res.status(400).json(err('validation', 'Адреса — только IPv4 (1.2.3.4) или подсети (1.2.3.0/24).'));
+  const port = s.speedtest?.port ?? (await sshPickPort(s, 'tcp', SPEEDTEST_PORT).catch(() => SPEEDTEST_PORT));
+  try {
+    await sshInstallSpeedtest(s, port, allow);
+    repo.updateServerFields(s.id, { speedtest: JSON.stringify({ port, allow, installedAt: new Date().toISOString() }) });
+    repo.addLog(`Установлен тест скорости на «${s.name}» (порт ${port})`);
+    res.json({ ok: true, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки теста скорости.'));
+  }
+});
+
+router.put('/api/admin/servers/:id/speedtest/allow', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!s.speedtest) return res.status(400).json(err('state', 'Тест скорости на этом сервере не установлен.'));
+  const allow = normalizeAllow(req.body?.allow);
+  if (!allow) return res.status(400).json(err('validation', 'Адреса — только IPv4 (1.2.3.4) или подсети (1.2.3.0/24).'));
+  try {
+    await sshApplySpeedtestAllow(s, s.speedtest.port, allow);
+    repo.updateServerFields(s.id, { speedtest: JSON.stringify({ ...s.speedtest, allow }) });
+    res.json({ ok: true, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось применить список адресов.'));
+  }
+});
+
+// Открыть тест для себя: текущий адрес админа добавляется в список (если его там нет)
+// и возвращается ссылка на страницу теста. Тест меряет канал браузер ↔ этот сервер.
+router.post('/api/admin/servers/:id/speedtest/open', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!s.speedtest) return res.status(400).json(err('state', 'Тест скорости на этом сервере не установлен.'));
+  const ip = speedtestIp(req);
+  if (!ip) return res.status(400).json(err('ip', 'Не удалось определить ваш адрес (IPv6 не поддерживается) — впишите его в список вручную.'));
+  try {
+    if (!s.speedtest.allow.includes(ip)) {
+      const allow = [...s.speedtest.allow, ip].slice(-50);
+      await sshApplySpeedtestAllow(s, s.speedtest.port, allow);
+      repo.updateServerFields(s.id, { speedtest: JSON.stringify({ ...s.speedtest, allow }) });
+    }
+    res.json({ ok: true, url: `http://${s.host}:${s.speedtest.port}/?Run`, ip, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось открыть тест.'));
+  }
+});
+
+router.post('/api/admin/servers/:id/speedtest/remove', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!s.speedtest) return res.status(400).json(err('state', 'Тест скорости на этом сервере не установлен.'));
+  try {
+    await sshRemoveSpeedtest(s, s.speedtest.port);
+    repo.updateServerFields(s.id, { speedtest: null });
+    repo.addLog(`Удалён тест скорости с «${s.name}»`);
+    res.json({ ok: true, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось удалить тест скорости.'));
   }
 });
 

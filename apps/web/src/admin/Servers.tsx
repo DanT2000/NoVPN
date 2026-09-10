@@ -331,6 +331,135 @@ function SshHardenPanel({ server }: { server: Server }) {
   );
 }
 
+/* Тест скорости: OpenSpeedTest в Docker на самом сервере. Меряет реальный канал между
+   браузером админа и этим сервером — не «нарисованные» цифры, а потолок того, что даст
+   VPN. Порт открыт только адресам из списка; «Открыть тест» сам добавляет текущий. */
+function SpeedtestPanel({ server }: { server: Server }) {
+  const { showToast, showConfirm, reload } = useApp();
+  const st = server.speedtest ?? null;
+  const allowKey = (st?.allow ?? []).join(',');
+  const [busy, setBusy] = useState<null | 'install' | 'open' | 'allow' | 'remove'>(null);
+  const [allowText, setAllowText] = useState(allowKey.split(',').filter(Boolean).join('\n'));
+  const [myIp, setMyIp] = useState<string | null>(null);
+  useEffect(() => {
+    setAllowText(allowKey.split(',').filter(Boolean).join('\n'));
+  }, [server.id, allowKey]);
+  useEffect(() => {
+    void api.myIp().then((r) => setMyIp(r.ip)).catch(() => null);
+  }, []);
+  const parse = () => allowText.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+  const fail = (e: unknown) => showToast(e instanceof Error ? e.message : 'Не получилось');
+
+  async function run(kind: 'install' | 'allow' | 'remove', fn: () => Promise<unknown>, ok: string) {
+    setBusy(kind);
+    try {
+      await fn();
+      await reload();
+      showToast(ok);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function open() {
+    // Вкладку открываем ДО запроса — иначе браузер сочтёт её всплывающей и заблокирует.
+    const w = window.open('', '_blank');
+    setBusy('open');
+    try {
+      const r = await api.speedtestOpen(server.id);
+      if (w) w.location.href = r.url;
+      else window.open(r.url, '_blank');
+      await reload();
+    } catch (e) {
+      w?.close();
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+      <span className="field-label">Тест скорости</span>
+      {!st ? (
+        <span className="small muted">
+          Поставит OpenSpeedTest в Docker на сам сервер. Тест идёт из вашего браузера прямо к серверу — реальный
+          канал, без VPN и посредников. Страница теста будет открыта только адресам из списка ниже.
+        </span>
+      ) : (
+        <>
+          <div className="body small mono">
+            Порт <b>{st.port}</b> · http://{server.host}:{st.port}/
+          </div>
+          <span className="small muted">
+            «Открыть тест» сам добавит ваш текущий адрес{myIp ? ` (${myIp})` : ''} в список и откроет страницу в новой
+            вкладке. Тест меряет канал между этим браузером и сервером.
+          </span>
+        </>
+      )}
+      <Field
+        label="Разрешённые адреса (по одному в строке: IPv4 или подсеть 1.2.3.0/24)"
+        hint="Пусто — тест закрыт для всех. Остальным адресам порт закрыт на уровне файрвола сервера."
+      >
+        <textarea
+          className="textarea mono"
+          style={{ minHeight: 70, fontSize: 12 }}
+          spellCheck={false}
+          placeholder={myIp ?? '1.2.3.4'}
+          value={allowText}
+          onChange={(e) => setAllowText(e.target.value)}
+        />
+      </Field>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {myIp && !parse().includes(myIp) ? (
+          <button className="btn btn-outline btn-sm" disabled={!!busy} onClick={() => setAllowText((t) => (t.trim() ? `${t.trim()}\n${myIp}` : myIp))}>
+            + Мой адрес {myIp}
+          </button>
+        ) : null}
+        {!st ? (
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={!!busy}
+            onClick={() =>
+              showConfirm({
+                title: 'Установить тест скорости?',
+                text: 'Панель по SSH запустит контейнер OpenSpeedTest и закроет его порт для всех, кроме адресов из списка. Занимает около минуты.',
+                confirmLabel: 'Установить',
+                onConfirm: () => void run('install', () => api.speedtestInstall(server.id, parse()), 'Тест скорости установлен'),
+              })
+            }
+          >
+            {busy === 'install' ? 'Устанавливаем…' : 'Установить'}
+          </button>
+        ) : (
+          <>
+            <button className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => void open()}>
+              {busy === 'open' ? 'Открываем…' : 'Открыть тест'}
+            </button>
+            <button className="btn btn-secondary btn-sm" disabled={!!busy} onClick={() => void run('allow', () => api.speedtestAllow(server.id, parse()), 'Список адресов применён')}>
+              {busy === 'allow' ? 'Применяем…' : 'Применить список'}
+            </button>
+            <button
+              className="btn btn-danger-outline btn-sm"
+              disabled={!!busy}
+              onClick={() =>
+                showConfirm({
+                  title: 'Удалить тест скорости?',
+                  text: 'Контейнер и правила файрвола будут убраны с сервера.',
+                  confirmLabel: 'Удалить',
+                  onConfirm: () => void run('remove', () => api.speedtestRemove(server.id), 'Тест скорости удалён'),
+                })
+              }
+            >
+              Удалить
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
   const { editServer, showToast, reload, showConfirm, deleteServer } = useApp();
   const [provBusy, setProvBusy] = useState<string | null>(null);
@@ -670,6 +799,9 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
 
       {/* SSH hardening: перевод на вход по ключу */}
       <SshHardenPanel server={server} />
+
+      {/* Тест скорости между админом и этим сервером */}
+      <SpeedtestPanel server={server} />
 
         {/* Отвязать — редкое действие: бокс уходит, endpoint (домен, порты, ключи, конфиги) остаётся. */}
         <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
