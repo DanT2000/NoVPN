@@ -59,24 +59,15 @@ test('сгенерированные скрипты проходят bash -n', {
   }
 });
 
-test('самотест: разбор Ookla (байты/с) и speedtest-cli (бит/с), ошибка без вывода', () => {
-  const ookla = JSON.stringify({
-    download: { bandwidth: 1_212_500_000 }, upload: { bandwidth: 118_750_000 }, ping: { latency: 1.234 },
-    server: { name: 'Orange', location: 'Paris', country: 'France' }, isp: 'OVH', result: { url: 'https://www.speedtest.net/result/c/x' },
-  });
-  const r = parseSelfTest(`junk
-OOKLA=${ookla}
-`);
-  assert.equal(r.downloadMbps, 9700);
-  assert.equal(r.uploadMbps, 950);
-  assert.equal(r.pingMs, 1.2);
-  assert.equal(r.server, 'Orange, Paris, France');
-  assert.equal(r.tool, 'ookla');
-  const py = JSON.stringify({ download: 487_000_000, upload: 92_500_000, ping: 12.5, server: { sponsor: 'Beeline', name: 'Moscow', country: 'Russia' }, client: { isp: 'Rostelecom' } });
-  const p = parseSelfTest(`PYST=${py}`);
-  assert.equal(p.downloadMbps, 487);
-  assert.equal(p.uploadMbps, 92.5);
-  assert.equal(p.tool, 'speedtest-cli');
-  assert.equal(p.server, 'Beeline, Moscow, Russia');
+test('самотест: разбор CFTEST (байты и секунды по потокам), ошибка без вывода', () => {
+  const r = parseSelfTest('junk\nCFTEST=1500000000 12.3 300000000 12.1 0.0021 AMS 1.2.3.4 8\n');
+  assert.equal(r.downloadMbps, 975.6);
+  assert.equal(r.uploadMbps, 198.3);
+  assert.equal(r.pingMs, 2.1);
+  assert.equal(r.server, 'Cloudflare AMS · 8 потоков');
+  assert.equal(r.tool, 'cloudflare');
   assert.throws(() => parseSelfTest('SELF_FAIL: ничего не вышло'), /ничего не вышло/);
+  // В скрипте нет ни одной шаблонной подстановки TS: «${» в shell-скрипт попасть не должно.
+  assert.ok(!SELF_SPEEDTEST_SCRIPT.includes('${'));
+  assert.ok(SELF_SPEEDTEST_SCRIPT.includes('speed.cloudflare.com'));
 });

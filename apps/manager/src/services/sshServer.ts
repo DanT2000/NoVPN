@@ -1295,10 +1295,12 @@ export async function sshPeerIp(server: Server): Promise<string | null> {
 
 // ── Самотест сервера ────────────────────────────────────────────────────────
 // Тест из браузера админа упирается в ЕГО домашний канал (500 Мбит), а сервер может
-// быть 10-гигабитным. Поэтому второй режим: сервер сам меряет свой канал до ближайшего
-// узла Speedtest. Официальный CLI Ookla ставим из их apt-репозитория (ключ + список,
-// без «curl | bash»); если репозиторий недоступен — запасной python speedtest-cli из
-// apt (HTTP-тест, на очень толстых каналах занижает — это видно по полю tool).
+// быть 10-гигабитным. Поэтому второй режим: сервер сам меряет свой канал. Ookla для
+// этого не годится: узел он выбирает по GeoIP адреса сервера (адрес «в Нидерландах»,
+// ближайшими вышли египетские узлы) и меряет одним потоком — получались 58/166 Мбит на
+// гигабитном канале. Меряем сами: 8 параллельных потоков до ближайшего узла Cloudflare
+// (anycast — узел выбирается реальным маршрутом), скачивание и отдача по 12 секунд,
+// без установки пакетов. Суммарные байты всех потоков / время самого долгого.
 
 export interface SelfTestResult {
   downloadMbps: number;
@@ -1310,62 +1312,61 @@ export interface SelfTestResult {
   url: string | null;
 }
 
-export const SELF_SPEEDTEST_SCRIPT = `export DEBIAN_FRONTEND=noninteractive
-if ! command -v speedtest >/dev/null 2>&1; then
-  mkdir -p /etc/apt/apt.conf.d && printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99lock-timeout 2>/dev/null || true
-  for _ in $(seq 1 60); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 3; done
-  . /etc/os-release
-  if command -v gpg >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || apt-get install -y -qq gnupg curl >/dev/null 2>&1; then
-    curl -fsSL https://packagecloud.io/ookla/speedtest-cli/gpgkey 2>/dev/null | gpg --dearmor --yes -o /usr/share/keyrings/ookla.gpg 2>/dev/null \
-      && echo "deb [signed-by=/usr/share/keyrings/ookla.gpg] https://packagecloud.io/ookla/speedtest-cli/$ID/ $VERSION_CODENAME main" > /etc/apt/sources.list.d/ookla.list \
-      && apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq speedtest >/dev/null 2>&1 || rm -f /etc/apt/sources.list.d/ookla.list
-  fi
-fi
-if command -v speedtest >/dev/null 2>&1; then
-  OUT=$(timeout 150 speedtest --accept-license --accept-gdpr -f json 2>/dev/null || true)
-  [ -n "$OUT" ] && { echo "OOKLA=$OUT"; exit 0; }
-fi
-command -v speedtest-cli >/dev/null 2>&1 || apt-get install -y -qq speedtest-cli >/dev/null 2>&1 || true
-if command -v speedtest-cli >/dev/null 2>&1; then
-  OUT=$(timeout 150 speedtest-cli --json 2>/dev/null || true)
-  [ -n "$OUT" ] && { echo "PYST=$OUT"; exit 0; }
-fi
-echo "SELF_FAIL: не удалось ни поставить, ни запустить speedtest (Ookla и speedtest-cli)"
+export const SELF_SPEEDTEST_SCRIPT = `set +e
+CF=https://speed.cloudflare.com
+STREAMS=8; SECS=12
+TMP=$(mktemp -d /tmp/novpn-st.XXXXXX)
+command -v curl >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get install -y -qq curl >/dev/null 2>&1; }
+command -v curl >/dev/null 2>&1 || { echo "SELF_FAIL: на сервере нет curl"; exit 1; }
+# Узел Cloudflare, до которого меряем (colo), и адрес сервера, каким его видит мир.
+TRACE=$(curl -s -m 10 "$CF/cdn-cgi/trace" 2>/dev/null)
+COLO=$(echo "$TRACE" | sed -n 's/^colo=//p' | head -1); MYIP=$(echo "$TRACE" | sed -n 's/^ip=//p' | head -1)
+# Задержка: время TCP-соединения (ICMP на серверах часто закрыт).
+PING=$(curl -s -o /dev/null -m 10 -w '%{time_connect}' "$CF/cdn-cgi/trace" 2>/dev/null)
+# Скачивание: STREAMS потоков, каждый качает куски по 100 МБ, пока не выйдут SECS секунд.
+down_stream() {
+  s=$(date +%s.%N); end=$(( $(date +%s) + SECS )); tot=0
+  while [ $(date +%s) -lt $end ]; do
+    b=$(curl -s -o /dev/null -m $SECS -w '%{size_download}' "$CF/__down?bytes=100000000" 2>/dev/null); [ -n "$b" ] || b=0
+    tot=$((tot + b)); [ "$b" -gt 0 ] 2>/dev/null || break
+  done
+  e=$(date +%s.%N); echo "$tot $(awk "BEGIN{print $e-$s}")"
+}
+i=0; while [ $i -lt $STREAMS ]; do down_stream > "$TMP/d$i" & i=$((i+1)); done; wait
+DBYTES=$(cat "$TMP"/d* | awk '{b+=$1} END{print b+0}'); DTIME=$(cat "$TMP"/d* | awk 'BEGIN{m=0}{if($2>m)m=$2}END{print m+0}')
+# Отдача: файл из нулей, STREAMS потоков POST по 50 МБ, пока не выйдут SECS секунд.
+head -c 50000000 /dev/zero > "$TMP/up.bin" 2>/dev/null
+up_stream() {
+  s=$(date +%s.%N); end=$(( $(date +%s) + SECS )); tot=0
+  while [ $(date +%s) -lt $end ]; do
+    b=$(curl -s -o /dev/null -m $SECS -X POST --data-binary "@$TMP/up.bin" -H 'Content-Type: application/octet-stream' -w '%{size_upload}' "$CF/__up" 2>/dev/null); [ -n "$b" ] || b=0
+    tot=$((tot + b)); [ "$b" -gt 0 ] 2>/dev/null || break
+  done
+  e=$(date +%s.%N); echo "$tot $(awk "BEGIN{print $e-$s}")"
+}
+i=0; while [ $i -lt $STREAMS ]; do up_stream > "$TMP/u$i" & i=$((i+1)); done; wait
+UBYTES=$(cat "$TMP"/u* | awk '{b+=$1} END{print b+0}'); UTIME=$(cat "$TMP"/u* | awk 'BEGIN{m=0}{if($2>m)m=$2}END{print m+0}')
+rm -rf "$TMP"
+[ "$DBYTES" -gt 0 ] 2>/dev/null || { echo "SELF_FAIL: Cloudflare недоступен с сервера (ни байта не скачалось)"; exit 1; }
+echo "CFTEST=$DBYTES $DTIME $UBYTES $UTIME $PING $COLO $MYIP $STREAMS"
 `;
 
 const mbps = (v: number): number => Math.round(v * 10) / 10;
 
-/** Разбор вывода самотеста: Ookla (bandwidth в байтах/с) или speedtest-cli (бит/с). */
+/** Разбор вывода самотеста: CFTEST=<байт скачано> <сек> <байт отдано> <сек> <tcp-connect сек> <colo> <ip> <потоков>. */
 export function parseSelfTest(out: string): SelfTestResult {
-  const ook = grab(out, 'OOKLA');
-  if (ook) {
-    const j = JSON.parse(ook) as {
-      download?: { bandwidth?: number }; upload?: { bandwidth?: number }; ping?: { latency?: number };
-      server?: { name?: string; location?: string; country?: string }; isp?: string; result?: { url?: string };
-    };
+  const cf = grab(out, 'CFTEST');
+  if (cf) {
+    const [db, dt, ub, ut, ping, colo, ip, streams] = cf.trim().split(/\s+/);
+    const n = (v?: string): number => Number(v) || 0;
+    const rate = (bytes: number, secs: number): number => (secs > 0 ? mbps((bytes * 8) / secs / 1e6) : 0);
     return {
-      downloadMbps: mbps(((j.download?.bandwidth ?? 0) * 8) / 1e6),
-      uploadMbps: mbps(((j.upload?.bandwidth ?? 0) * 8) / 1e6),
-      pingMs: j.ping?.latency != null ? Math.round(j.ping.latency * 10) / 10 : null,
-      server: [j.server?.name, j.server?.location, j.server?.country].filter(Boolean).join(', ') || null,
-      isp: j.isp ?? null,
-      tool: 'ookla',
-      url: j.result?.url ?? null,
-    };
-  }
-  const py = grab(out, 'PYST');
-  if (py) {
-    const j = JSON.parse(py) as {
-      download?: number; upload?: number; ping?: number;
-      server?: { sponsor?: string; name?: string; country?: string }; client?: { isp?: string };
-    };
-    return {
-      downloadMbps: mbps((j.download ?? 0) / 1e6),
-      uploadMbps: mbps((j.upload ?? 0) / 1e6),
-      pingMs: j.ping != null ? Math.round(j.ping * 10) / 10 : null,
-      server: [j.server?.sponsor, j.server?.name, j.server?.country].filter(Boolean).join(', ') || null,
-      isp: j.client?.isp ?? null,
-      tool: 'speedtest-cli',
+      downloadMbps: rate(n(db), n(dt)),
+      uploadMbps: rate(n(ub), n(ut)),
+      pingMs: n(ping) > 0 ? Math.round(n(ping) * 10000) / 10 : null,
+      server: `Cloudflare ${colo || '?'} · ${streams || 8} потоков`,
+      isp: ip ? `адрес сервера ${ip}` : null,
+      tool: 'cloudflare',
       url: null,
     };
   }
@@ -1374,7 +1375,7 @@ export function parseSelfTest(out: string): SelfTestResult {
 }
 
 export async function sshSelfSpeedtest(server: Server): Promise<SelfTestResult> {
-  // Установка пакета + сам тест: до пары минут на медленном apt.
-  const out = await runScript(creds(server.id), SELF_SPEEDTEST_SCRIPT, 300000);
+  // Две фазы по 12 с + служебные запросы: около 40 с; запас на медленный apt для curl.
+  const out = await runScript(creds(server.id), SELF_SPEEDTEST_SCRIPT, 180000);
   return parseSelfTest(out);
 }

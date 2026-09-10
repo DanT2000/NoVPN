@@ -497,9 +497,9 @@ function SpeedtestPanel({ server }: { server: Server }) {
       <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px dashed var(--border-inner)' }}>
         <div className="field-label">Самотест сервера</div>
         <span className="small muted">
-          Сервер сам меряет свой канал до ближайшего узла Speedtest (Ookla). Это потолок самого сервера, он не
-          зависит от вашего домашнего интернета: у сервера может быть 10 Гбит, а дома 500 Мбит. Занимает около
-          минуты; при первом запуске панель поставит speedtest на сервер.
+          Сервер сам меряет свой канал: 8 параллельных потоков до ближайшего узла Cloudflare, скачивание и отдача
+          по 12 секунд. Это потолок самого сервера, он не зависит от вашего домашнего интернета: у сервера может
+          быть 10 Гбит, а дома 500 Мбит. Занимает около 40 секунд, ничего на сервер не ставит.
         </span>
         <div className="row" style={{ gap: 8, marginTop: 6 }}>
           <button className="btn btn-secondary btn-sm" disabled={!!busy || selfBusy} onClick={() => void selfTest()}>
@@ -520,7 +520,7 @@ function SpeedtestPanel({ server }: { server: Server }) {
                 {t.pingMs != null ? <span>{t.pingMs} мс</span> : null}
                 <span className="muted">
                   {[t.server, t.isp].filter(Boolean).join(' · ')}
-                  {t.tool !== 'ookla' ? ' · speedtest-cli' : ''}
+                  {t.tool !== 'cloudflare' ? ` · ${t.tool}` : ''}
                 </span>
               </div>
             ))}
