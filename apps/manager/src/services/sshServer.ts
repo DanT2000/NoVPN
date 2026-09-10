@@ -1292,3 +1292,89 @@ export async function sshPeerIp(server: Server): Promise<string | null> {
   const ip = grab(out, 'PEER');
   return ip && isAllowEntry(ip) ? ip : null;
 }
+
+// ── Самотест сервера ────────────────────────────────────────────────────────
+// Тест из браузера админа упирается в ЕГО домашний канал (500 Мбит), а сервер может
+// быть 10-гигабитным. Поэтому второй режим: сервер сам меряет свой канал до ближайшего
+// узла Speedtest. Официальный CLI Ookla ставим из их apt-репозитория (ключ + список,
+// без «curl | bash»); если репозиторий недоступен — запасной python speedtest-cli из
+// apt (HTTP-тест, на очень толстых каналах занижает — это видно по полю tool).
+
+export interface SelfTestResult {
+  downloadMbps: number;
+  uploadMbps: number;
+  pingMs: number | null;
+  server: string | null;
+  isp: string | null;
+  tool: string;
+  url: string | null;
+}
+
+export const SELF_SPEEDTEST_SCRIPT = `export DEBIAN_FRONTEND=noninteractive
+if ! command -v speedtest >/dev/null 2>&1; then
+  mkdir -p /etc/apt/apt.conf.d && printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99lock-timeout 2>/dev/null || true
+  for _ in $(seq 1 60); do fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break; sleep 3; done
+  . /etc/os-release
+  if command -v gpg >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || apt-get install -y -qq gnupg curl >/dev/null 2>&1; then
+    curl -fsSL https://packagecloud.io/ookla/speedtest-cli/gpgkey 2>/dev/null | gpg --dearmor --yes -o /usr/share/keyrings/ookla.gpg 2>/dev/null \
+      && echo "deb [signed-by=/usr/share/keyrings/ookla.gpg] https://packagecloud.io/ookla/speedtest-cli/$ID/ $VERSION_CODENAME main" > /etc/apt/sources.list.d/ookla.list \
+      && apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq speedtest >/dev/null 2>&1 || rm -f /etc/apt/sources.list.d/ookla.list
+  fi
+fi
+if command -v speedtest >/dev/null 2>&1; then
+  OUT=$(timeout 150 speedtest --accept-license --accept-gdpr -f json 2>/dev/null || true)
+  [ -n "$OUT" ] && { echo "OOKLA=$OUT"; exit 0; }
+fi
+command -v speedtest-cli >/dev/null 2>&1 || apt-get install -y -qq speedtest-cli >/dev/null 2>&1 || true
+if command -v speedtest-cli >/dev/null 2>&1; then
+  OUT=$(timeout 150 speedtest-cli --json 2>/dev/null || true)
+  [ -n "$OUT" ] && { echo "PYST=$OUT"; exit 0; }
+fi
+echo "SELF_FAIL: не удалось ни поставить, ни запустить speedtest (Ookla и speedtest-cli)"
+`;
+
+const mbps = (v: number): number => Math.round(v * 10) / 10;
+
+/** Разбор вывода самотеста: Ookla (bandwidth в байтах/с) или speedtest-cli (бит/с). */
+export function parseSelfTest(out: string): SelfTestResult {
+  const ook = grab(out, 'OOKLA');
+  if (ook) {
+    const j = JSON.parse(ook) as {
+      download?: { bandwidth?: number }; upload?: { bandwidth?: number }; ping?: { latency?: number };
+      server?: { name?: string; location?: string; country?: string }; isp?: string; result?: { url?: string };
+    };
+    return {
+      downloadMbps: mbps(((j.download?.bandwidth ?? 0) * 8) / 1e6),
+      uploadMbps: mbps(((j.upload?.bandwidth ?? 0) * 8) / 1e6),
+      pingMs: j.ping?.latency != null ? Math.round(j.ping.latency * 10) / 10 : null,
+      server: [j.server?.name, j.server?.location, j.server?.country].filter(Boolean).join(', ') || null,
+      isp: j.isp ?? null,
+      tool: 'ookla',
+      url: j.result?.url ?? null,
+    };
+  }
+  const py = grab(out, 'PYST');
+  if (py) {
+    const j = JSON.parse(py) as {
+      download?: number; upload?: number; ping?: number;
+      server?: { sponsor?: string; name?: string; country?: string }; client?: { isp?: string };
+    };
+    return {
+      downloadMbps: mbps((j.download ?? 0) / 1e6),
+      uploadMbps: mbps((j.upload ?? 0) / 1e6),
+      pingMs: j.ping != null ? Math.round(j.ping * 10) / 10 : null,
+      server: [j.server?.sponsor, j.server?.name, j.server?.country].filter(Boolean).join(', ') || null,
+      isp: j.client?.isp ?? null,
+      tool: 'speedtest-cli',
+      url: null,
+    };
+  }
+  const fail = /SELF_FAIL:([^\n]*)/.exec(out)?.[1]?.trim();
+  throw new Error(fail || 'Самотест не выполнился.');
+}
+
+export async function sshSelfSpeedtest(server: Server): Promise<SelfTestResult> {
+  // Установка пакета + сам тест: до пары минут на медленном apt.
+  const out = await runScript(creds(server.id), SELF_SPEEDTEST_SCRIPT, 300000);
+  return parseSelfTest(out);
+}

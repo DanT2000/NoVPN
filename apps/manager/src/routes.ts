@@ -16,7 +16,7 @@ import { buildWhitelistXrayConfig } from '@novpn/shared';
 import type { ProxyFallback } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -1594,7 +1594,20 @@ router.post('/api/admin/servers/:id/speedtest/install', requireAdmin, async (req
   if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
   const allow = normalizeAllow(req.body?.allow ?? s.speedtest?.allow ?? []);
   if (!allow) return res.status(400).json(err('validation', 'Адреса — только IPv4 (1.2.3.4) или подсети (1.2.3.0/24).'));
-  const port = s.speedtest?.port ?? (await sshPickPort(s, 'tcp', SPEEDTEST_PORT).catch(() => SPEEDTEST_PORT));
+  // Порт: заданный админом (проверяем на сервере, что свободен), иначе 3000 или
+  // ближайший свободный — «а вдруг 3000 занят» решается здесь, а не руками.
+  const rawPort = req.body?.port;
+  let port: number;
+  if (rawPort !== undefined && rawPort !== null && String(rawPort).trim() !== '') {
+    const wanted = Number(rawPort);
+    if (!Number.isInteger(wanted) || wanted < 1024 || wanted > 65535) return res.status(400).json(err('validation', 'Порт — число от 1024 до 65535.'));
+    if (wanted !== s.speedtest?.port && !(await sshIsPortFree(s, 'tcp', wanted).catch(() => false))) {
+      return res.status(400).json(err('port', `Порт ${wanted} на сервере занят — укажите другой или оставьте поле пустым.`));
+    }
+    port = wanted;
+  } else {
+    port = s.speedtest?.port ?? (await sshPickPort(s, 'tcp', SPEEDTEST_PORT).catch(() => SPEEDTEST_PORT));
+  }
   try {
     await sshInstallSpeedtest(s, port, allow);
     repo.updateServerFields(s.id, { speedtest: JSON.stringify({ port, allow, installedAt: new Date().toISOString() }) });
@@ -1638,6 +1651,24 @@ router.post('/api/admin/servers/:id/speedtest/open', requireAdmin, async (req, r
     res.json({ ok: true, url: `http://${s.host}:${s.speedtest.port}/?Run`, ip, server: repo.getServer(s.id) });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось открыть тест.'));
+  }
+});
+
+// Самотест: сервер сам меряет свой канал до узла Speedtest — потолок сервера,
+// независимо от домашнего канала админа. Не требует установленного OpenSpeedTest.
+router.post('/api/admin/servers/:id/speedtest/self', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  try {
+    const r = await sshSelfSpeedtest(s);
+    const result = { at: new Date().toISOString(), ...r };
+    const list = [result, ...(s.selfTests ?? [])].slice(0, 10);
+    repo.updateServerFields(s.id, { selftest: JSON.stringify(list) });
+    repo.addLog(`Самотест «${s.name}»: ↓ ${result.downloadMbps} ↑ ${result.uploadMbps} Мбит/с (${result.tool})`);
+    res.json({ ok: true, result, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Самотест не выполнился.'));
   }
 });
 

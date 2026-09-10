@@ -28,6 +28,7 @@ import type {
   TestServerConnectionResult,
   TestTelegramResult,
   User,
+  ServerSelfTest,
 } from '@novpn/shared';
 
 export interface CreateUserInput {
@@ -221,7 +222,9 @@ export interface ApiClient {
   editServer(id: string, input: EditServerInput): Promise<Server>;
   installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
   /** Тест скорости на сервере: установка, список адресов, открыть для себя, удалить. */
-  speedtestInstall(id: string, allow?: string[]): Promise<{ ok: boolean; server: Server }>;
+  speedtestInstall(id: string, allow?: string[], port?: number): Promise<{ ok: boolean; server: Server }>;
+  /** Самотест: сервер сам меряет свой канал (около минуты, при первом запуске ставит speedtest). */
+  speedtestSelf(id: string): Promise<{ ok: boolean; result: ServerSelfTest; server: Server }>;
   speedtestAllow(id: string, allow: string[]): Promise<{ ok: boolean; server: Server }>;
   speedtestOpen(id: string): Promise<{ ok: boolean; url: string; ip: string; server: Server }>;
   speedtestRemove(id: string): Promise<{ ok: boolean; server: Server }>;

@@ -71,6 +71,22 @@ export interface Server {
   routing?: ServerRoutingSummary;
   /** Тест скорости на сервере (OpenSpeedTest в Docker). null/нет — не установлен. */
   speedtest?: ServerSpeedtest | null;
+  /** Самотесты сервера (его собственный канал до узла Speedtest), новые первыми, до 10. */
+  selfTests?: ServerSelfTest[];
+}
+
+/** Результат самотеста: сервер сам мерил свой канал, независимо от канала админа. */
+export interface ServerSelfTest {
+  at: string;
+  downloadMbps: number;
+  uploadMbps: number;
+  pingMs: number | null;
+  /** Узел, до которого мерили (город, оператор). */
+  server: string | null;
+  isp: string | null;
+  /** Чем мерили: ookla (официальный CLI) или speedtest-cli (python, запасной). */
+  tool: string;
+  url?: string | null;
 }
 
 /** Тест скорости на сервере: меряет реальный канал между браузером админа и сервером. */

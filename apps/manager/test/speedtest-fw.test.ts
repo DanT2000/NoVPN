@@ -14,7 +14,7 @@ process.env.DATABASE_PATH = path.join(tmp, 'database.sqlite');
 process.env.ENCRYPTION_KEY = '0'.repeat(64);
 process.env.SESSION_SECRET = 'test-secret';
 
-const { isAllowEntry, speedtestFwScript, speedtestInstallScript } = await import('../src/services/sshServer.js');
+const { isAllowEntry, speedtestFwScript, speedtestInstallScript, parseSelfTest, SELF_SPEEDTEST_SCRIPT } = await import('../src/services/sshServer.js');
 
 test('isAllowEntry: только IPv4 и IPv4/CIDR', () => {
   for (const ok of ['1.2.3.4', '10.0.0.0/8', '192.168.2.0/24', ' 8.8.8.8 ']) assert.equal(isAllowEntry(ok), true, ok);
@@ -50,10 +50,33 @@ test('сгенерированные скрипты проходят bash -n', {
   for (const [name, body] of [
     ['fw.sh', speedtestFwScript(3000, ['1.2.3.4', '10.0.0.0/8'])],
     ['install.sh', speedtestInstallScript(3000, ['1.2.3.4'])],
+    ['self.sh', SELF_SPEEDTEST_SCRIPT],
   ] as const) {
     const f = path.join(tmp, name);
     fs.writeFileSync(f, body);
     const r = spawnSync('bash', ['-n', f], { encoding: 'utf8' });
     assert.equal(r.status, 0, `${name}: ${r.stderr}`);
   }
+});
+
+test('самотест: разбор Ookla (байты/с) и speedtest-cli (бит/с), ошибка без вывода', () => {
+  const ookla = JSON.stringify({
+    download: { bandwidth: 1_212_500_000 }, upload: { bandwidth: 118_750_000 }, ping: { latency: 1.234 },
+    server: { name: 'Orange', location: 'Paris', country: 'France' }, isp: 'OVH', result: { url: 'https://www.speedtest.net/result/c/x' },
+  });
+  const r = parseSelfTest(`junk
+OOKLA=${ookla}
+`);
+  assert.equal(r.downloadMbps, 9700);
+  assert.equal(r.uploadMbps, 950);
+  assert.equal(r.pingMs, 1.2);
+  assert.equal(r.server, 'Orange, Paris, France');
+  assert.equal(r.tool, 'ookla');
+  const py = JSON.stringify({ download: 487_000_000, upload: 92_500_000, ping: 12.5, server: { sponsor: 'Beeline', name: 'Moscow', country: 'Russia' }, client: { isp: 'Rostelecom' } });
+  const p = parseSelfTest(`PYST=${py}`);
+  assert.equal(p.downloadMbps, 487);
+  assert.equal(p.uploadMbps, 92.5);
+  assert.equal(p.tool, 'speedtest-cli');
+  assert.equal(p.server, 'Beeline, Moscow, Russia');
+  assert.throws(() => parseSelfTest('SELF_FAIL: ничего не вышло'), /ничего не вышло/);
 });

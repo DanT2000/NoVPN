@@ -19,6 +19,7 @@ import type {
   TestServerConnectionResult,
   TestTelegramResult,
   User,
+  ServerSelfTest,
 } from '@novpn/shared';
 import type {
   AddServerInput,
@@ -119,8 +120,10 @@ export const httpApi: ApiClient = {
   editServer: (id: string, input: EditServerInput) => req<Server>('PATCH', `/api/admin/servers/${id}`, input),
   installServerProxies: (id: string, types: { http: boolean; https: boolean; socks: boolean }) =>
     req<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
-  speedtestInstall: (id: string, allow?: string[]) =>
-    req<{ ok: boolean; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/install`, { allow: allow ?? [] }),
+  speedtestInstall: (id: string, allow?: string[], port?: number) =>
+    req<{ ok: boolean; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/install`, { allow: allow ?? [], port: port ?? null }),
+  speedtestSelf: (id: string) =>
+    req<{ ok: boolean; result: ServerSelfTest; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/self`, {}),
   speedtestAllow: (id: string, allow: string[]) =>
     req<{ ok: boolean; server: Server }>('PUT', `/api/admin/servers/${id}/speedtest/allow`, { allow }),
   speedtestOpen: (id: string) =>

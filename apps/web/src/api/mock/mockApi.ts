@@ -391,12 +391,20 @@ export const mockApi: ApiClient = {
   async myIp() {
     return { ip: '203.0.113.7', source: 'request' as const };
   },
-  async speedtestInstall(id: string, allow: string[] = []) {
+  async speedtestInstall(id: string, allow: string[] = [], port?: number) {
     await wait(600);
     const s = state.servers.find((x) => x.id === id)!;
-    s.speedtest = { port: 3000, allow, installedAt: new Date().toISOString() };
+    s.speedtest = { port: port ?? 3000, allow, installedAt: new Date().toISOString() };
     log(`Установлен тест скорости на «${s.name}»`);
     return { ok: true, server: clone(s) };
+  },
+  async speedtestSelf(id: string) {
+    await wait(900);
+    const s = state.servers.find((x) => x.id === id)!;
+    const result = { at: new Date().toISOString(), downloadMbps: 9412.3, uploadMbps: 8877.1, pingMs: 1.4, server: 'Orange, Paris, France', isp: 'OVH SAS', tool: 'ookla', url: null };
+    s.selfTests = [result, ...(s.selfTests ?? [])].slice(0, 10);
+    log(`Самотест «${s.name}»: ↓ ${result.downloadMbps} ↑ ${result.uploadMbps} Мбит/с`);
+    return { ok: true, result, server: clone(s) };
   },
   async speedtestAllow(id: string, allow: string[]) {
     await wait(300);

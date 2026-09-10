@@ -331,14 +331,23 @@ function SshHardenPanel({ server }: { server: Server }) {
   );
 }
 
+const fmtMbps = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(2)} Гбит/с` : `${Math.round(v)} Мбит/с`);
+const fmtAt = (iso: string): string =>
+  new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
 /* Тест скорости: OpenSpeedTest в Docker на самом сервере. Меряет реальный канал между
    браузером админа и этим сервером — не «нарисованные» цифры, а потолок того, что даст
-   VPN. Порт открыт только адресам из списка; «Открыть тест» сам добавляет текущий. */
+   VPN. Порт открыт только адресам из списка; «Открыть тест» сам добавляет текущий.
+   Второй режим — самотест: сервер сам меряет свой канал до узла Speedtest, потому что
+   тест из браузера упирается в домашний интернет админа, а не в сервер. */
 function SpeedtestPanel({ server }: { server: Server }) {
   const { showToast, showConfirm, reload } = useApp();
   const st = server.speedtest ?? null;
+  const tests = server.selfTests ?? [];
   const allowKey = (st?.allow ?? []).join(',');
   const [busy, setBusy] = useState<null | 'install' | 'open' | 'allow' | 'remove'>(null);
+  const [selfBusy, setSelfBusy] = useState(false);
+  const [port, setPort] = useState('');
   const [allowText, setAllowText] = useState(allowKey.split(',').filter(Boolean).join('\n'));
   const [myIp, setMyIp] = useState<string | null>(null);
   useEffect(() => {
@@ -364,6 +373,18 @@ function SpeedtestPanel({ server }: { server: Server }) {
       setBusy(null);
     }
   }
+  async function selfTest() {
+    setSelfBusy(true);
+    try {
+      const r = await api.speedtestSelf(server.id);
+      await reload();
+      showToast(`Сервер: ↓ ${fmtMbps(r.result.downloadMbps)} · ↑ ${fmtMbps(r.result.uploadMbps)}`);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSelfBusy(false);
+    }
+  }
   async function open() {
     // Вкладку открываем ДО запроса — иначе браузер сочтёт её всплывающей и заблокирует.
     const w = window.open('', '_blank');
@@ -384,10 +405,22 @@ function SpeedtestPanel({ server }: { server: Server }) {
     <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
       <span className="field-label">Тест скорости</span>
       {!st ? (
-        <span className="small muted">
-          Поставит OpenSpeedTest в Docker на сам сервер. Тест идёт из вашего браузера прямо к серверу — реальный
-          канал, без VPN и посредников. Страница теста будет открыта только адресам из списка ниже.
-        </span>
+        <>
+          <span className="small muted">
+            Поставит OpenSpeedTest в Docker на сам сервер. Тест идёт из вашего браузера прямо к серверу — реальный
+            канал, без VPN и посредников. Страница теста будет открыта только адресам из списка ниже.
+          </span>
+          <Field label="Порт страницы теста" hint="Пусто — 3000 или ближайший свободный; занятость проверяется на сервере.">
+            <input
+              className="input mono"
+              style={{ maxWidth: 160 }}
+              inputMode="numeric"
+              placeholder="3000"
+              value={port}
+              onChange={(e) => setPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
+            />
+          </Field>
+        </>
       ) : (
         <>
           <div className="body small mono">
@@ -427,7 +460,8 @@ function SpeedtestPanel({ server }: { server: Server }) {
                 title: 'Установить тест скорости?',
                 text: 'Панель по SSH запустит контейнер OpenSpeedTest и закроет его порт для всех, кроме адресов из списка. Занимает около минуты.',
                 confirmLabel: 'Установить',
-                onConfirm: () => void run('install', () => api.speedtestInstall(server.id, parse()), 'Тест скорости установлен'),
+                onConfirm: () =>
+                  void run('install', () => api.speedtestInstall(server.id, parse(), port.trim() ? Number(port) : undefined), 'Тест скорости установлен'),
               })
             }
           >
@@ -457,6 +491,41 @@ function SpeedtestPanel({ server }: { server: Server }) {
             </button>
           </>
         )}
+      </div>
+
+      {/* Самотест: сервер меряет СВОЙ канал — потолок сервера, а не домашнего интернета */}
+      <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px dashed var(--border-inner)' }}>
+        <div className="field-label">Самотест сервера</div>
+        <span className="small muted">
+          Сервер сам меряет свой канал до ближайшего узла Speedtest (Ookla). Это потолок самого сервера, он не
+          зависит от вашего домашнего интернета: у сервера может быть 10 Гбит, а дома 500 Мбит. Занимает около
+          минуты; при первом запуске панель поставит speedtest на сервер.
+        </span>
+        <div className="row" style={{ gap: 8, marginTop: 6 }}>
+          <button className="btn btn-secondary btn-sm" disabled={!!busy || selfBusy} onClick={() => void selfTest()}>
+            {selfBusy ? 'Меряем… (около минуты)' : 'Запустить самотест'}
+          </button>
+        </div>
+        {tests.length ? (
+          <div className="stack" style={{ gap: 4, marginTop: 8 }}>
+            {tests.map((t, i) => (
+              <div key={t.at} className="body small" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', opacity: i === 0 ? 1 : 0.65 }}>
+                <span className="mono muted" style={{ minWidth: 112 }}>{fmtAt(t.at)}</span>
+                <span>
+                  ↓ <b>{fmtMbps(t.downloadMbps)}</b>
+                </span>
+                <span>
+                  ↑ <b>{fmtMbps(t.uploadMbps)}</b>
+                </span>
+                {t.pingMs != null ? <span>{t.pingMs} мс</span> : null}
+                <span className="muted">
+                  {[t.server, t.isp].filter(Boolean).join(' · ')}
+                  {t.tool !== 'ookla' ? ' · speedtest-cli' : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );

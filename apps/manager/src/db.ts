@@ -460,6 +460,8 @@ for (const stmt of [
   'DROP TABLE IF EXISTS traffic_daily',
   // Тест скорости на сервере: {port, allow[], installedAt} JSON; NULL = не установлен.
   'ALTER TABLE servers ADD COLUMN speedtest TEXT',
+  // Самотесты сервера (JSON-массив результатов, новые первыми, до 10).
+  'ALTER TABLE servers ADD COLUMN selftest TEXT',
 ]) {
   try {
     db.exec(stmt);
