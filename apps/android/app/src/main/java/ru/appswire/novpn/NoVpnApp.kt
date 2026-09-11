@@ -22,6 +22,9 @@ class NoVpnApp : Application() {
             if (state.subUrl.isNotBlank()) {
                 runCatching { repo.refreshMeta() }
                 if (state.settings.autoUpdateLists) runCatching { repo.syncLists() }
+                // Резервный пул обновляем вместе с остальным (§10): у пользователя с
+                // «Приоритетным доступом» и у личной резервной подписки.
+                runCatching { repo.syncReserve() }
             }
         }
     }

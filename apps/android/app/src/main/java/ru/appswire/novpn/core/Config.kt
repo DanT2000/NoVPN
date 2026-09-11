@@ -57,15 +57,36 @@ object Config {
         secret: String = "",
         mixedPort: Int = MIXED_PORT,
         controllerPort: Int = CONTROLLER_PORT,
+        /** Резервные серверы (аварийный пул): их прокси кладём в тот же конфиг и в
+         *  ту же группу NoVPN, чтобы уйти на них одним selectProxy без перезапуска
+         *  движка. В обычном режиме они просто не выбраны. */
+        reserveProxies: List<Map<String, Any?>> = emptyList(),
+        reserveHosts: List<String> = emptyList(),
     ): String {
         val root: MutableMap<String, Any?> = when (parsed) {
             is Sub.Parsed.Clash -> parsed.root
             is Sub.Parsed.Nodes -> linkedMapOf()
         }
-        val names = Sub.namesOf(parsed)
+        val names = Sub.namesOf(parsed).toMutableList()
 
         if (parsed is Sub.Parsed.Nodes) {
             root["proxies"] = parsed.nodes.map { it.map }
+        }
+
+        // Резервные прокси дописываем к общему списку и к именам. Имена уникальны:
+        // при совпадении с обычным сервером резервное пропускаем, иначе движок
+        // отверг бы конфиг с дублирующимися прокси.
+        if (reserveProxies.isNotEmpty()) {
+            @Suppress("UNCHECKED_CAST")
+            val proxies = ((root["proxies"] as? List<Map<String, Any?>>)?.toMutableList() ?: mutableListOf())
+            val seen = names.toMutableSet()
+            for (p in reserveProxies) {
+                val n = p["name"]?.toString() ?: continue
+                if (!seen.add(n)) continue
+                proxies += p
+                names += n
+            }
+            root["proxies"] = proxies
         }
 
         // Локальный прокси нужен только в самопроверке (без туннеля). На телефоне
@@ -106,7 +127,9 @@ object Config {
         }
         root["proxy-groups"] = groups
 
-        root["rules"] = buildRules(rules, Sub.hostsOf(parsed))
+        // Анти-петля должна покрывать и резервные серверы: их адрес тоже обязан
+        // идти напрямую, иначе соединение к резерву завернулось бы в туннель.
+        root["rules"] = buildRules(rules, Sub.hostsOf(parsed) + reserveHosts)
 
         val options = DumperOptions().apply {
             defaultFlowStyle = DumperOptions.FlowStyle.BLOCK

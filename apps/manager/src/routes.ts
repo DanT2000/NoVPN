@@ -624,6 +624,25 @@ router.delete('/sub/:token/backup/personal', (req, res) => {
   res.json({ ok: true });
 });
 
+// Отчёт клиента о резервном расходе: внешние серверы мы по SSH не опрашиваем,
+// поэтому сколько трафика ушло через резерв, знает только приложение. Присылает
+// host сервера и байты за интервал; подписку сопоставляем по host на бэкенде.
+router.post('/sub/:token/backup/usage', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  const body = req.body ?? {};
+  const items: Array<{ host?: unknown; bytes?: unknown }> = Array.isArray(body.items)
+    ? body.items
+    : [{ host: body.host, bytes: body.bytes }];
+  let counted = 0;
+  for (const it of items.slice(0, 50)) {
+    const host = String(it.host ?? '').trim();
+    const bytes = Math.trunc(Number(it.bytes));
+    if (host && Number.isFinite(bytes) && bytes > 0 && backupRepo.attributeBackupTraffic(u.id, host, bytes)) counted += 1;
+  }
+  res.json({ ok: true, counted });
+});
+
 // Пер-серверная подписка: ОДИН сервер со СВОИМ обходом/политикой (не общий балансир).
 // В приложении = отдельный профиль на сервер. Ссылки формируются в bootstrap.servers[].subLink.
 router.get('/sub/:token/server/:id/full', (req, res) => {

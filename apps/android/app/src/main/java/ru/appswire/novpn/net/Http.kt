@@ -1,7 +1,9 @@
 package ru.appswire.novpn.net
 
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import ru.appswire.novpn.core.Sub
 import java.util.concurrent.TimeUnit
 
@@ -38,6 +40,18 @@ object Http {
             return Response(r.code, text, r.header("ETag"))
         }
     }
+
+    /** Запрос с телом (личная резервная подписка, отчёт о резервном расходе).
+     *  Возвращает код ответа или null при сетевой ошибке. Тело ответа не читаем. */
+    fun send(method: String, url: String, jsonBody: String?): Int? = runCatching {
+        val body = jsonBody?.toRequestBody("application/json".toMediaType())
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", Sub.USER_AGENT)
+            .method(method, body)
+            .build()
+        client.newCall(req).execute().use { it.code }
+    }.getOrNull()
 
     /** Скачать файл целиком (обновление приложения). Возвращает null при неуспехе. */
     fun getBytes(url: String): ByteArray? {

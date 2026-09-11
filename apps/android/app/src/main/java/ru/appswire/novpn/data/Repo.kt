@@ -382,13 +382,109 @@ class Repo(private val app: Context) {
     fun buildConfig(tunFd: Int, secret: String): String? {
         val parsed = parsedSub() ?: return null
         val node = nodeFor()
+        val reserve = reserveNodes()
         return Config.build(
             parsed = parsed,
             rules = rules(),
             selected = node?.name,
             tunFd = tunFd,
             secret = secret,
+            // Резервные прокси кладём в тот же конфиг: уход на резерв — это один
+            // selectProxy без пересборки и перезапуска движка.
+            reserveProxies = reserve.map { it.map },
+            reserveHosts = reserve.mapNotNull { it.map["server"]?.toString() },
         )
+    }
+
+    // ── резервный пул (аварийные внешние серверы) ──
+
+    @Volatile
+    private var reserveCache: List<Sub.Node>? = null
+
+    @Volatile
+    private var reserveLoaded = false
+
+    /** Разобранные резервные серверы. Скрыты из обычного списка — только для аварии. */
+    fun reserveNodes(): List<Sub.Node> {
+        if (!reserveLoaded) synchronized(this) {
+            if (!reserveLoaded) {
+                reserveCache = store.loadReserveRaw()
+                    ?.let { runCatching { Sub.parse(it) }.getOrNull() }
+                    ?.let { (it as? Sub.Parsed.Nodes)?.nodes }
+                reserveLoaded = true
+            }
+        }
+        return reserveCache ?: emptyList()
+    }
+
+    fun reserveNames(): List<String> = reserveNodes().map { it.name }
+
+    /** Хост резервного сервера по имени — для отчёта о расходе на панель. */
+    fun reserveHostOf(name: String): String? =
+        reserveNodes().firstOrNull { it.name == name }?.map?.get("server")?.toString()
+
+    /** Есть ли доступный резерв (панель подтвердила и список непустой). */
+    fun reserveAvailable(): Boolean = (meta?.backup?.available == true) && reserveNodes().isNotEmpty()
+
+    /** Адрес резервного списка: из meta, но строго на ту же панель (как у списков). */
+    private fun reserveUrl(): String? {
+        val sub = _state.value.subUrl
+        val base = Meta.baseOf(sub) ?: return null
+        meta?.backup?.sub?.takeIf { it.startsWith("$base/") }?.let { return it }
+        // Запасной вывод из адреса подписки: <base>/sub/<token>/backup.
+        val metaUrl = Meta.metaUrl(sub) ?: return null
+        return metaUrl.removeSuffix("/meta.json") + "/backup"
+    }
+
+    /** Обновить резервный пул. Никогда не бросает: резерв — это подстраховка. */
+    suspend fun syncReserve(): Unit = withContext(Dispatchers.IO) {
+        // Панель не предложила резерв этому пользователю — чистим локальную копию.
+        if (meta != null && meta?.backup?.available != true) {
+            store.deleteReserveRaw()
+            synchronized(this) { reserveCache = emptyList(); reserveLoaded = true }
+            return@withContext
+        }
+        val url = reserveUrl() ?: return@withContext
+        val resp = runCatching { Http.get(url) }.getOrNull() ?: return@withContext
+        if (resp.code !in 200..299 || resp.body.isBlank()) return@withContext
+        val nodes = runCatching { Sub.parse(resp.body) }.getOrNull()
+            ?.let { (it as? Sub.Parsed.Nodes)?.nodes } ?: return@withContext
+        store.saveReserveRaw(resp.body)
+        synchronized(this) { reserveCache = nodes; reserveLoaded = true }
+    }
+
+    /** Личная резервная подписка: добавить/заменить. Возвращает текст ошибки или null. */
+    suspend fun setPersonalReserve(rawUrl: String): String? = withContext(Dispatchers.IO) {
+        val url = rawUrl.trim()
+        if (!url.startsWith("https://")) return@withContext "Ссылка должна начинаться с https://"
+        val endpoint = personalReserveEndpoint() ?: return@withContext "Нет адреса панели"
+        val body = JsonObject(mapOf("url" to JsonPrimitive(url))).toString()
+        val code = Http.send("PUT", endpoint, body) ?: return@withContext "Панель недоступна"
+        if (code !in 200..299) return@withContext "Панель ответила $code"
+        syncReserve()
+        null
+    }
+
+    suspend fun removePersonalReserve(): Unit = withContext(Dispatchers.IO) {
+        val endpoint = personalReserveEndpoint() ?: return@withContext
+        Http.send("DELETE", endpoint, null)
+        syncReserve()
+    }
+
+    private fun personalReserveEndpoint(): String? {
+        val metaUrl = Meta.metaUrl(_state.value.subUrl) ?: return null
+        return metaUrl.removeSuffix("/meta.json") + "/backup/personal"
+    }
+
+    /** Отчёт о резервном расходе: сколько байт ушло через резервный host. */
+    suspend fun reportReserveUsage(host: String, bytes: Long): Unit = withContext(Dispatchers.IO) {
+        if (host.isEmpty() || bytes <= 0) return@withContext
+        val metaUrl = Meta.metaUrl(_state.value.subUrl) ?: return@withContext
+        val endpoint = metaUrl.removeSuffix("/meta.json") + "/backup/usage"
+        val body = JsonObject(
+            mapOf("host" to JsonPrimitive(host), "bytes" to JsonPrimitive(bytes)),
+        ).toString()
+        Http.send("POST", endpoint, body)
     }
 
     // ── правила по сайтам ──

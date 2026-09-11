@@ -47,11 +47,24 @@ data class Profile(
     val mode: String get() = if (routing.mode == "full") "full" else "smart"
 }
 
+/** Резервный пул: доступность аварийных серверов и откуда их забрать. */
+@Serializable
+data class BackupInfo(
+    val available: Boolean = false,
+    val count: Long = 0,
+    /** У пользователя есть «Приоритетный доступ» к общему пулу. */
+    val priority: Boolean = false,
+    /** Ссылка на список резервных серверов (base64, тот же формат, что подписка). */
+    val sub: String = "",
+)
+
 @Serializable
 data class Meta(
     val schemaVersion: Long = 0,
     val routingResources: Map<String, String> = emptyMap(),
     val profiles: List<Profile> = emptyList(),
+    /** Аддитивное поле: старые панели его не шлют, тогда резерва просто нет. */
+    val backup: BackupInfo? = null,
 ) {
     /** Мажор контракта выше нашего — данные могут значить не то, что мы думаем. */
     val unsupported: Boolean get() = schemaVersion > SUPPORTED_SCHEMA

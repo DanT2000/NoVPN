@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.sp
 import ru.appswire.novpn.core.Preset
 import ru.appswire.novpn.data.Repo
 import ru.appswire.novpn.vpn.ConnState
+import ru.appswire.novpn.vpn.NetDiagnosis
+import ru.appswire.novpn.vpn.NoVpnService
 import ru.appswire.novpn.vpn.VpnBus
 
 /*
@@ -59,6 +61,11 @@ fun HomeScreen(
     val conn by VpnBus.state.collectAsState()
     val error by VpnBus.error.collectAsState()
     val stats by VpnBus.stats.collectAsState()
+    // Резервная система: не null у reserve — работаем через аварийный сервер;
+    // offerReserve — предложить перейти вручную; diagnosis — чем объяснить сбой.
+    val reserve by VpnBus.reserve.collectAsState()
+    val offerReserve by VpnBus.offerReserve.collectAsState()
+    val diagnosis by VpnBus.diagnosis.collectAsState()
     val denied by repo.deniedFlow.collectAsState()
     val context = LocalContext.current
     val node = repo.nodeFor(state)
@@ -82,14 +89,19 @@ fun HomeScreen(
     val totalSites = listRules + manualVpnSites
     val vpnApps = state.apps.count { it.route == "vpn" }
 
-    val label = when (conn) {
+    // В резервном режиме статус явно другой — янтарный «Резервное подключение»
+    // вместо зелёного «Подключено»: человек должен видеть, что это подстраховка,
+    // а не обычный сервер. Захватываем в локальную val, чтобы работал smart-cast.
+    val res = reserve
+    val label = if (res != null) "Резервное подключение" else when (conn) {
         ConnState.OFF -> "Не подключено"
         ConnState.CONNECTING -> "Подключаемся…"
         ConnState.ON -> "Подключено"
         ConnState.RECONNECTING -> "Восстанавливаем связь…"
         ConnState.ERROR -> "Не удалось подключиться"
     }
-    val dot = when (conn) {
+    val labelColor = if (res != null) c.amberFg else c.textPrimary
+    val dot = if (res != null) c.amberFg else when (conn) {
         ConnState.ON -> c.greenDot
         ConnState.CONNECTING, ConnState.RECONNECTING -> c.amberFg
         ConnState.ERROR -> c.redFg
@@ -124,9 +136,10 @@ fun HomeScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                     StatusDot(dot)
-                    Text(label, fontSize = 21.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp, color = c.textPrimary)
+                    Text(label, fontSize = 21.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp, color = labelColor)
                 }
                 val sub = when {
+                    res != null -> Flags.label(res.server)
                     node == null -> "Сервер не выбран"
                     live -> buildString {
                         append(Flags.label(node.name))
@@ -144,6 +157,65 @@ fun HomeScreen(
                         fontSize = 11.sp,
                         color = c.textMuted2,
                         textAlign = TextAlign.Center,
+                    )
+                }
+                // Тихая подпись диагностики — не тревожная плашка, а объяснение
+                // вполголоса. В резервном режиме объяснять уже нечего.
+                if (res == null) {
+                    val hint = when {
+                        diagnosis == NetDiagnosis.NO_INTERNET && live -> "Похоже, интернета сейчас нет"
+                        diagnosis == NetDiagnosis.RESTRICTED && !repo.reserveAvailable() -> "Возможно, сеть работает в ограниченном режиме"
+                        else -> null
+                    }
+                    if (hint != null) {
+                        Text(hint, modifier = Modifier.padding(top = 7.dp), fontSize = 13.sp, color = c.textMuted, textAlign = TextAlign.Center)
+                    }
+                }
+            }
+
+            // Резервный режим: даём сменить аварийный сервер вручную и коротко
+            // объясняем, почему трафик идёт не как обычно.
+            if (res != null) {
+                Card(
+                    modifier = Modifier.padding(top = 18.dp),
+                    padding = PaddingValues(horizontal = 16.dp, vertical = 15.dp),
+                    background = c.amberNoticeBg,
+                    borderColor = c.amberNoticeBorder,
+                ) {
+                    TName("Резервное подключение", color = c.amberFg)
+                    TNote(
+                        "Обычные серверы NoVPN сейчас недоступны. Приложение временно " +
+                            "работает через резервный сервер и само вернётся на обычный, " +
+                            "когда сеть восстановится.",
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    Btn(
+                        "Сменить резервный сервер",
+                        onClick = { NoVpnService.changeReserve(context) },
+                        kind = BtnKind.OUTLINE,
+                        size = BtnSize.SM,
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    )
+                }
+            }
+
+            // Автовосстановление выключено, обычные серверы недоступны, но резерв
+            // есть — предлагаем перейти вручную, а не делаем это молча за человека.
+            if (res == null && offerReserve) {
+                Card(
+                    modifier = Modifier.padding(top = 18.dp),
+                    padding = PaddingValues(horizontal = 16.dp, vertical = 15.dp),
+                    background = c.amberNoticeBg,
+                    borderColor = c.amberNoticeBorder,
+                ) {
+                    TName("Обычные серверы недоступны", color = c.amberFg)
+                    TNote("Похоже, сеть работает в ограниченном режиме.", modifier = Modifier.padding(top = 6.dp))
+                    Btn(
+                        "Перейти на резерв",
+                        onClick = { NoVpnService.useReserve(context) },
+                        kind = BtnKind.SECONDARY,
+                        size = BtnSize.SM,
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                     )
                 }
             }

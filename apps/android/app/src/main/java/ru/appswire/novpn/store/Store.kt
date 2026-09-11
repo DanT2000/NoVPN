@@ -86,6 +86,18 @@ class Store(context: Context) {
         runCatching { writeAtomic(SUB, text) }
     }
 
+    // ── резервный пул: сырой список аварийных серверов (last-known-good) ──
+
+    fun loadReserveRaw(): String? = readText(RESERVE)
+
+    fun saveReserveRaw(text: String) {
+        runCatching { writeAtomic(RESERVE, text) }
+    }
+
+    fun deleteReserveRaw() {
+        runCatching { file(RESERVE).delete() }
+    }
+
     /** Рабочий каталог движка: конфиг и журнал. */
     fun engineDir(): File = File(dir, "engine").apply { mkdirs() }
 
@@ -129,5 +141,6 @@ class Store(context: Context) {
         private const val LISTS = "lists.json"
         private const val META = "meta.json"
         private const val SUB = "subscription.txt"
+        private const val RESERVE = "reserve.txt"
     }
 }

@@ -21,8 +21,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -31,6 +33,7 @@ import kotlinx.coroutines.sync.withLock
 import ru.appswire.novpn.MainActivity
 import ru.appswire.novpn.R
 import ru.appswire.novpn.core.Config
+import ru.appswire.novpn.core.Sub
 import ru.appswire.novpn.data.Repo
 
 /**
@@ -115,6 +118,7 @@ class NoVpnService : VpnService() {
         // туннель и гонит трафик, а управлять им уже некому.
         scope.launch { runCatching { Engine(this@NoVpnService, repo.store).killLeftover() } }
         startRebuildLoop()
+        startFailoverLoop()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -142,6 +146,18 @@ class NoVpnService : VpnService() {
                         connect()
                     }
                 }
+                return START_STICKY
+            }
+
+            ACTION_CHANGE_RESERVE -> {
+                // Человек в резервном режиме нажал «Сменить резервный сервер».
+                scope.launch { runCatching { changeReserve() } }
+                return START_STICKY
+            }
+
+            ACTION_USE_RESERVE -> {
+                // Автовосстановление выключено, человек согласился уйти на резерв.
+                scope.launch { runCatching { forceReserve() } }
                 return START_STICKY
             }
 
@@ -234,10 +250,23 @@ class NoVpnService : VpnService() {
         lastStatsAt = System.currentTimeMillis()
         lastDns = repo.systemDns()
 
+        // Новое подключение начинается как обычное: если прошлый сеанс завершился
+        // в резервном режиме, сбрасываем его.
+        VpnBus.setReserve(null)
+        reserveReported = 0
+        lastReserveReport = System.currentTimeMillis()
+
         VpnBus.setState(ConnState.ON)
         notify(notification("Подключено", node.name))
         registerNetworkCallback()
         startWatchdog()
+
+        // Резервный пул обновляем в фоне, а затем сразу проверяем, что выбранный
+        // сервер реально работает — если нет, подбор запускается без ожидания.
+        scope.launch {
+            runCatching { repo.syncReserve() }
+            triggerFailover()
+        }
     }
 
     private fun establishTunnel(): ParcelFileDescriptor? {
@@ -320,10 +349,13 @@ class NoVpnService : VpnService() {
         }
         if (eng.control.reload(repo.store.configFile().absolutePath)) {
             // Группа типа select помнит прошлый выбор: без явного указания движок
-            // остался бы на старом сервере, хотя в окне выбран новый.
-            eng.control.selectProxy(node.name)
-            VpnBus.setServer(node.name)
-            notify(notification("Подключено", node.name))
+            // остался бы на старом сервере, хотя в окне выбран новый. В резервном
+            // режиме удерживаем резервный сервер, а не сбрасываемся на обычный.
+            val reserve = VpnBus.reserve.value
+            val active = reserve?.server ?: node.name
+            eng.control.selectProxy(active)
+            VpnBus.setServer(active)
+            notify(notification(if (reserve != null) "Резервное подключение" else "Подключено", active))
         }
     }
 
@@ -359,23 +391,39 @@ class NoVpnService : VpnService() {
                 // Возврат с полного VPN на умный по таймеру сервера (контракт, 7).
                 checkFullTimeout()
                 updateStats(eng)
+
+                // Периодическая проверка реального доступа: если выбранный сервер
+                // перестал пропускать трафик (блокировка на лету), подбор сам найдёт
+                // рабочий. В резервном режиме тот же тик проверяет возврат на обычный.
+                val now = System.currentTimeMillis()
+                if (now - lastHealthTick >= HEALTH_TICK_MS && VpnBus.state.value == ConnState.ON) {
+                    lastHealthTick = now
+                    triggerFailover()
+                }
             }
         }
     }
+
+    @Volatile
+    private var lastHealthTick = 0L
 
     private fun restartEngine(eng: Engine): Boolean {
         val fd = tun?.fd ?: return false
         val config = repo.buildConfig(Config.TUN_FD, eng.newSecret()) ?: return false
         if (eng.start(config, fd) != null) return false
         if (eng.waitReady(10_000) !is Engine.Started.Ok) return false
-        repo.nodeFor()?.let { eng.control.selectProxy(it.name) }
+        // После перезапуска движка удерживаем активный сервер: в резервном режиме —
+        // резервный (он тоже в новом конфиге), иначе выбранный обычный.
+        val reserve = VpnBus.reserve.value
+        val active = reserve?.server ?: repo.nodeFor()?.name
+        active?.let { eng.control.selectProxy(it) }
         // Счётчики движка обнулились вместе с ним: иначе скорость показывалась бы
         // нулевой до конца сессии, а трафик прыгнул бы назад.
         lastDown = 0
         lastUp = 0
         lastStatsAt = System.currentTimeMillis()
         VpnBus.setState(ConnState.ON)
-        notify(notification("Подключено", repo.nodeFor()?.name))
+        notify(notification(if (reserve != null) "Резервное подключение" else "Подключено", active))
         return true
     }
 
@@ -403,6 +451,7 @@ class NoVpnService : VpnService() {
         lastDown = totals.down
         lastUp = totals.up
         lastStatsAt = now
+        reportReserveUsageIfNeeded(totals.down + totals.up)
         VpnBus.setStats(
             VpnStats(
                 downTotal = totals.down, upTotal = totals.up,
@@ -424,6 +473,215 @@ class NoVpnService : VpnService() {
         else -> "$bytesPerSec Б/с"
     }
 
+    // ── диагностика и переключение на резерв ──
+
+    /** Идёт оценка: не запускаем вторую параллельно (delay-тесты идут секундами). */
+    @Volatile
+    private var evaluating = false
+
+    @Volatile
+    private var lastReturnCheck = 0L
+
+    /** Запросы «проверь и переключись, если надо». CONFLATED — важна последняя. */
+    private val failover = Channel<Unit>(Channel.CONFLATED)
+
+    private fun startFailoverLoop() {
+        scope.launch {
+            for (unused in failover) {
+                delay(400)
+                while (failover.tryReceive().isSuccess) Unit
+                runCatching { evaluate() }.onFailure { Log.w(TAG, "оценка сорвалась: ${it.message}") }
+            }
+        }
+    }
+
+    private fun triggerFailover() {
+        failover.trySend(Unit)
+    }
+
+    private data class Candidate(val name: String, val host: String, val reserve: Boolean)
+
+    /** Реальный доступ ЧЕРЕЗ прокси: delay-тест к настоящему сайту (не ping, не порт). */
+    private fun worksThrough(eng: Engine, name: String): Boolean {
+        for (url in HEALTH_URLS) {
+            if (stopping || !eng.isAlive()) return false
+            if (eng.control.delay(name, url, HEALTH_TIMEOUT_MS) != null) return true
+        }
+        return false
+    }
+
+    /**
+     * Первый реально рабочий сервер из списка. Проверяем пачками параллельно:
+     * резервных серверов может быть под сотню (у каждого оператора свой рабочий),
+     * и перебирать их по очереди по 3 секунды — это минуты ожидания. Внутри пачки
+     * берём кандидата с наименьшим номером среди ответивших — порядок сохраняется.
+     */
+    private suspend fun firstWorking(eng: Engine, candidates: List<Candidate>): Candidate? {
+        for (chunk in candidates.chunked(HEALTH_CONCURRENCY)) {
+            if (stopping || !eng.isAlive()) return null
+            val checked = coroutineScope {
+                chunk.map { c -> async(Dispatchers.IO) { c to worksThrough(eng, c.name) } }.map { it.await() }
+            }
+            checked.firstOrNull { it.second }?.let { return it.first }
+        }
+        return null
+    }
+
+    private fun normalCandidates(): List<Candidate> =
+        repo.representatives().map { Candidate(it.name, it.host, false) }
+
+    private fun reserveCandidates(): List<Candidate> =
+        repo.reserveNodes().map { Candidate(it.name, it.map["server"]?.toString().orEmpty(), true) }
+
+    private fun serverAddrs(): List<Pair<String, Int>> =
+        repo.parsedSub()?.let { Sub.hostsOf(it) }.orEmpty().map { it to 443 }
+
+    private fun applySelection(eng: Engine, c: Candidate) {
+        eng.control.selectProxy(c.name)
+        VpnBus.setServer(c.name)
+        if (c.reserve) {
+            VpnBus.setReserve(ReserveInfo(c.name, c.host))
+            notify(notification("Резервное подключение", c.name))
+        } else {
+            VpnBus.setReserve(null)
+            notify(notification("Подключено", c.name))
+        }
+    }
+
+    /**
+     * Оценка и подбор рабочего сервера. Порядок (контракт задания, §2):
+     * текущий → другие обычные → диагностика → резерв (с реальной проверкой) →
+     * если ничего не заработало, честное сообщение вместо вечного «Подключаемся…».
+     * Возврат на обычный, когда сеть нормализовалась, — отдельной проверкой ниже.
+     */
+    private suspend fun evaluate() {
+        if (evaluating || stopping) return
+        val eng = engine ?: return
+        if (!eng.isAlive()) return
+        evaluating = true
+        try {
+            val auto = repo.state.value.settings.autoFailover
+            val inReserve = VpnBus.reserve.value != null
+            val current = VpnBus.server.value
+
+            // Работаем через резерв — периодически пробуем вернуться на обычный.
+            if (inReserve) {
+                val now = System.currentTimeMillis()
+                if (now - lastReturnCheck >= RETURN_CHECK_MS) {
+                    lastReturnCheck = now
+                    val back = firstWorking(eng, normalCandidates())
+                    if (back != null) {
+                        Log.i(TAG, "обычная сеть восстановилась — возврат на ${back.name}")
+                        applySelection(eng, back)
+                        VpnBus.setDiagnosis(NetDiagnosis.OK)
+                        return
+                    }
+                }
+                // Текущий резерв ещё жив — остаёмся на нём.
+                if (current != null && worksThrough(eng, current)) return
+            } else if (current != null && worksThrough(eng, current)) {
+                // Обычный сервер работает — всё хорошо.
+                VpnBus.setReserve(null)
+                VpnBus.setDiagnosis(NetDiagnosis.OK)
+                VpnBus.setOfferReserve(false)
+                return
+            }
+
+            // Текущий не отвечает через себя. Автоматика выключена — только
+            // диагностируем и предлагаем резерв, сами не переключаемся (§3).
+            if (!auto) {
+                val d = Diag.diagnose(serverAddrs())
+                VpnBus.setDiagnosis(d.diagnosis)
+                if (d.diagnosis != NetDiagnosis.OK && repo.reserveAvailable()) VpnBus.setOfferReserve(true)
+                return
+            }
+
+            // Автоматика включена: ищем рабочий обычный сервер (параллельно).
+            firstWorking(eng, normalCandidates().filter { it.name != current })?.let { c ->
+                Log.i(TAG, "переключение на рабочий обычный сервер ${c.name}")
+                applySelection(eng, c)
+                VpnBus.setDiagnosis(NetDiagnosis.OK)
+                return
+            }
+
+            // Обычных рабочих нет — диагностируем сеть.
+            val d = Diag.diagnose(serverAddrs())
+            VpnBus.setDiagnosis(d.diagnosis)
+            Log.i(TAG, "диагностика: ${d.detail}")
+            if (d.diagnosis == NetDiagnosis.NO_INTERNET) {
+                // Интернета нет вовсе — переключаться некуда, ждём восстановления сети.
+                return
+            }
+            if (!repo.reserveAvailable()) return
+
+            // Пробуем резерв с РЕАЛЬНОЙ проверкой интернета через него (§4). Из сотни
+            // серверов реально работают единицы — параллельная проверка находит их быстро.
+            firstWorking(eng, reserveCandidates())?.let { c ->
+                Log.i(TAG, "уход на рабочий резервный сервер ${c.name}")
+                applySelection(eng, c)
+                return
+            }
+
+            // Резерв есть, но ни один сервер реально не заработал (§11).
+            Log.w(TAG, "резерв не восстановил соединение")
+            VpnBus.setReserve(null)
+            notifyError(
+                "Сеть работает в ограниченном режиме, но резервные серверы сейчас не смогли " +
+                    "восстановить соединение. Попробуйте другую сеть или Wi-Fi.",
+            )
+        } finally {
+            evaluating = false
+        }
+    }
+
+    /** Смена резервного сервера вручную: берём следующий рабочий, кроме текущего. */
+    private suspend fun changeReserve() {
+        val eng = engine ?: return
+        if (!eng.isAlive() || !repo.reserveAvailable()) return
+        val current = VpnBus.reserve.value?.server
+        val list = reserveCandidates()
+        val start = list.indexOfFirst { it.name == current }
+        val ordered = (if (start >= 0) list.drop(start + 1) + list.take(start + 1) else list)
+            .filter { it.name != current }
+        firstWorking(eng, ordered)?.let {
+            applySelection(eng, it)
+            return
+        }
+        notifyError("Другой рабочий резервный сервер не найден.")
+    }
+
+    /** Ручной уход на резерв (автоматика выключена, человек согласился). */
+    private suspend fun forceReserve() {
+        val eng = engine ?: return
+        if (!eng.isAlive() || !repo.reserveAvailable()) return
+        VpnBus.setOfferReserve(false)
+        firstWorking(eng, reserveCandidates())?.let {
+            applySelection(eng, it)
+            return
+        }
+        notifyError(
+            "Сеть работает в ограниченном режиме, но резервные серверы сейчас не смогли " +
+                "восстановить соединение. Попробуйте другую сеть или Wi-Fi.",
+        )
+    }
+
+    /** В резервном режиме периодически докладываем расход на панель (§12). */
+    private fun reportReserveUsageIfNeeded(totalBytes: Long) {
+        val info = VpnBus.reserve.value ?: run { reserveReported = totalBytes; return }
+        val now = System.currentTimeMillis()
+        if (now - lastReserveReport < RESERVE_REPORT_MS) return
+        val delta = totalBytes - reserveReported
+        lastReserveReport = now
+        reserveReported = totalBytes
+        if (delta > 0) scope.launch { repo.reportReserveUsage(info.host, delta) }
+    }
+
+    @Volatile
+    private var reserveReported = 0L
+
+    @Volatile
+    private var lastReserveReport = 0L
+
     // ── смена сети ──
 
     private fun registerNetworkCallback() {
@@ -436,6 +694,11 @@ class NoVpnService : VpnService() {
                 // исчезнувший интерфейс, и соединение «висит».
                 runCatching { setUnderlyingNetworks(arrayOf(network)) }
                 rebuild.trySend(Unit)
+                // Существенная смена сети (Wi-Fi ↔ мобильный, смена оператора) —
+                // повод перепроверить доступ: где было плохо, могло стать хорошо,
+                // и наоборот. Возврат с резерва тоже случается здесь (§2).
+                lastReturnCheck = 0
+                triggerFailover()
             }
 
             override fun onLost(network: Network) {
@@ -531,6 +794,7 @@ class NoVpnService : VpnService() {
         unregisterNetworkCallback()
         VpnBus.setState(ConnState.OFF)
         rebuild.close()
+        failover.close()
         scope.cancel()
         super.onDestroy()
     }
@@ -621,10 +885,27 @@ class NoVpnService : VpnService() {
         private const val REBUILD_DEBOUNCE_MS = 1_500L
         private const val MAX_RESTARTS = 3
 
+        /** Проверка реального доступа через прокси — к настоящим сайтам, не 204-only. */
+        private val HEALTH_URLS = listOf(
+            "http://cp.cloudflare.com/generate_204",
+            "http://www.google.com/generate_204",
+        )
+        private const val HEALTH_TIMEOUT_MS = 3_000
+        /** Сколько серверов проверять параллельно (перебор сотни резервных). */
+        private const val HEALTH_CONCURRENCY = 8
+        /** Как часто сторож проверяет доступ выбранного сервера. */
+        private const val HEALTH_TICK_MS = 12_000L
+        /** Как часто из резервного режима пробуем вернуться на обычный. */
+        private const val RETURN_CHECK_MS = 45_000L
+        /** Как часто докладываем резервный расход на панель. */
+        private const val RESERVE_REPORT_MS = 60_000L
+
         const val ACTION_START = "ru.appswire.novpn.START"
         const val ACTION_STOP = "ru.appswire.novpn.STOP"
         const val ACTION_RELOAD = "ru.appswire.novpn.RELOAD"
         const val ACTION_RECONNECT = "ru.appswire.novpn.RECONNECT"
+        const val ACTION_CHANGE_RESERVE = "ru.appswire.novpn.CHANGE_RESERVE"
+        const val ACTION_USE_RESERVE = "ru.appswire.novpn.USE_RESERVE"
 
         fun start(context: Context) {
             val i = Intent(context, NoVpnService::class.java).setAction(ACTION_START)
@@ -650,6 +931,22 @@ class NoVpnService : VpnService() {
             if (!VpnBus.isRunning) return
             runCatching {
                 context.startService(Intent(context, NoVpnService::class.java).setAction(ACTION_RECONNECT))
+            }
+        }
+
+        /** Сменить резервный сервер вручную (в резервном режиме). */
+        fun changeReserve(context: Context) {
+            if (!VpnBus.isRunning) return
+            runCatching {
+                context.startService(Intent(context, NoVpnService::class.java).setAction(ACTION_CHANGE_RESERVE))
+            }
+        }
+
+        /** Уйти на резерв вручную (когда автовосстановление выключено). */
+        fun useReserve(context: Context) {
+            if (!VpnBus.isRunning) return
+            runCatching {
+                context.startService(Intent(context, NoVpnService::class.java).setAction(ACTION_USE_RESERVE))
             }
         }
     }

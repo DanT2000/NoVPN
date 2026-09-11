@@ -216,6 +216,27 @@ export function addBackupTraffic(userId: string, subscriptionId: string, bytes: 
   ).run({ u: userId, s: subscriptionId, b: Math.trunc(bytes), now: nowIso() });
 }
 
+/** Отнести резервный расход на подписку, которой принадлежит сервер host (в пуле пользователя).
+ *  Клиент знает только host сервера — не внутренние id подписок; сопоставляем здесь. */
+export function attributeBackupTraffic(userId: string, host: string, bytes: number): boolean {
+  if (!host || !(bytes > 0)) return false;
+  const user = getUser(userId);
+  if (!user) return false;
+  const row = db
+    .prepare(
+      `SELECT s.id AS sub_id
+       FROM backup_subscriptions s JOIN backup_servers bs ON bs.subscription_id = s.id
+       WHERE s.enabled = 1 AND bs.host = @host
+         AND (s.owner_user_id = @uid OR (s.owner_user_id IS NULL AND @priority = 1))
+       ORDER BY s.owner_user_id IS NULL DESC, s.created_at
+       LIMIT 1`,
+    )
+    .get({ host, uid: userId, priority: user.priorityAccess ? 1 : 0 }) as { sub_id: string } | undefined;
+  if (!row) return false;
+  addBackupTraffic(userId, row.sub_id, bytes);
+  return true;
+}
+
 /** Разбивка внутреннего резервного расхода по пользователям для одной подписки. */
 export function backupTrafficBySub(subscriptionId: string): Array<{ userId: string; name: string; bytes: number }> {
   const rows = db

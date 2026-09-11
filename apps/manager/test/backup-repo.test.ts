@@ -97,6 +97,19 @@ test('внутренний учёт расхода накапливается и
   assert.equal(backup.getBackupSubscription(sub.id)!.internalBytes, 1700);
 });
 
+test('расход относится на подписку по host сервера (отчёт клиента)', () => {
+  const u = mkUser('Атрибуция');
+  const sub = backup.insertBackupSubscription({ ownerUserId: u.id, url: 'https://prov.example/attr' });
+  backup.setBackupFetchResult(sub.id, {
+    format: 'plain',
+    servers: [{ name: 'S', link: 'vless://uuid@r.attr.example:443#S', host: 'r.attr.example', port: 443, protocol: 'vless' }],
+  });
+  // Клиент шлёт host сервера — подписку сопоставляем на бэкенде.
+  assert.equal(backup.attributeBackupTraffic(u.id, 'r.attr.example', 5000), true);
+  assert.equal(backup.attributeBackupTraffic(u.id, 'unknown.host', 5000), false, 'чужой host не засчитывается');
+  assert.equal(backup.getBackupSubscription(sub.id)!.internalBytes, 5000);
+});
+
 test('статистика провайдера из Subscription-Userinfo сохраняется', () => {
   const sub = backup.insertBackupSubscription({ ownerUserId: null, url: 'https://prov.example/stats' });
   backup.setBackupFetchResult(sub.id, {

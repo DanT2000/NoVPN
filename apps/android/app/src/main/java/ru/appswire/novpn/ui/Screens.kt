@@ -114,6 +114,9 @@ fun ConnectionScreen(
                 isError = false
                 message = "Готово: ${count(it, "сервер", "сервера", "серверов")}"
                 repo.syncLists()
+                // Ручное обновление освежает всё, что относится к пользователю (§10),
+                // включая резервный пул.
+                repo.syncReserve()
                 onRulesChanged()
             }.onFailure {
                 isError = true
@@ -363,6 +366,24 @@ fun SettingsScreen(
             )
         }
 
+        SectionLabel("Резервное подключение")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ToggleCard(
+                title = "Автоматическое восстановление",
+                note = "Сам подбирает рабочий сервер и уходит на резерв, если обычные " +
+                    "недоступны. Выключено — приложение только предупредит и предложит резерв вручную.",
+                checked = state.settings.autoFailover,
+                onChange = { v -> repo.update { it.copy(settings = it.settings.copy(autoFailover = v)) } },
+            )
+            ToggleCard(
+                title = "Отправлять диагностику",
+                note = "Помогает понять причину сбоев подключения. Можно выключить.",
+                checked = state.settings.sendDiagnostics,
+                onChange = { v -> repo.update { it.copy(settings = it.settings.copy(sendDiagnostics = v)) } },
+            )
+        }
+        ReserveSubscription(repo)
+
         SectionLabel("Подписка")
         ChevronItem(
             title = "Текущая подписка",
@@ -408,6 +429,109 @@ fun SettingsScreen(
             textAlign = TextAlign.Center,
         )
     }
+}
+
+/**
+ * Тумблер с многострочным пояснением. Обычный `ToggleItem` подрезает подпись до
+ * одной строки, а здесь текст важен, поэтому берём ту же карточку с тумблером,
+ * что и «Умная маршрутизация» на главной.
+ */
+@Composable
+private fun ToggleCard(title: String, note: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Card(padding = PaddingValues(horizontal = 16.dp, vertical = 15.dp), onClick = { onChange(!checked) }) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(modifier = Modifier.weight(1f)) {
+                TName(title)
+                TNote(note, modifier = Modifier.padding(top = 3.dp))
+            }
+            Toggle(on = checked, onChange = onChange)
+        }
+    }
+}
+
+/**
+ * Личная резервная подписка (§8). Показываем только действия: добавить и удалить.
+ * Сам URL с доступом наружу не выводим — он хранится в приложении и не должен
+ * попадать на экран. Признака «есть ли уже личная» у нас нет, поэтому даём обе
+ * возможности сразу, без индикатора состояния.
+ */
+@Composable
+private fun ReserveSubscription(repo: Repo) {
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var isError by remember { mutableStateOf(false) }
+
+    fun add() {
+        val u = url.trim()
+        if (u.isEmpty() || busy) return
+        busy = true
+        message = null
+        scope.launch {
+            val err = repo.setPersonalReserve(u)
+            busy = false
+            if (err != null) {
+                isError = true
+                message = err
+            } else {
+                isError = false
+                message = "Добавлено"
+                url = ""
+            }
+        }
+    }
+
+    fun remove() {
+        if (busy) return
+        busy = true
+        message = null
+        scope.launch {
+            repo.removePersonalReserve()
+            busy = false
+            isError = false
+            message = "Удалено"
+        }
+    }
+
+    SectionLabel("Резервная подписка")
+    TNote(
+        "Используется, только когда обычное VPN-подключение недоступно. " +
+            "Не смешивается с обычными серверами.",
+        modifier = Modifier.padding(bottom = 10.dp),
+    )
+    Input(
+        value = url,
+        onChange = { url = it },
+        placeholder = "https://…",
+        mono = true,
+        keyboardType = KeyboardType.Uri,
+        imeAction = ImeAction.Go,
+        onDone = { add() },
+    )
+    message?.let {
+        Notice(it, tone = if (isError) Tone.DANGER else Tone.OK, modifier = Modifier.padding(top = 10.dp))
+    }
+    Btn(
+        if (busy) "Секунду…" else "Добавить резервную подписку",
+        onClick = { add() },
+        kind = BtnKind.SECONDARY,
+        size = BtnSize.SM,
+        enabled = !busy && url.isNotBlank(),
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+    )
+    Btn(
+        "Удалить резервную подписку",
+        onClick = { remove() },
+        kind = BtnKind.OUTLINE,
+        size = BtnSize.SM,
+        enabled = !busy,
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+    )
+    TNote(
+        "Саму ссылку не показываем: в ней доступ к серверу, и она хранится только в приложении.",
+        modifier = Modifier.padding(top = 10.dp),
+    )
 }
 
 /** Расширенные: DNS, свои локальные домены, диагностика. Реально работающие, а не заглушка. */
