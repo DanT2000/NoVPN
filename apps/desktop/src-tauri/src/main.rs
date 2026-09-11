@@ -224,6 +224,7 @@ fn main() {
             cmds::vpn_port,
             cmds::apps_installed,
             cmds::apps_running,
+            cmds::app_icon,
             cmds::autostart_get,
             cmds::autostart_sync,
             cmds::autostart_has_task,

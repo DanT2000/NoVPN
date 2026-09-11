@@ -42,6 +42,17 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+# Значок приложения прямо из его .exe/папки — тот же, что человек видит в
+# проводнике. Тянем системный значок (winapi) и кодируем в PNG (image).
+image = { version = "0.25", default-features = false, features = ["png"] }
+winapi = { version = "0.3", features = [
+  "shellapi",
+  "winuser",
+  "wingdi",
+  "windef",
+  "minwindef",
+  "basetsd",
+] }
 
 [profile.release]
 opt-level = "s"

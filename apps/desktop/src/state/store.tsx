@@ -402,11 +402,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         for (const a of [...inst, ...run]) for (const pr of a.processes) present.add(pr.toLowerCase());
         const runningSet = new Set<string>();
         for (const a of run) for (const pr of a.processes) runningSet.add(pr.toLowerCase());
+        // Путь к .exe по имени процесса — чтобы вытащить настоящий значок из файла.
+        const pathByProc = new Map<string, string>();
+        for (const a of [...run, ...inst]) {
+          if (!a.path) continue;
+          for (const pr of a.processes) {
+            const k = pr.toLowerCase();
+            if (!pathByProc.has(k)) pathByProc.set(k, a.path);
+          }
+        }
+        // Значок из встроенного пака по id — на случай, если сохранённое состояние
+        // старое (поле icon появилось позже) или файл значка не извлёкся.
+        const seedIcon = new Map(INITIAL.apps.map((a) => [a.id, a.icon]));
         setS((x) => ({
           ...x,
           apps: x.apps.map((a) => {
-            const found = a.processes.some((pr) => present.has(pr.toLowerCase()));
-            return { ...a, found, path: found ? a.path : undefined };
+            const proc = a.processes.find((pr) => present.has(pr.toLowerCase()));
+            const found = !!proc;
+            const path = found ? (pathByProc.get(proc!.toLowerCase()) ?? a.path) : undefined;
+            const icon = a.icon ?? seedIcon.get(a.id) ?? undefined;
+            return { ...a, found, path, icon };
           }),
         }));
         // Серверы восстанавливаем из сохранённой подписки — без обращения к сети.

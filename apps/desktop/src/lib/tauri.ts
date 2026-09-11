@@ -184,6 +184,8 @@ export interface AppItem {
 export const appsInstalled = () => call<AppItem[]>('apps_installed').then((v) => v ?? []);
 /** Запущенные сейчас процессы, свёрнутые по имени файла. */
 export const appsRunning = () => call<AppItem[]>('apps_running').then((v) => v ?? []);
+/** Настоящий значок приложения из его .exe/папки как data-URI PNG (или null). */
+export const appIcon = (path: string) => call<string | null>('app_icon', { path });
 
 /** Системное окно выбора: .exe или папка. Возвращает путь или null. */
 export async function pickExe(): Promise<string | null> {

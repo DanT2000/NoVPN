@@ -8,7 +8,7 @@ import { Avatar, Dialog, Empty, RouteSwitch, RouteTag, Toggle } from '../compone
 import { IconChevron, IconPlus, IconRefresh, IconTrash } from '../components/icons';
 import { domainForApp, search } from '../mock/catalog';
 import { appIconUrl } from '../lib/appIcon';
-import { appsInstalled, appsRunning, pickExe, pickFolder } from '../lib/tauri';
+import { appIcon, appsInstalled, appsRunning, pickExe, pickFolder } from '../lib/tauri';
 import type { AppItem } from '../lib/tauri';
 import { useEffect } from 'react';
 import { count } from '../lib/plural';
@@ -60,6 +60,37 @@ export function Routing() {
 }
 
 /* ── Приложения ───────────────────────────────────────────── */
+
+/* Значок приложения. Порядок: настоящий значок из .exe/папки (то, что человек
+   видит в проводнике) → значок из встроенного пака → буква. Реальный значок
+   тянем по требованию и кэшируем по пути, чтобы не дёргать систему на каждую
+   перерисовку списка. Пустая строка в кэше = «пробовали, не вышло». */
+const iconCache = new Map<string, string>();
+
+function AppIcon({ name, path, icon }: { name: string; path?: string | null; icon?: string }) {
+  const preset = appIconUrl(icon);
+  const [real, setReal] = useState<string | undefined>(() => (path ? iconCache.get(path) || undefined : undefined));
+  useEffect(() => {
+    if (!path) {
+      setReal(undefined);
+      return;
+    }
+    const cached = iconCache.get(path);
+    if (cached !== undefined) {
+      setReal(cached || undefined);
+      return;
+    }
+    let alive = true;
+    void appIcon(path).then((uri) => {
+      iconCache.set(path, uri ?? '');
+      if (alive) setReal(uri ?? undefined);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  return <Avatar name={name} icon={real ?? preset} />;
+}
 
 function AppsTab() {
   const { s, toggleApp } = useStore();
@@ -115,7 +146,7 @@ function AppsTab() {
 
       {shown.map((a) => (
         <div key={a.id} className="item">
-          <Avatar name={a.name} icon={appIconUrl(a.icon)} />
+          <AppIcon name={a.name} path={a.path} icon={a.icon} />
           <button type="button" className="item-main" onClick={() => setEdit(a)}>
             <span className="item-name">{a.name}</span>
             <span className="item-meta">
@@ -248,7 +279,7 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
   const [src, setSrc] = useState<Src | null>(null);
   const [list, setList] = useState<AppItem[] | null>(null);
   const [q, setQ] = useState('');
-  const [pick, setPick] = useState<{ name: string; processes: string[] } | null>(null);
+  const [pick, setPick] = useState<{ name: string; processes: string[]; path?: string | null } | null>(null);
   const [route, setRoute] = useState<Route>('vpn');
   const [busy, setBusy] = useState(false);
 
@@ -269,10 +300,10 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
       // человек поправит); для .exe — имя файла как процесс.
       if (kind === 'exe') {
         const exe = exeName(path);
-        setPick({ name: niceName(exe), processes: [exe] });
+        setPick({ name: niceName(exe), processes: [exe], path: exe });
       } else {
         const folder = exeName(path);
-        setPick({ name: folder, processes: [] });
+        setPick({ name: folder, processes: [], path: folder });
       }
     } finally {
       setBusy(false);
@@ -289,7 +320,7 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
       {pick ? (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-            <Avatar name={pick.name} />
+            <AppIcon name={pick.name} path={pick.path} />
             <span className="t-strong">{pick.name}</span>
           </div>
           {pick.processes.length ? (
@@ -353,9 +384,9 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
                   className="choice"
                   role="radio"
                   aria-checked={false}
-                  onClick={() => setPick({ name: a.name, processes: a.processes })}
+                  onClick={() => setPick({ name: a.name, processes: a.processes, path: a.path })}
                 >
-                  <Avatar name={a.name} />
+                  <AppIcon name={a.name} path={a.path} />
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span className="t-name" style={{ display: 'block' }}>{a.name}</span>
                     <span className="item-meta mono" style={{ display: 'block' }}>{a.processes.join(', ')}</span>

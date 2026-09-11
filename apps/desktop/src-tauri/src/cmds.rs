@@ -261,6 +261,133 @@ pub async fn apps_running() -> Vec<apps::AppItem> {
     tokio::task::spawn_blocking(apps::running).await.unwrap_or_default()
 }
 
+/// Значок приложения из его .exe (или папки) — тот же, что человек видит в
+/// проводнике. Отдаём как data-URI PNG; None — не удалось извлечь. Тяжеловато
+/// (системный вызов + кодирование), поэтому в отдельном потоке и по требованию.
+#[tauri::command]
+pub async fn app_icon(path: String) -> Option<String> {
+    tokio::task::spawn_blocking(move || icon_data_uri(&path)).await.ok().flatten()
+}
+
+#[cfg(windows)]
+fn icon_data_uri(path: &str) -> Option<String> {
+    use base64::Engine;
+    let png = extract_icon_png(path)?;
+    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png)))
+}
+
+/// Системный значок файла (или папки) → PNG-байты. Идём стандартным путём Win32:
+/// SHGetFileInfo → HICON → пиксели из hbmColor через GetDIBits (BGRA сверху вниз)
+/// → RGBA → PNG. Все GDI-объекты и иконку освобождаем.
+#[cfg(windows)]
+fn extract_icon_png(path: &str) -> Option<Vec<u8>> {
+    use std::ffi::OsStr;
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+    use winapi::um::shellapi::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+    use winapi::um::wingdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+    use winapi::um::winuser::{DestroyIcon, GetIconInfo, ICONINFO};
+
+    if path.is_empty() || !std::path::Path::new(path).exists() {
+        return None;
+    }
+    let wide: Vec<u16> = OsStr::new(path).encode_wide().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        let mut sfi: SHFILEINFOW = zeroed();
+        SHGetFileInfoW(wide.as_ptr(), 0, &mut sfi, size_of::<SHFILEINFOW>() as u32, SHGFI_ICON | SHGFI_LARGEICON);
+        let hicon = sfi.hIcon;
+        if hicon.is_null() {
+            return None;
+        }
+        // Обёртка, чтобы иконка освободилась при любом выходе из блока.
+        struct IconGuard(winapi::shared::windef::HICON);
+        impl Drop for IconGuard {
+            fn drop(&mut self) {
+                unsafe { DestroyIcon(self.0) };
+            }
+        }
+        let _icon = IconGuard(hicon);
+
+        let mut ii: ICONINFO = zeroed();
+        if GetIconInfo(hicon, &mut ii) == 0 {
+            return None;
+        }
+        let hbm_color = ii.hbmColor;
+        let hbm_mask = ii.hbmMask;
+
+        let mut bm: BITMAP = zeroed();
+        let got = GetObjectW(hbm_color as *mut _, size_of::<BITMAP>() as i32, &mut bm as *mut _ as *mut _);
+        if got == 0 || bm.bmWidth <= 0 || bm.bmHeight <= 0 {
+            if !hbm_color.is_null() { DeleteObject(hbm_color as *mut _); }
+            if !hbm_mask.is_null() { DeleteObject(hbm_mask as *mut _); }
+            return None;
+        }
+        let w = bm.bmWidth;
+        let h = bm.bmHeight;
+
+        let hdc = CreateCompatibleDC(null_mut());
+        let mut bmi: BITMAPINFO = zeroed();
+        bmi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = w;
+        bmi.bmiHeader.biHeight = -h; // сверху вниз
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let lines = GetDIBits(hdc, hbm_color, 0, h as u32, buf.as_mut_ptr() as *mut _, &mut bmi, DIB_RGB_COLORS);
+
+        DeleteDC(hdc);
+        if !hbm_color.is_null() { DeleteObject(hbm_color as *mut _); }
+        if !hbm_mask.is_null() { DeleteObject(hbm_mask as *mut _); }
+
+        if lines == 0 {
+            return None;
+        }
+
+        // BGRA → RGBA. Если альфа целиком нулевая (значок без альфа-канала), делаем
+        // непрозрачным — иначе получилась бы пустая картинка.
+        let alpha_present = buf.chunks_exact(4).any(|p| p[3] != 0);
+        for px in buf.chunks_exact_mut(4) {
+            px.swap(0, 2);
+            if !alpha_present {
+                px[3] = 255;
+            }
+        }
+
+        let img = image::RgbaImage::from_raw(w as u32, h as u32, buf)?;
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+        Some(out.into_inner())
+    }
+}
+
+#[cfg(not(windows))]
+fn icon_data_uri(_path: &str) -> Option<String> {
+    None
+}
+
+#[cfg(all(test, windows))]
+mod icon_tests {
+    #[test]
+    fn extracts_real_icon_as_png() {
+        // Значок системного exe должен извлечься и быть валидным PNG.
+        let png = super::extract_icon_png("C:\\Windows\\explorer.exe").expect("иконка explorer.exe");
+        assert!(png.len() > 100, "PNG слишком мал");
+        assert_eq!(&png[..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "не PNG-сигнатура");
+    }
+
+    #[test]
+    fn missing_file_returns_none() {
+        assert!(super::extract_icon_png("Z:\\нет-такого-файла.exe").is_none());
+    }
+}
+
 /// Автозапуск: читаем настоящее состояние (ключ реестра ИЛИ задача
 /// планировщика), а не сохранённое в файле — человек мог убрать его вручную.
 #[tauri::command]
