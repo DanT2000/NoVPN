@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) {
+            askNotifications()
             NoVpnService.start(this)
         } else {
             VpnBus.fail("Без разрешения на VPN подключиться нельзя. Нажмите «Запустить» ещё раз и выберите «ОК».")
@@ -81,13 +82,16 @@ class MainActivity : ComponentActivity() {
      * establish() вернёт null, и туннель не поднимется.
      */
     private fun connect() {
-        askNotifications()
+        // Сначала — разрешение на VPN. Два системных запроса подряд запускать
+        // нельзя: второй теряется, и человек не видит вопроса про VPN вовсе.
+        // Уведомления спросим после, когда туннель уже разрешён.
         val prepare = VpnService.prepare(this)
         if (prepare != null) {
             runCatching { vpnPermission.launch(prepare) }
                 .onFailure { VpnBus.fail("Система не показала запрос разрешения на VPN: ${it.message}") }
             return
         }
+        askNotifications()
         NoVpnService.start(this)
     }
 

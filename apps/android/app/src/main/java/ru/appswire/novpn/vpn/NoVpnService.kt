@@ -16,6 +16,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,7 +74,19 @@ class NoVpnService : VpnService() {
     @Volatile
     private var stopping = false
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+      * Необработанное исключение в корутине убивает весь процесс. Для службы с
+      * START_STICKY это худший исход: система поднимает её заново, connect()
+      * падает снова, и человек видит бесконечное «Подключаемся…» без единого
+      * слова о причине. Ловим и показываем.
+      */
+    private val crashes = CoroutineExceptionHandler { _, e ->
+        Log.e(TAG, "сбой в служебной корутине", e)
+        VpnBus.fail("Внутренний сбой: ${e.message ?: e::class.java.simpleName}")
+        runCatching { notifyError("Внутренний сбой: ${e.message ?: e::class.java.simpleName}") }
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + crashes)
 
     /** Один мьютекс на весь жизненный цикл туннеля. */
     private val lock = Mutex()
@@ -154,6 +167,13 @@ class NoVpnService : VpnService() {
     // ── подключение ──
 
     private suspend fun connect() {
+        runCatching { connectInner() }.onFailure {
+            Log.e(TAG, "подключение сорвалось", it)
+            fail("Не удалось подключиться: ${it.message ?: it::class.java.simpleName}")
+        }
+    }
+
+    private fun connectInner() {
         if (stopping) return
         VpnBus.setState(ConnState.CONNECTING)
         repo.denied?.let {
