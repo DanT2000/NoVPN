@@ -82,6 +82,22 @@ export function createApp() {
     app.use('/desktop', (_req, res) => res.status(404).json({ error: { type: 'not_found', message: 'Файл не найден.' } }));
   }
 
+  // Канал раздачи NoVPN для Android: /android/novpn.apk. Та же логика, что у
+  // десктопа, и по той же причине — до SPA-fallback, иначе запрос за apk вернул бы
+  // HTML главной страницы, и человек скачал бы «битый файл».
+  if (fs.existsSync(config.androidDir)) {
+    app.use(
+      '/android',
+      express.static(config.androidDir, {
+        setHeaders: (res, p) => {
+          if (p.endsWith('.apk')) res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+          if (p.endsWith('.json')) res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        },
+      }),
+    );
+    app.use('/android', (_req, res) => res.status(404).json({ error: { type: 'not_found', message: 'Файл не найден.' } }));
+  }
+
   // Статика собранного фронтенда (в проде) + SPA-fallback.
   if (fs.existsSync(config.webDist)) {
     app.use(express.static(config.webDist));

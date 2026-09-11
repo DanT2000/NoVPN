@@ -19,11 +19,12 @@ const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux']
 
 /** Порядок в списке: наш NoVPN Desktop первым (инструкция и «Добавить подписку» в один
  *  клик), затем Happ — проверен на всех системах, — потом остальные. */
-const rank = (a: AppClient): number => (a.id === 'novpn-desktop' ? 0 : a.id === 'happ' ? 1 : 2);
+const rank = (a: AppClient): number => (a.id.startsWith('novpn-') ? 0 : a.id === 'happ' ? 1 : 2);
 
 /** Короткая инструкция к NoVPN Desktop прямо в карточке — человек видит, что делать, не
  *  уходя со страницы. Полная инструкция открывается кнопкой рядом. */
-function NovpnHowto({ hasTap }: { hasTap: boolean }) {
+function NovpnHowto({ hasTap, android }: { hasTap: boolean; android: boolean }) {
+  if (android) return <NovpnAndroidHowto hasTap={hasTap} />;
   return (
     <details style={{ fontSize: 13, color: 'var(--text-muted)' }}>
       <summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--accent, #4c8dff)' }}>Как установить — 4 шага</summary>
@@ -41,6 +42,27 @@ function NovpnHowto({ hasTap }: { hasTap: boolean }) {
         <li>
           Пройдите быструю настройку и нажмите <b>«Запустить»</b>. Через VPN пойдёт только нужное, остальное — напрямую.
           Значок приложения — в трее рядом с часами.
+        </li>
+      </ol>
+    </details>
+  );
+}
+
+function NovpnAndroidHowto({ hasTap }: { hasTap: boolean }) {
+  return (
+    <details style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--accent, #4c8dff)' }}>Как установить — 4 шага</summary>
+      <ol style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.45 }}>
+        <li>Нажмите <b>«Скачать»</b>. Android спросит разрешение ставить приложения из этого источника — разрешите, файл с вашей же панели.</li>
+        <li>Откройте скачанный файл и нажмите <b>«Установить»</b>.</li>
+        <li>
+          {hasTap
+            ? 'Вернитесь сюда и нажмите «Добавить подписку» — приложение откроется с уже вставленной ссылкой.'
+            : 'Скопируйте ссылку-подписку и вставьте её в приложении на первом экране.'}
+        </li>
+        <li>
+          Нажмите <b>«Запустить»</b> и разрешите VPN-подключение. Затем откройте в приложении <b>«Работа в фоне»</b>
+          и разрешите перечисленное — иначе телефон закроет VPN при выключенном экране.
         </li>
       </ol>
     </details>
@@ -290,13 +312,13 @@ function AppList({
                 </button>
               ) : null}
               {/* Сайт приложения, если это не та же ссылка, что «Установить» (Happ: магазин и сайт разные). */}
-              {app.id !== 'novpn-desktop' && /^https?:\/\//i.test(app.source || '') && normalizeUrl(app.source) !== normalizeUrl(entry.url || '') ? (
+              {!app.id.startsWith('novpn-') && /^https?:\/\//i.test(app.source || '') && normalizeUrl(app.source) !== normalizeUrl(entry.url || '') ? (
                 <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(app.source))}>
                   Сайт
                 </button>
               ) : null}
             </div>
-            {app.id === 'novpn-desktop' ? <NovpnHowto hasTap={!!oneTap} /> : null}
+            {app.id.startsWith('novpn-') ? <NovpnHowto hasTap={!!oneTap} android={app.id === 'novpn-android'} /> : null}
           </div>
         );
       })}

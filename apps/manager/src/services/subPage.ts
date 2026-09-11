@@ -35,13 +35,23 @@ function storeLabel(url: string): string {
 
 const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
 
-/** Короткая инструкция к NoVPN Desktop прямо в карточке: человек открыл страницу с
- *  телефона или с компьютера — и видит, что делать, не уходя на отдельную страницу.
- *  Полная инструкция — по кнопке рядом. */
-function novpnHowto(hasTap: boolean): string {
+/** Короткая инструкция к нашему приложению прямо в карточке: человек открыл
+ *  страницу с телефона или с компьютера — и видит, что делать, не уходя на
+ *  отдельную страницу. Полная инструкция — по кнопке рядом. */
+function novpnHowto(appId: string, hasTap: boolean): string {
   const add = hasTap
     ? 'Вернитесь на эту страницу и нажмите <b>«Добавить подписку»</b> — приложение откроется с уже вставленной ссылкой. Или скопируйте ссылку выше и вставьте её в приложении вручную.'
     : 'Скопируйте ссылку выше и вставьте её в приложении на первом экране.';
+
+  if (appId === 'novpn-android') {
+    return `<details class="howto"><summary>Как установить — 4 шага</summary><ol>
+<li>Нажмите <b>«Скачать»</b>. Android спросит разрешение устанавливать приложения из этого источника — разрешите, файл скачан с вашей же панели.</li>
+<li>Откройте скачанный файл и нажмите <b>«Установить»</b>. Если система предложит проверку — соглашайтесь, это обычная проверка Play Защиты.</li>
+<li>${add}</li>
+<li>Нажмите <b>«Запустить»</b> и разрешите создание VPN-подключения. Затем откройте <b>«Работа в фоне»</b> в приложении и разрешите то, что там перечислено — иначе телефон будет закрывать VPN, когда экран выключен.</li>
+</ol></details>`;
+  }
+
   return `<details class="howto"><summary>Как установить — 4 шага</summary><ol>
 <li>Нажмите <b>«Скачать»</b> и запустите файл. Ставится за пару секунд, без прав администратора.</li>
 <li>Если Windows покажет окно <b>«Защитник SmartScreen»</b> — нажмите <b>«Подробнее»</b>, затем <b>«Выполнить в любом случае»</b>. Приложение новое, у Windows ещё нет его репутации.</li>
@@ -69,7 +79,7 @@ export function renderSubPage(opts: {
   // Только клиенты, умеющие Xray: подписка — это Xray. Порядок: наш NoVPN Desktop
   // первым (one-tap «Добавить подписку» и инструкция прямо в карточке), затем Happ —
   // он проверен на всех системах, — потом остальные.
-  const rank = (a: AppClient): number => (a.id === 'novpn-desktop' ? 0 : a.id === 'happ' ? 1 : 2);
+  const rank = (a: AppClient): number => (a.id.startsWith('novpn-') ? 0 : a.id === 'happ' ? 1 : 2);
   const xrayApps = apps.filter((a) => a.enabled && a.compat.includes('xray')).sort((a, b) => rank(a) - rank(b));
 
   const cards = PLATFORMS.map((plat) => {
@@ -97,10 +107,10 @@ export function renderSubPage(opts: {
         // Сайт приложения — когда это не та же ссылка, что «Установить»: у Happ на iOS и
         // macOS магазин и сайт разные, и ссылка на сам сайт нужна отдельно.
         const site =
-          a.id !== 'novpn-desktop' && /^https?:\/\//i.test(a.source || '') && normUrl(a.source) !== normUrl(e!.url || '')
+          !a.id.startsWith('novpn-') && /^https?:\/\//i.test(a.source || '') && normUrl(a.source) !== normUrl(e!.url || '')
             ? `<a class="btn btn-sec" href="${esc(normUrl(a.source))}" target="_blank" rel="noopener">Сайт</a>`
             : '';
-        const howto = a.id === 'novpn-desktop' ? novpnHowto(!!tap) : '';
+        const howto = a.id.startsWith('novpn-') ? novpnHowto(a.id, !!tap) : '';
         return `<div class="app">${icon}<div class="app-b"><div class="app-n">${esc(a.client)}</div>${
           a.instruction ? `<div class="app-i">${esc(a.instruction)}</div>` : ''
         }<div class="row">${dl}${install}${add}${guide}${site}</div>${howto}</div></div>`;

@@ -1,0 +1,11 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+# Движок скачивается скриптом, в git его нет (как mihomo у десктопа).
+app/src/main/jniLibs/

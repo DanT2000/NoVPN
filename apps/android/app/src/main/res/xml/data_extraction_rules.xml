@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ничего не вывозим: в файлах лежит ссылка-подписка и ключи конфигов. Перенос
+     на новое устройство делается повторным вводом ссылки, это честнее и безопаснее. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+    </device-transfer>
+</data-extraction-rules>

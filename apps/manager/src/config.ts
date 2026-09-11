@@ -96,6 +96,9 @@ export const config = {
   // /desktop/*. На ПОСТОЯННОМ томе (/data/desktop) — чтобы загрузка/авто-зеркало релизов
   // переживали редеплой (образ read-only). При первом старте сидим из встроенной версии.
   desktopDir: env('DESKTOP_DIR', path.join(dataDir, 'desktop')),
+  // Канал Android-сборки: apk кладётся в том, чтобы выкладывать новые версии
+  // без пересборки образа панели — точно так же, как у десктопа.
+  androidDir: env('ANDROID_DIR', path.join(dataDir, 'android')),
   // Встроенная (закоммиченная в образ) версия — источник первичного сида /data/desktop.
   desktopSeedDir: env('DESKTOP_SEED_DIR', path.join(__dirname, '../../../desktop')),
 
