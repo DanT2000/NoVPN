@@ -233,6 +233,7 @@ interface Ctx {
   error: string | null;
   /** Идёт автоматическое переподключение после обрыва. */
   reconnecting: boolean;
+  noInternet: boolean;
   /** У выбранного сервера есть профиль «Полный VPN» — тумблер умной можно выключить. */
   fullAvailable: boolean;
   /** Профиль, которым реально подключаемся (умный или полный). */
@@ -314,6 +315,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [nav, setNav] = useState<Nav>(start.nav);
   const [error, setError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [noInternet, setNoInternet] = useState(false);
   // Списки с сервера держим отдельно от состояния: они большие, приходят с
   // диска и сохранять их второй раз незачем.
   const [srv, setSrv] = useState<ServerLists | null>(null);
@@ -598,6 +600,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     retries.current = 0;
     probeTick.current = 0;
     probeFails.current = 0;
+    setNoInternet(false);
     let stop = false;
     const id = window.setInterval(async () => {
       if (stop) return;
@@ -621,18 +624,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (stop || !dead) {
         retries.current = 0;
         setReconnecting(false);
+        setNoInternet(false);
         return;
       }
-      if (retries.current >= 3) {
-        stop = true;
-        window.clearInterval(id);
+      // Движок работает, но реальной связи нет (нет интернета или сервер сейчас
+      // недоступен). Пересоздавать соединение незачем — движок исправен. Показываем
+      // «нет соединения с интернетом» и продолжаем пробу: когда интернет вернётся,
+      // следующая проверка пройдёт и мы сами вернёмся в норму. Раньше здесь после
+      // трёх попыток всё останавливалось с «Соединение потеряно», и вернувшийся
+      // интернет было уже некому заметить.
+      if (alive) {
+        setNoInternet(true);
         setReconnecting(false);
-        setError('Соединение потеряно. Не удалось восстановить.');
-        // Возвращаем системный прокси: он указывает на уже мёртвый порт.
-        if (inTauri) void vpnDisconnect().catch(() => null);
-        setS((x) => (x.conn === 'on' ? { ...x, conn: 'error' } : x));
         return;
       }
+      // Ниже — только если ДВИЖОК реально умер (процесс не отвечает): поднимаем
+      // его заново. Насовсем не сдаёмся — пробуем каждый тик, пока не выйдет:
+      // так соединение восстановится само, когда причина (сеть, память) уйдёт.
+      setNoInternet(false);
       retries.current += 1;
       setReconnecting(true);
       try {
@@ -648,6 +657,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         retries.current = 0;
         probeFails.current = 0;
         setReconnecting(false);
+        setNoInternet(false);
       } catch {
         /* следующий тик попробует снова */
       }
@@ -749,6 +759,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       nav,
       error,
       reconnecting,
+      noInternet,
       fullAvailable: fullAvailableFor(s),
       selectedNode: nodeFor(s),
       go: (tab) => setNav((n) => ({ ...n, tab })),

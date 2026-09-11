@@ -26,7 +26,7 @@ function fmtTimeout(hours: number): string {
 }
 
 export function Home() {
-  const { s, go, goRouting, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, fullAvailable, selectedNode } = useStore();
+  const { s, go, goRouting, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, noInternet, fullAvailable, selectedNode } = useStore();
   const [admin, setAdmin] = useState(true);
   useEffect(() => {
     if (inTauri) void isElevated().then(setAdmin);
@@ -97,11 +97,13 @@ export function Home() {
             letterSpacing: '-0.015em',
           }}
         >
-          <StatusDot tone={info.tone} />
-          {info.label}
+          <StatusDot tone={noInternet ? 'red' : info.tone} />
+          {noInternet ? 'Нет интернета' : info.label}
         </div>
         <div className="mono" style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 7 }}>
-          {reconnecting ? (
+          {noInternet ? (
+            'Интернет пропал. Подключимся сами, как только он вернётся'
+          ) : reconnecting ? (
             'Переподключение…'
           ) : live && server ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
