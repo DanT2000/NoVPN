@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.16",
+  "version": "0.3.17",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "0df043d6d5a75a2af0f8387b6338f6d7647abac5e6bead1d404a63089de6a543",
-  "signature": "Ogi8T5wdh7ZbM48xGn5bJuAlghMvhGB/qc+tcqA1a68sB3EV7d/zGCiyJERem4FY+w2Dc+8up22ybCDgNQfPDQ==",
-  "sizeBytes": 16652986,
-  "notes": "Настоящие флаги стран вместо букв на компьютере."
+  "sha256": "32d11154d5f2b56a6b681c53332d072a5bcb9d1c25b0f32d6b551d6a60792e3f",
+  "signature": "GXogqoBnlaHEdNZD0vY/RgShQuuzxjYMQnwEONzbT0aclkiOGFHxwqnvwO8D2HIHgp5iR7f/FUbte915Ztd5CQ==",
+  "sizeBytes": 16781133,
+  "notes": "Значки приложений картинками; «Найдено» вместо «Указано вручную»."
 }
