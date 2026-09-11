@@ -5,6 +5,7 @@ import { representatives, serverKey, useStore } from '../state/store';
 import { Dialog, StatusDot } from '../components/ui';
 import { IconCheck, IconChevron, IconRefresh } from '../components/icons';
 import type { Server } from '../state/types';
+import { withFlag } from '../lib/flag';
 
 /** Есть ли у сервера (по всем его профилям) «Полный VPN». */
 function offersFull(all: Server[], v: Server): boolean {
@@ -75,7 +76,7 @@ export function Connection() {
       >
         <div className="row-between">
           <div>
-            <div className="t-strong">{server ? server.name : 'Не выбран'}</div>
+            <div className="t-strong">{server ? withFlag(server.name) : 'Не выбран'}</div>
             <div className="mono t-meta" style={{ marginTop: 4 }}>
               {server ? `${server.host}:${server.port} · ${server.kind}` : '—'}
             </div>
@@ -132,7 +133,7 @@ function ServerDialog({ onClose }: { onClose: () => void }) {
         >
           <span className="radio" />
           <span style={{ flex: 1 }}>
-            <span className="t-name" style={{ display: 'block' }}>{v.name}</span>
+            <span className="t-name" style={{ display: 'block' }}>{withFlag(v.name)}</span>
             <span className="t-note mono" style={{ display: 'block', marginTop: 3 }}>
               {v.host}
               {offersFull(s.servers, v) ? ' · умная + полный VPN' : ''}

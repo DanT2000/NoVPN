@@ -7,6 +7,7 @@ import { RouteFork } from '../components/RouteFork';
 import { Banner, STATE_INFO, StatusDot, Toggle } from '../components/ui';
 import { IconChevron } from '../components/icons';
 import { count } from '../lib/plural';
+import { withFlag } from '../lib/flag';
 import { inTauri, isElevated, relaunchElevated, vpnConflicts } from '../lib/tauri';
 
 const BTN: Record<string, string> = {
@@ -108,7 +109,7 @@ export function Home() {
           {reconnecting
             ? 'Переподключение…'
             : live && server
-              ? `${(selectedNode ?? server).name}${server.ping != null ? ` · ${server.ping} ms` : ''}`
+              ? `${withFlag((selectedNode ?? server).name)}${server.ping != null ? ` · ${server.ping} ms` : ''}`
               : info.note || '—'}
         </div>
       </div>
