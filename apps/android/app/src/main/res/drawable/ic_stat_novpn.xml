@@ -8,8 +8,17 @@
     android:viewportWidth="24"
     android:viewportHeight="24"
     android:tint="#FFFFFF">
-    <path
-        android:fillColor="#FFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M12,2L4,5.5v6.2c0,4.6 3.4,8.9 8,10.3c4.6,-1.4 8,-5.7 8,-10.3V5.5L12,2zM8.7,8h1.9l3,4.6V8h1.7v8h-1.9l-3,-4.6V16H8.7z" />
+    <!-- Щит увеличен относительно холста (scale 1.18 от центра): в шторке и на
+         плитке система рисует значок с большими полями, и без этого он выглядел
+         мелким рядом с Wi-Fi/Bluetooth. -->
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="1.18"
+        android:scaleY="1.18">
+        <path
+            android:fillColor="#FFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M12,2L4,5.5v6.2c0,4.6 3.4,8.9 8,10.3c4.6,-1.4 8,-5.7 8,-10.3V5.5L12,2zM8.7,8h1.9l3,4.6V8h1.7v8h-1.9l-3,-4.6V16H8.7z" />
+    </group>
 </vector>
