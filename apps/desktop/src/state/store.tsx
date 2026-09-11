@@ -37,6 +37,7 @@ import type {
   MetaState,
   Mode,
   Route,
+  AppRoute,
   RoutingTab,
   Server,
   Settings,
@@ -210,10 +211,10 @@ interface Ctx {
   setServer: (id: string) => void;
   setSetting: <K extends keyof Settings>(k: K, v: Settings[K]) => void;
 
-  setAppRoute: (id: string, r: Route) => void;
+  setAppRoute: (id: string, r: AppRoute) => void;
   toggleApp: (id: string) => void;
   locateApp: (id: string, path: string) => void;
-  addApp: (name: string, route: Route, processes?: string[]) => void;
+  addApp: (name: string, route: AppRoute, processes?: string[]) => void;
   removeApp: (id: string) => void;
 
   setSiteRoute: (id: string, r: Route) => void;

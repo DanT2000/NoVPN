@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react';
 import { IconCheck, IconClose } from './icons';
 import { CATALOG, colorFor, lookup } from '../mock/catalog';
-import type { ConnState, Route } from '../state/types';
+import type { AppRoute, ConnState, Route } from '../state/types';
 
 /** Фирменный цвет приглушаем до подложки — иначе список превращается в витраж. */
 function tint(hex: string, a: number): string {
@@ -135,11 +135,38 @@ export function RouteChoice({ value, onChange }: { value: Route; onChange: (r: R
   );
 }
 
-export function RouteTag({ route }: { route: Route }) {
+export function RouteTag({ route }: { route: AppRoute }) {
+  const cls = route === 'vpn' ? 'route-vpn' : route === 'direct' ? 'route-direct' : 'route-auto';
+  const text = route === 'vpn' ? 'Через VPN' : route === 'direct' ? 'Напрямую' : 'Авто';
+  return <span className={`route ${cls}`}>{text}</span>;
+}
+
+/** Маршрут приложения одним из трёх: Авто (следует общим правилам), Через VPN
+    (весь трафик в туннель), Напрямую (мимо VPN). Сегментированный переключатель
+    с короткой подписью под ним. */
+export function AppRouteSwitch({ value, onChange }: { value: AppRoute; onChange: (r: AppRoute) => void }) {
+  const opts: { id: AppRoute; label: string }[] = [
+    { id: 'auto', label: 'Авто' },
+    { id: 'vpn', label: 'Через VPN' },
+    { id: 'direct', label: 'Напрямую' },
+  ];
+  const hint =
+    value === 'vpn'
+      ? 'Весь трафик приложения пойдёт в туннель.'
+      : value === 'direct'
+        ? 'Приложение всегда идёт мимо VPN, как обычно.'
+        : 'Приложение следует общим правилам — сайтам и спискам, как весь остальной трафик.';
   return (
-    <span className={`route ${route === 'vpn' ? 'route-vpn' : 'route-direct'}`}>
-      {route === 'vpn' ? 'Через VPN' : 'Напрямую'}
-    </span>
+    <>
+      <div className="segmented" role="radiogroup" aria-label="Маршрут приложения">
+        {opts.map((o) => (
+          <button key={o.id} type="button" aria-pressed={value === o.id} onClick={() => onChange(o.id)}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <div className="hint" style={{ marginTop: 8 }}>{hint}</div>
+    </>
   );
 }
 

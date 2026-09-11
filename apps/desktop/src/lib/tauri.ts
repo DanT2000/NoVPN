@@ -187,12 +187,34 @@ export const appsRunning = () => call<AppItem[]>('apps_running').then((v) => v ?
 /** Настоящий значок приложения из его .exe/папки как data-URI PNG (или null). */
 export const appIcon = (path: string) => call<string | null>('app_icon', { path });
 
-/** Системное окно выбора: .exe или папка. Возвращает путь или null. */
-export async function pickExe(): Promise<string | null> {
+/** Системное окно выбора .exe. defaultPath — папка (или файл), с которой открыть
+    окно: без неё Windows показывает последнюю использованную, а нужно ту, где
+    лежит текущий файл приложения. Возвращает путь или null. */
+export async function pickExe(opts?: { defaultPath?: string }): Promise<string | null> {
   if (!inTauri) return null;
   const { open } = await import('@tauri-apps/plugin-dialog');
-  const r = await open({ filters: [{ name: 'Программа', extensions: ['exe'] }], multiple: false, directory: false });
+  const r = await open({
+    filters: [{ name: 'Программа', extensions: ['exe'] }],
+    multiple: false,
+    directory: false,
+    defaultPath: opts?.defaultPath,
+  });
   return typeof r === 'string' ? r : null;
+}
+
+/** То же окно, но с множественным выбором: можно выделить сразу несколько .exe.
+    Возвращает все выбранные пути (только с расширением .exe). */
+export async function pickExes(opts?: { defaultPath?: string }): Promise<string[]> {
+  if (!inTauri) return [];
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const r = await open({
+    filters: [{ name: 'Программы', extensions: ['exe'] }],
+    multiple: true,
+    directory: false,
+    defaultPath: opts?.defaultPath,
+  });
+  const arr = Array.isArray(r) ? r : typeof r === 'string' ? [r] : [];
+  return arr.filter((p) => /\.exe$/i.test(p));
 }
 export async function pickFolder(): Promise<string | null> {
   if (!inTauri) return null;

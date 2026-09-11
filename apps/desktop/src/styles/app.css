@@ -329,6 +329,10 @@
   color: var(--gray-fg);
   background: var(--gray-bg);
 }
+.route-auto {
+  color: var(--text-muted);
+  background: var(--surface-2, var(--gray-bg));
+}
 
 /* ─── Диалоги ─────────────────────────────────────────────── */
 .scrim {

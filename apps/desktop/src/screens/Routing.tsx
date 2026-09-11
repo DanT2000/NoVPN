@@ -1,44 +1,35 @@
-/* Умная маршрутизация. Простой режим показывает только знакомые названия и
-   один из двух маршрутов. Расширенный добавляет процесс, путь и источник
-   правила — но ни одно из этих слов не встречается в простом режиме. */
+/* Умная маршрутизация. Показываем всё сразу: название, процесс, путь и источник
+   правила. Прежний «простой режим» убран — в нём ничего нельзя было изменить, а
+   выглядел он беднее; расширенный вид теперь единственный. */
 
 import { useState } from 'react';
 import { useStore } from '../state/store';
-import { Avatar, Dialog, Empty, RouteSwitch, RouteTag, Toggle } from '../components/ui';
+import { Avatar, AppRouteSwitch, Dialog, Empty, RouteSwitch, RouteTag, Toggle } from '../components/ui';
 import { IconChevron, IconPlus, IconRefresh, IconTrash } from '../components/icons';
 import { domainForApp, search } from '../mock/catalog';
 import { appIconUrl } from '../lib/appIcon';
-import { appIcon, appsInstalled, appsRunning, pickExe, pickFolder } from '../lib/tauri';
+import { appIcon, appsInstalled, appsRunning, pickExe, pickExes, pickFolder } from '../lib/tauri';
 import type { AppItem } from '../lib/tauri';
 import { useEffect } from 'react';
 import { count } from '../lib/plural';
-import type { AppRule, Route, SiteRule } from '../state/types';
+import type { AppRoute, AppRule, Route, SiteRule } from '../state/types';
 
-const MODE_HINT = {
-  simple: 'Знакомые названия и один из двух маршрутов. Этого хватает почти всегда.',
-  advanced:
-    'То же самое плюс процесс, путь к файлу и источник правила. Пригодится, когда программ с одинаковым названием несколько и нужно выбрать конкретную.',
-};
+/** Папка выбранного файла — чтобы окно выбора открывалось там же, а не в
+    «последней». Работает только для абсолютного пути (у ручных бывает одно имя). */
+function dirOf(path?: string): string | undefined {
+  if (!path) return undefined;
+  const norm = path.replace(/\\/g, '/');
+  const cut = norm.lastIndexOf('/');
+  return cut > 0 ? norm.slice(0, cut) : undefined;
+}
 
 export function Routing() {
-  const { s, nav, goRouting, setMode } = useStore();
+  const { nav, goRouting } = useStore();
 
   return (
     <div className="viewport">
       <h1 className="screen-title">Умная маршрутизация</h1>
       <p className="screen-sub">Что идёт через VPN, а что — напрямую.</p>
-
-      <div className="segmented" style={{ marginBottom: 10 }}>
-        <button aria-pressed={s.mode === 'simple'} onClick={() => setMode('simple')}>
-          Простой
-        </button>
-        <button aria-pressed={s.mode === 'advanced'} onClick={() => setMode('advanced')}>
-          Расширенный
-        </button>
-      </div>
-      <div className="hint" style={{ marginBottom: 16 }}>
-        {MODE_HINT[s.mode]}
-      </div>
 
       <div className="segmented" style={{ marginBottom: 16 }}>
         <button aria-pressed={nav.routingTab === 'apps'} onClick={() => goRouting('apps')}>
@@ -97,7 +88,6 @@ function AppsTab() {
   const [edit, setEdit] = useState<AppRule | null>(null);
   const [adding, setAdding] = useState(false);
   const [q, setQ] = useState('');
-  const advanced = s.mode === 'advanced';
 
   // Конфликт: приложение стоит напрямую (или выключено), но его сайт идёт через
   // VPN. Тогда Discord может «работать через VPN» из-за сайта discord.com, хотя
@@ -154,15 +144,14 @@ function AppsTab() {
                 <span style={{ color: 'var(--amber-fg)' }}>⚠ сайт идёт через VPN</span>
               ) : !a.found ? (
                 'Не найдено'
-              ) : advanced ? (
-                a.processes.join(', ')
+              ) : a.source === 'list' ? (
+                // Пришло из готового списка NoVPN, а не добавлено человеком.
+                'Из готового списка'
               ) : a.source === 'manual' ? (
-                // Вручную — только то, что человек сам добавил файлом/папкой.
-                // Всё остальное найденное — «Найдено» (раньше ошибочно писалось
-                // «Указано вручную», потому что source='auto' нигде не ставился).
-                'Указано вручную'
+                'Добавлено вручную'
               ) : (
-                'Найдено'
+                // Найдено автоматически — показываем процесс(ы).
+                a.processes.join(', ')
               )}
             </span>
           </button>
@@ -182,7 +171,6 @@ function AppsTab() {
 function AppDialog({ app, onClose }: { app: AppRule; onClose: () => void }) {
   const { s, setAppRoute, locateApp, removeApp } = useStore();
   const cur = s.apps.find((a) => a.id === app.id) ?? app;
-  const advanced = s.mode === 'advanced';
 
   return (
     <Dialog title={cur.name} onClose={onClose}>
@@ -193,7 +181,7 @@ function AppDialog({ app, onClose }: { app: AppRule; onClose: () => void }) {
             <button
               className="link-btn"
               onClick={async () => {
-                const p = await pickExe();
+                const p = await pickExe({ defaultPath: dirOf(cur.path) });
                 if (p) locateApp(cur.id, p);
               }}
             >
@@ -204,9 +192,9 @@ function AppDialog({ app, onClose }: { app: AppRule; onClose: () => void }) {
       ) : null}
 
       <div className="section-label first">Маршрут</div>
-      <RouteSwitch value={cur.route} onChange={(r) => setAppRoute(cur.id, r)} />
+      <AppRouteSwitch value={cur.route} onChange={(r) => setAppRoute(cur.id, r)} />
 
-      {advanced && cur.found ? (
+      {cur.found ? (
         <>
           <div className="section-label">Процесс</div>
           <div className="mono t-body">{cur.processes.join(', ')}</div>
@@ -216,7 +204,7 @@ function AppDialog({ app, onClose }: { app: AppRule; onClose: () => void }) {
               className="link-btn"
               style={{ marginLeft: 8, fontWeight: 400 }}
               onClick={async () => {
-                const p = await pickExe();
+                const p = await pickExe({ defaultPath: dirOf(cur.path) });
                 if (p) locateApp(cur.id, p);
               }}
             >
@@ -280,7 +268,9 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
   const [list, setList] = useState<AppItem[] | null>(null);
   const [q, setQ] = useState('');
   const [pick, setPick] = useState<{ name: string; processes: string[]; path?: string | null } | null>(null);
-  const [route, setRoute] = useState<Route>('vpn');
+  // Несколько .exe за раз: показываем их списком с общим маршрутом.
+  const [multi, setMulti] = useState<{ name: string; processes: string[]; path?: string | null }[] | null>(null);
+  const [route, setRoute] = useState<AppRoute>('vpn');
   const [busy, setBusy] = useState(false);
 
   // Списки тянем по требованию: перечисление процессов не мгновенное.
@@ -294,14 +284,21 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
   const openPicker = async (kind: Src) => {
     setBusy(true);
     try {
-      const path = kind === 'exe' ? await pickExe() : await pickFolder();
-      if (!path) return;
-      // Для папки берём её имя как название, а процесс — по имени папки (грубо,
-      // человек поправит); для .exe — имя файла как процесс.
       if (kind === 'exe') {
-        const exe = exeName(path);
-        setPick({ name: niceName(exe), processes: [exe], path: exe });
+        // Можно выделить сразу несколько .exe. Один — обычная карточка с выбором
+        // маршрута; несколько — список с общим маршрутом и «Добавить все».
+        const paths = await pickExes();
+        if (!paths.length) return;
+        const items = paths.map((p) => {
+          const exe = exeName(p);
+          return { name: niceName(exe), processes: [exe], path: exe };
+        });
+        if (items.length === 1) setPick(items[0]);
+        else setMulti(items);
       } else {
+        const path = await pickFolder();
+        if (!path) return;
+        // У папки берём её имя как название, процесс определится при запуске.
         const folder = exeName(path);
         setPick({ name: folder, processes: [], path: folder });
       }
@@ -317,7 +314,31 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog title="Добавить приложение" onClose={onClose}>
-      {pick ? (
+      {multi ? (
+        <>
+          <div className="t-strong" style={{ marginBottom: 4 }}>
+            Выбрано {count(multi.length, 'программа', 'программы', 'программ')}
+          </div>
+          <div className="mono t-note" style={{ marginBottom: 14, maxHeight: 160, overflowY: 'auto' }}>
+            {multi.map((m) => m.processes[0] ?? m.name).join(', ')}
+          </div>
+          <div className="section-label first">Маршрут для всех</div>
+          <AppRouteSwitch value={route} onChange={setRoute} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <button className="btn btn-outline btn-sm" onClick={() => setMulti(null)}>Назад</button>
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ flex: 1 }}
+              onClick={() => {
+                multi.forEach((m) => addApp(m.name, route, m.processes));
+                onClose();
+              }}
+            >
+              Добавить все
+            </button>
+          </div>
+        </>
+      ) : pick ? (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
             <AppIcon name={pick.name} path={pick.path} />
@@ -331,7 +352,7 @@ function AddAppDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
           <div className="section-label first">Маршрут</div>
-          <RouteSwitch value={route} onChange={setRoute} />
+          <AppRouteSwitch value={route} onChange={setRoute} />
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button className="btn btn-outline btn-sm" onClick={() => setPick(null)}>Назад</button>
             <button
@@ -409,7 +430,6 @@ function SitesTab() {
   const [edit, setEdit] = useState<SiteRule | null>(null);
   const [adding, setAdding] = useState(false);
   const [q, setQ] = useState('');
-  const advanced = s.mode === 'advanced';
 
   const needle = q.trim().toLowerCase();
   const shown = needle
@@ -450,7 +470,7 @@ function SitesTab() {
             <span className="item-meta mono">
               {v.domain}
               {v.enabled === false ? ' · выключено' : ''}
-              {advanced ? (v.source === 'browser' ? ' · из браузера' : ' · вручную') : ''}
+              {v.source === 'browser' ? ' · из браузера' : v.source === 'list' ? ' · из готового списка' : ' · вручную'}
             </span>
           </span>
           <span className="item-tail" style={{ opacity: v.enabled === false ? 0.5 : 1 }}>
@@ -621,7 +641,6 @@ function AddSiteDialog({ onClose }: { onClose: () => void }) {
 function ListsTab() {
   const { s, toggleList, syncNow } = useStore();
   const syncing = s.conn === 'config-updating';
-  const advanced = s.mode === 'advanced';
 
   return (
     <>
@@ -660,15 +679,11 @@ function ListsTab() {
         </div>
       ))}
 
-      {advanced ? (
-        <>
-          <div className="section-label">Исключения</div>
-          <Empty
-            title="Исключений нет"
-            note="Здесь окажутся ваши правила, которые спорят с готовыми списками."
-          />
-        </>
-      ) : null}
+      <div className="section-label">Исключения</div>
+      <Empty
+        title="Исключений нет"
+        note="Здесь окажутся ваши правила, которые спорят с готовыми списками."
+      />
     </>
   );
 }

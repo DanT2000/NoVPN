@@ -3,7 +3,6 @@
 
 import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
-import { RouteFork } from '../components/RouteFork';
 import { Banner, STATE_INFO, StatusDot, Toggle } from '../components/ui';
 import { IconChevron } from '../components/icons';
 import { count } from '../lib/plural';
@@ -84,12 +83,8 @@ export function Home() {
     <div className="viewport home">
       <Banner conn={s.conn} onAction={connect} detail={error} />
 
-      <RouteFork
-        conn={s.conn}
-        smart={s.smartRouting || !fullAvailable}
-        vpnLabel={s.smartRouting || !fullAvailable ? count(totalSites, 'правило', 'правила', 'правил') : 'весь трафик'}
-        directLabel="всё остальное"
-      />
+      {/* Блок «Ваш трафик / Напрямую / Через VPN» убран по просьбе владельца: он
+          дублировал раздел «Умная маршрутизация», где то же самое настраивается. */}
 
       <div style={{ textAlign: 'center', marginTop: 18 }}>
         <div
