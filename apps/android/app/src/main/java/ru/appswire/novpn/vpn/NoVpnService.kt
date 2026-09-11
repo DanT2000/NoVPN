@@ -581,6 +581,7 @@ class NoVpnService : VpnService() {
                         Log.i(TAG, "обычная сеть восстановилась — возврат на ${back.name}")
                         applySelection(eng, back)
                         VpnBus.setDiagnosis(NetDiagnosis.OK)
+                        lastNotifiedDiag = NetDiagnosis.OK
                         return
                     }
                 }
@@ -590,6 +591,7 @@ class NoVpnService : VpnService() {
                 // Обычный сервер работает — всё хорошо.
                 VpnBus.setReserve(null)
                 VpnBus.setDiagnosis(NetDiagnosis.OK)
+                lastNotifiedDiag = NetDiagnosis.OK
                 VpnBus.setOfferReserve(false)
                 return
             }
@@ -599,6 +601,7 @@ class NoVpnService : VpnService() {
             if (!auto) {
                 val d = Diag.diagnose(serverAddrs())
                 VpnBus.setDiagnosis(d.diagnosis)
+                maybeNotifyDiagnosis(d)
                 if (d.diagnosis != NetDiagnosis.OK && repo.reserveAvailable()) VpnBus.setOfferReserve(true)
                 return
             }
@@ -608,12 +611,14 @@ class NoVpnService : VpnService() {
                 Log.i(TAG, "переключение на рабочий обычный сервер ${c.name}")
                 applySelection(eng, c)
                 VpnBus.setDiagnosis(NetDiagnosis.OK)
+                lastNotifiedDiag = NetDiagnosis.OK
                 return
             }
 
             // Обычных рабочих нет — диагностируем сеть.
             val d = Diag.diagnose(serverAddrs())
             VpnBus.setDiagnosis(d.diagnosis)
+            maybeNotifyDiagnosis(d)
             Log.i(TAG, "диагностика: ${d.detail}")
             repo.recordDiag("diagnosis", "Обычные серверы не пропускают трафик. Диагностика: ${d.detail}")
             scope.launch { runCatching { repo.uploadDiag() } }
@@ -867,6 +872,49 @@ class NoVpnService : VpnService() {
             .build()
     }
 
+    /** Последний диагноз, о котором уже уведомили, — чтобы не слать одно и то же. */
+    @Volatile
+    private var lastNotifiedDiag: NetDiagnosis = NetDiagnosis.OK
+
+    /**
+     * Временное решение по просьбе владельца: как только диагностика ловит
+     * ограниченный режим (белые списки) или пропажу связи — шлём уведомление с
+     * деталями, чтобы можно было сразу сверить, например, в Hub. Только на
+     * переходе состояния, без спама.
+     */
+    private fun maybeNotifyDiagnosis(d: Diag.Result) {
+        if (d.diagnosis == lastNotifiedDiag) return
+        val (title, text) = when (d.diagnosis) {
+            NetDiagnosis.RESTRICTED -> "Обнаружены ограничения сети" to
+                "Похоже на белые списки: российские ресурсы доступны, а внешние и серверы NoVPN — нет. " +
+                "Признаки: ${d.detail}. Можно проверить в Hub."
+            NetDiagnosis.NO_INTERNET -> "Нет интернета" to
+                "Соединение с сетью пропало. Признаки: ${d.detail}."
+            NetDiagnosis.SERVER_DOWN -> "Серверы NoVPN недоступны" to
+                "Интернет есть, но обычные серверы NoVPN не отвечают. Признаки: ${d.detail}."
+            else -> {
+                lastNotifiedDiag = d.diagnosis
+                return
+            }
+        }
+        lastNotifiedDiag = d.diagnosis
+        notifyInfo(title, text)
+    }
+
+    /** Информационное уведомление (диагностика). Отдельный id, чтобы не затирать ошибку. */
+    private fun notifyInfo(title: String, text: String) {
+        val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
+            .setSmallIcon(R.drawable.ic_stat_novpn)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setContentIntent(openIntent())
+            .build()
+        runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_DIAG_ID, n) }
+    }
+
     private fun notifyError(message: String) {
         val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
             .setSmallIcon(R.drawable.ic_stat_novpn)
@@ -902,6 +950,7 @@ class NoVpnService : VpnService() {
         private const val CHANNEL_ALERT = "vpn-alert"
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_ERROR_ID = 2
+        private const val NOTIFICATION_DIAG_ID = 3
         private const val SESSION = "NoVPN"
         private const val WATCHDOG_MS = 4_000L
         private const val STATS_MS = 5_000L
