@@ -8,9 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -22,9 +21,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.appswire.novpn.MainActivity
 import ru.appswire.novpn.R
 import ru.appswire.novpn.core.Config
@@ -42,6 +44,11 @@ import ru.appswire.novpn.data.Repo
  *  - сторож раз в несколько секунд проверяет, жив ли процесс движка, и
  *    перезапускает его, не трогая туннель.
  *
+ * Все действия над туннелем и движком идут под одним мьютексом. Без него две
+ * команды подряд (двойное нажатие, sticky-рестарт поверх ручного запуска,
+ * автозапуск при загрузке) запускали два движка на один порт и теряли
+ * дескриптор туннеля — человек получал «Подключено» при мёртвом туннеле.
+ *
  * Чего это НЕ лечит: агрессивные «оптимизаторы» на оболочках производителей
  * (MIUI/HyperOS, EMUI, ColorOS). Там нужно разрешение на автозапуск и снятие
  * ограничений батареи — этим занимается экран «Работа в фоне» (Oem.kt).
@@ -49,11 +56,30 @@ import ru.appswire.novpn.data.Repo
 class NoVpnService : VpnService() {
 
     private lateinit var repo: Repo
+
+    @Volatile
     private var engine: Engine? = null
+
+    @Volatile
     private var tun: ParcelFileDescriptor? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var watchdog: Job? = null
+
+    @Volatile
     private var netCallback: ConnectivityManager.NetworkCallback? = null
+
+    @Volatile
+    private var watchdog: Job? = null
+
+    /** Идёт остановка: длинные шаги подключения должны это заметить и не мешать. */
+    @Volatile
+    private var stopping = false
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Один мьютекс на весь жизненный цикл туннеля. */
+    private val lock = Mutex()
+
+    /** Заявки на перестройку правил. CONFLATED: важна последняя, а не каждая. */
+    private val rebuild = Channel<Unit>(Channel.CONFLATED)
 
     @Volatile
     private var lastDown = 0L
@@ -61,24 +87,36 @@ class NoVpnService : VpnService() {
     @Volatile
     private var lastUp = 0L
 
+    @Volatile
+    private var lastStatsAt = 0L
+
+    /** Последний применённый список системных DNS — чтобы не переписывать конфиг зря. */
+    @Volatile
+    private var lastDns: List<String> = emptyList()
+
     override fun onCreate() {
         super.onCreate()
         repo = Repo.get(this)
         createChannel()
+        // Движок от прошлой жизни приложения мог пережить нас: он держит старый
+        // туннель и гонит трафик, а управлять им уже некому.
+        scope.launch { runCatching { Engine(this@NoVpnService, repo.store).killLeftover() } }
+        startRebuildLoop()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                stopping = true
                 scope.launch {
-                    teardown()
+                    lock.withLock { teardown() }
                     stopSelf()
                 }
                 return START_NOT_STICKY
             }
 
             ACTION_RELOAD -> {
-                scope.launch { applyRules() }
+                rebuild.trySend(Unit)
                 return START_STICKY
             }
 
@@ -86,23 +124,28 @@ class NoVpnService : VpnService() {
                 // Список приложений, исключённых из VPN, задаётся в момент
                 // establish() и на лету не меняется — туннель нужно поднять заново.
                 scope.launch {
-                    watchdog?.cancel()
-                    unregisterNetworkCallback()
-                    engine?.stop()
-                    engine = null
-                    runCatching { tun?.close() }
-                    tun = null
-                    connect()
+                    lock.withLock {
+                        closeTunnelAndEngine()
+                        connect()
+                    }
                 }
                 return START_STICKY
             }
 
             else -> {
-                // intent == null бывает в двух случаях: система перезапустила
-                // службу после того, как убила её, и системный «Always-on VPN».
-                // Оба означают «подключайся по сохранённому состоянию».
-                startForegroundSafely(notification("Подключаемся…", null))
-                scope.launch { connect() }
+                // Сюда попадают три случая: обычный запуск, перезапуск службы
+                // системой (intent == null) и системный «Постоянный VPN», который
+                // шлёт интент с action android.net.VpnService. Все три означают
+                // «подключайся по сохранённому состоянию».
+                stopping = false
+                if (!startForegroundSafely(notification("Подключаемся…", null))) {
+                    // Без foreground система убьёт службу через минуты, а человек
+                    // решит, что «VPN сам выключается». Честнее не подключаться.
+                    VpnBus.fail("Система не дала работать в фоне. Откройте приложение и попробуйте снова.")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                scope.launch { lock.withLock { connect() } }
                 return START_STICKY
             }
         }
@@ -111,6 +154,7 @@ class NoVpnService : VpnService() {
     // ── подключение ──
 
     private suspend fun connect() {
+        if (stopping) return
         VpnBus.setState(ConnState.CONNECTING)
         repo.denied?.let {
             fail(it.message)
@@ -135,6 +179,7 @@ class NoVpnService : VpnService() {
             return
         }
         tun = descriptor
+        if (stopping) return
 
         val secret = eng.newSecret()
         val config = repo.buildConfig(Config.TUN_FD, secret)
@@ -153,7 +198,7 @@ class NoVpnService : VpnService() {
                 return
             }
             is Engine.Started.Died -> {
-                fail("Движок остановился при запуске. ${started.message}")
+                fail("Движок остановился при запуске: ${started.message}")
                 return
             }
             is Engine.Started.Timeout -> {
@@ -161,7 +206,13 @@ class NoVpnService : VpnService() {
                 return
             }
         }
+        if (stopping) return
         eng.control.selectProxy(node.name)
+
+        lastDown = 0
+        lastUp = 0
+        lastStatsAt = System.currentTimeMillis()
+        lastDns = repo.systemDns()
 
         VpnBus.setState(ConnState.ON)
         notify(notification("Подключено", node.name))
@@ -194,16 +245,26 @@ class NoVpnService : VpnService() {
 
         // Анти-петля: собственный трафик приложения (а с ним и процесса движка —
         // у него тот же UID) не должен попадать в туннель, иначе соединение к
-        // VPN-серверу завернулось бы само в себя.
-        runCatching { builder.addDisallowedApplication(packageName) }
-            .onFailure { Log.w(TAG, "не удалось исключить себя из VPN", it) }
+        // VPN-серверу завернулось бы само в себя и получился бы замкнутый контур:
+        // «Подключено», а интернета нет. Правила DIRECT для адреса сервера от этого
+        // НЕ спасают — сокет движка всё равно пошёл бы в туннель.
+        // Поэтому неудача здесь фатальна, а не «ну и ладно».
+        val selfExcluded = runCatching { builder.addDisallowedApplication(packageName) }.isSuccess
+        if (!selfExcluded) {
+            Log.e(TAG, "не удалось исключить себя из VPN — подключение отменено")
+            return null
+        }
 
         // Приложения, которым человек выбрал «напрямую», из туннеля исключаются
-        // целиком: правил по процессам на Android нет (см. Rules).
-        for (rule in st.apps) {
-            if (rule.route != "direct") continue
-            runCatching { builder.addDisallowedApplication(rule.pkg) }
-                .onFailure { Log.w(TAG, "приложение ${rule.pkg} не установлено, пропускаем") }
+        // целиком: правил по процессам на Android нет (см. Rules). Но только в
+        // умном режиме — в «Полном VPN» исключений быть не должно, иначе такое
+        // приложение пойдёт с реального адреса, а человек уверен в обратном.
+        if (repo.effectiveSmart(st)) {
+            for (rule in st.apps) {
+                if (rule.route != "direct") continue
+                runCatching { builder.addDisallowedApplication(rule.pkg) }
+                    .onFailure { Log.w(TAG, "приложение ${rule.pkg} не установлено, пропускаем") }
+            }
         }
 
         return runCatching { builder.establish() }.getOrNull()
@@ -211,12 +272,32 @@ class NoVpnService : VpnService() {
 
     // ── перестройка правил без разрыва туннеля ──
 
+    /**
+     * Заявки на перестройку приходят пачками: смена сети даёт до полутора десятков
+     * событий за пару секунд. Собираем их в одну — пересборка конфига это разбор
+     * подписки, десятки тысяч правил и перезапись файла, делать это по каждому
+     * чиху значит подвесить телефон на переключении Wi-Fi.
+     */
+    private fun startRebuildLoop() {
+        scope.launch {
+            for (unused in rebuild) {
+                delay(REBUILD_DEBOUNCE_MS)
+                // Забираем всё, что накопилось, пока ждали.
+                while (rebuild.tryReceive().isSuccess) Unit
+                lock.withLock { applyRules() }
+            }
+        }
+    }
+
     private fun applyRules() {
         val eng = engine ?: return
-        if (!eng.isAlive()) return
+        if (!eng.isAlive() || stopping) return
         val node = repo.nodeFor() ?: return
         val config = repo.buildConfig(Config.TUN_FD, eng.secret) ?: return
-        runCatching { repo.store.configFile().writeText(config) }
+        repo.store.writeConfig(config)?.let {
+            Log.e(TAG, "конфиг не записан: $it")
+            return
+        }
         if (eng.control.reload(repo.store.configFile().absolutePath)) {
             // Группа типа select помнит прошлый выбор: без явного указания движок
             // остался бы на старом сервере, хотя в окне выбран новый.
@@ -232,44 +313,50 @@ class NoVpnService : VpnService() {
         watchdog?.cancel()
         watchdog = scope.launch {
             var failures = 0
-            var lastStats = System.currentTimeMillis()
             while (isActive) {
                 delay(WATCHDOG_MS)
+                if (stopping) break
                 val eng = engine ?: break
                 if (!eng.isAlive()) {
                     failures++
                     Log.w(TAG, "движок умер, попытка восстановления №$failures")
                     VpnBus.setState(ConnState.RECONNECTING)
                     notify(notification("Восстанавливаем подключение…", null))
-                    val fd = tun?.fd
-                    val err = when {
-                        fd == null -> "туннель закрыт"
-                        else -> {
-                            val config = repo.buildConfig(Config.TUN_FD, eng.newSecret())
-                            if (config == null) "подписка не загружена" else eng.start(config, fd)
-                        }
-                    }
-                    if (err == null && eng.waitReady(10_000) is Engine.Started.Ok) {
-                        repo.nodeFor()?.let { eng.control.selectProxy(it.name) }
-                        VpnBus.setState(ConnState.ON)
-                        notify(notification("Подключено", repo.nodeFor()?.name))
+                    val restored = lock.withLock { restartEngine(eng) }
+                    if (restored) {
                         failures = 0
                     } else if (failures >= MAX_RESTARTS) {
                         fail("Движок не запускается. Откройте приложение и подключитесь заново.")
                         return@launch
+                    } else {
+                        // Пауза растёт: если дело в нехватке памяти, долбиться каждые
+                        // четыре секунды — верный способ сделать только хуже.
+                        delay(WATCHDOG_MS * failures)
                     }
                     continue
                 }
 
                 // Возврат с полного VPN на умный по таймеру сервера (контракт, 7).
                 checkFullTimeout()
-
-                if (System.currentTimeMillis() - lastStats >= STATS_MS) {
-                    lastStats = System.currentTimeMillis()
-                    updateStats(eng)
-                }
+                updateStats(eng)
             }
         }
+    }
+
+    private fun restartEngine(eng: Engine): Boolean {
+        val fd = tun?.fd ?: return false
+        val config = repo.buildConfig(Config.TUN_FD, eng.newSecret()) ?: return false
+        if (eng.start(config, fd) != null) return false
+        if (eng.waitReady(10_000) !is Engine.Started.Ok) return false
+        repo.nodeFor()?.let { eng.control.selectProxy(it.name) }
+        // Счётчики движка обнулились вместе с ним: иначе скорость показывалась бы
+        // нулевой до конца сессии, а трафик прыгнул бы назад.
+        lastDown = 0
+        lastUp = 0
+        lastStatsAt = System.currentTimeMillis()
+        VpnBus.setState(ConnState.ON)
+        notify(notification("Подключено", repo.nodeFor()?.name))
+        return true
     }
 
     private fun checkFullTimeout() {
@@ -280,17 +367,22 @@ class NoVpnService : VpnService() {
         val passed = System.currentTimeMillis() - st.fullSince
         if (passed < (hours * 3600_000).toLong()) return
         repo.update { it.copy(smartRouting = true, fullSince = 0) }
-        applyRules()
+        rebuild.trySend(Unit)
         notify(notification("Вернулись на умную маршрутизацию", repo.nodeFor()?.name))
     }
 
     private fun updateStats(eng: Engine) {
+        val now = System.currentTimeMillis()
+        if (now - lastStatsAt < STATS_MS) return
         val totals = eng.control.totals() ?: return
-        val seconds = STATS_MS / 1000.0
+        // Делим на РЕАЛЬНО прошедшее время: после сна экрана тик приходит с
+        // опозданием, и деление на константу рисовало бы «480 МБ/с».
+        val seconds = ((now - lastStatsAt) / 1000.0).coerceAtLeast(0.5)
         val downSpeed = ((totals.down - lastDown).coerceAtLeast(0) / seconds).toLong()
         val upSpeed = ((totals.up - lastUp).coerceAtLeast(0) / seconds).toLong()
         lastDown = totals.down
         lastUp = totals.up
+        lastStatsAt = now
         VpnBus.setStats(
             VpnStats(
                 downTotal = totals.down, upTotal = totals.up,
@@ -323,40 +415,47 @@ class NoVpnService : VpnService() {
                 // Wi-Fi ↔ мобильный интернет движок продолжит слать пакеты в
                 // исчезнувший интерфейс, и соединение «висит».
                 runCatching { setUnderlyingNetworks(arrayOf(network)) }
-                scope.launch {
-                    delay(700)
-                    applyRules()
-                }
+                rebuild.trySend(Unit)
             }
 
             override fun onLost(network: Network) {
                 runCatching { setUnderlyingNetworks(null) }
             }
 
-            override fun onLinkPropertiesChanged(network: Network, lp: android.net.LinkProperties) {
-                // Сменились DNS оператора — их адреса зашиты в конфиг движка.
-                scope.launch { applyRules() }
+            override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) {
+                // Событие прилетает на каждое обновление адреса, маршрута и DNS —
+                // по десятку раз за переключение сети. Пересобираем конфиг, только
+                // если изменилось то, что в него попадает.
+                val dns = repo.systemDns()
+                if (dns != lastDns) {
+                    lastDns = dns
+                    rebuild.trySend(Unit)
+                }
             }
         }
-        val req = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            // Именно НЕ-VPN сеть: иначе мы бы следили за собственным туннелем и
-            // брали из него же адреса DNS — получилась бы петля.
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            .build()
-        runCatching { cm.registerNetworkCallback(req, cb) }.onSuccess { netCallback = cb }
+        // Именно СЕТЬ ПО УМОЛЧАНИЮ: подписка на «любую сеть с интернетом» ловила бы
+        // и посторонние сети (оператор поднял мобильную на секунду при живом Wi-Fi),
+        // и мы бы врали системе о том, через что на самом деле идёт туннель.
+        val ok = runCatching { cm.registerDefaultNetworkCallback(cb) }.isSuccess
+        if (ok) {
+            netCallback = cb
+        } else {
+            Log.e(TAG, "не удалось подписаться на смену сети: после переключения Wi-Fi/LTE потребуется переподключение")
+        }
     }
 
     private fun unregisterNetworkCallback() {
         val cb = netCallback ?: return
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        runCatching { cm.unregisterNetworkCallback(cb) }
-        netCallback = null
+        // Ссылку теряем только если система действительно её отпустила: иначе
+        // колбэк остался бы зарегистрированным навсегда вместе со всей службой.
+        if (runCatching { cm.unregisterNetworkCallback(cb) }.isSuccess) netCallback = null
     }
 
     // ── остановка ──
 
-    private fun teardown() {
+    /** Гасит движок и туннель, оставляя службу живой. */
+    private fun closeTunnelAndEngine() {
         watchdog?.cancel()
         watchdog = null
         unregisterNetworkCallback()
@@ -364,40 +463,54 @@ class NoVpnService : VpnService() {
         engine = null
         runCatching { tun?.close() }
         tun = null
+        lastDown = 0
+        lastUp = 0
+    }
+
+    private fun teardown() {
+        closeTunnelAndEngine()
+        // В конфиге ключи подписки и токен управления — после отключения он не нужен.
+        repo.store.deleteConfig()
         VpnBus.setStats(VpnStats())
         VpnBus.setState(ConnState.OFF)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     }
 
+    /**
+     * Авария. Туннель снимаем (иначе телефон остался бы без интернета вовсе), но
+     * молча не исчезаем: снять постоянное уведомление и уйти — это ровно то
+     * поведение, из-за которого человек потом говорит «он сам выключился».
+     * Оставляем обычное уведомление с причиной.
+     */
     private fun fail(message: String) {
         Log.e(TAG, "подключение не удалось: $message")
-        watchdog?.cancel()
-        unregisterNetworkCallback()
-        engine?.stop()
-        engine = null
-        runCatching { tun?.close() }
-        tun = null
+        closeTunnelAndEngine()
         VpnBus.fail(message)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        notifyError(message)
         stopSelf()
     }
 
     /** Человек отозвал разрешение на VPN или систему занял другой клиент. */
     override fun onRevoke() {
         Log.w(TAG, "разрешение на VPN отозвано")
+        stopping = true
         scope.launch {
-            teardown()
+            lock.withLock { teardown() }
             stopSelf()
         }
     }
 
     override fun onDestroy() {
         // Смахнули приложение из недавних — служба остаётся жить (stopWithTask=false),
-        // сюда попадаем только при настоящей остановке.
-        engine?.stop()
+        // сюда попадаем только при настоящей остановке. Главный поток блокировать
+        // нельзя: сигнал и выход, дожидаться завершения незачем.
+        stopping = true
+        engine?.stop(wait = false)
         runCatching { tun?.close() }
         unregisterNetworkCallback()
         VpnBus.setState(ConnState.OFF)
+        rebuild.close()
         scope.cancel()
         super.onDestroy()
     }
@@ -406,24 +519,33 @@ class NoVpnService : VpnService() {
 
     private fun createChannel() {
         val nm = getSystemService(NotificationManager::class.java)
-        val channel = NotificationChannel(CHANNEL, "Подключение", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Постоянное уведомление, пока VPN работает"
-            setShowBadge(false)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-        }
-        nm.createNotificationChannel(channel)
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL, "Подключение", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Постоянное уведомление, пока VPN работает"
+                setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            },
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ALERT, "Сбои подключения", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Сообщение, если VPN остановился"
+                setShowBadge(true)
+            },
+        )
     }
 
+    private fun openIntent(): PendingIntent = PendingIntent.getActivity(
+        this, 0, Intent(this, MainActivity::class.java),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
     private fun notification(title: String, server: String?, extra: String? = null): Notification {
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
         val stop = PendingIntent.getService(
             this, 1, Intent(this, NoVpnService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val text = listOfNotNull(server, extra).joinToString(" · ").ifEmpty { "Умная маршрутизация" }
+        val mode = if (repo.effectiveSmart()) "Умная маршрутизация" else "Полный VPN"
+        val text = listOfNotNull(server, extra).joinToString(" · ").ifEmpty { mode }
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_novpn)
             .setContentTitle(title)
@@ -433,20 +555,35 @@ class NoVpnService : VpnService() {
             .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setContentIntent(open)
+            .setContentIntent(openIntent())
             .addAction(0, "Отключить", stop)
             .build()
     }
 
-    private fun startForegroundSafely(n: Notification) {
+    private fun notifyError(message: String) {
+        val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
+            .setSmallIcon(R.drawable.ic_stat_novpn)
+            .setContentTitle("VPN отключился")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .setContentIntent(openIntent())
+            .build()
+        runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ERROR_ID, n) }
+    }
+
+    private fun startForegroundSafely(n: Notification): Boolean {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else 0
-        runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, n, type) }
+        return runCatching { ServiceCompat.startForeground(this, NOTIFICATION_ID, n, type) }
             .onFailure { Log.e(TAG, "startForeground не прошёл", it) }
+            .isSuccess
     }
 
     private fun notify(n: Notification) {
+        if (stopping) return
         runCatching {
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, n)
         }
@@ -455,10 +592,13 @@ class NoVpnService : VpnService() {
     companion object {
         private const val TAG = "novpn.service"
         private const val CHANNEL = "vpn"
+        private const val CHANNEL_ALERT = "vpn-alert"
         private const val NOTIFICATION_ID = 1
+        private const val NOTIFICATION_ERROR_ID = 2
         private const val SESSION = "NoVPN"
         private const val WATCHDOG_MS = 4_000L
-        private const val STATS_MS = 2_000L
+        private const val STATS_MS = 5_000L
+        private const val REBUILD_DEBOUNCE_MS = 1_500L
         private const val MAX_RESTARTS = 3
 
         const val ACTION_START = "ru.appswire.novpn.START"
@@ -468,8 +608,6 @@ class NoVpnService : VpnService() {
 
         fun start(context: Context) {
             val i = Intent(context, NoVpnService::class.java).setAction(ACTION_START)
-            // Для VPN-службы система позволяет старт из foreground; из фона
-            // (загрузка телефона) сюда приходим только с разрешённым автозапуском.
             runCatching { context.startForegroundService(i) }
         }
 

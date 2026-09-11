@@ -19,8 +19,10 @@ data class Rules(
     /** Серверная политика приватных подсетей (meta.routing.lanAccess).
      *  false — LAN напрямую; true — LAN В туннель. Легко перепутать. */
     val lanAccess: Boolean = false,
-    /** Обходить ли локальные ДОМЕНЫ (.local, .lan, corp…) напрямую. */
-    val bypassLocal: Boolean = true,
+    /** Обходить ли локальные ДОМЕНЫ (.local, .lan, corp…) напрямую. По умолчанию
+     *  выключено — как на десктопе: один тумблер не должен стоять по-разному на
+     *  двух клиентах одного человека. */
+    val bypassLocal: Boolean = false,
     /** Свои локальные суффиксы, всегда напрямую и через системный DNS. */
     val customLocal: List<String> = emptyList(),
     /** cloudflare | google | quad9 | свой адрес/URL (через запятую). */

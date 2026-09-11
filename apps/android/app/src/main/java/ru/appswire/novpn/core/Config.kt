@@ -2,8 +2,6 @@ package ru.appswire.novpn.core
 
 import org.yaml.snakeyaml.DumperOptions
 import org.yaml.snakeyaml.Yaml
-import java.net.Inet6Address
-import java.net.InetAddress
 
 /**
  * Сборка конфига mihomo — порт `apps/desktop/src-tauri/src/core.rs`.
@@ -70,7 +68,10 @@ object Config {
             root["proxies"] = parsed.nodes.map { it.map }
         }
 
-        root["mixed-port"] = mixedPort
+        // Локальный прокси нужен только в самопроверке (без туннеля). На телефоне
+        // он был бы открытым прокси без пароля: к 127.0.0.1 может подключиться любое
+        // приложение, в том числе то, которое человек вынес «напрямую».
+        root["mixed-port"] = if (tunFd != null) 0 else mixedPort
         root["external-controller"] = "127.0.0.1:$controllerPort"
         if (secret.isNotEmpty()) root["secret"] = secret
         root["allow-lan"] = false
@@ -178,8 +179,10 @@ object Config {
             }
             directDomains.forEach { policy["+.$it"] = local }
             if (policy.isNotEmpty()) dns["nameserver-policy"] = policy
-            // Резолвер для самих DoH-серверов: без него движок не узнает их адреса.
-            dns["default-nameserver"] = local
+            // Резолвер для самих DoH-серверов: сюда годятся ТОЛЬКО адреса. Имя в
+            // «tls://dns.example» пришлось бы сначала разрешить, то есть замкнуть на себя.
+            val plain = local.filter { isIpv4Literal(it) || isIpv6Literal(it) }
+            if (plain.isNotEmpty()) dns["default-nameserver"] = plain
         }
         return dns
     }
@@ -209,17 +212,68 @@ object Config {
         val scheme = d.indexOf("://")
         if (scheme >= 0) d = d.substring(scheme + 3)
         d = d.split('/', '?', '#', ':', '@')[0]
-        d = d.trim().removePrefix("www.").trim('.')
+        while (d.startsWith("www.")) d = d.removePrefix("www.")
+        d = d.trim().trim('.')
         if (d.isEmpty() || d.any { it == ',' || it == ' ' || it == '\t' } || !d.contains('.')) return null
         return d
     }
 
-    private fun isIpLiteral(h: String): Boolean = runCatching {
-        // Только литерал: InetAddress.getByName для имени полез бы в DNS, поэтому
-        // сначала грубая проверка на «похоже на адрес».
-        if (!h.any { it == ':' } && !h.all { it.isDigit() || it == '.' }) return false
-        InetAddress.getByName(h) != null
-    }.getOrDefault(false)
+    /** Ровно четыре десятичных октета 0..255 — и ничего больше. */
+    fun isIpv4Literal(h: String): Boolean {
+        val parts = h.split('.')
+        if (parts.size != 4) return false
+        return parts.all { o ->
+            o.isNotEmpty() && o.length <= 3 && o.all { it in '0'..'9' } && (o.toIntOrNull() ?: 256) <= 255
+        }
+    }
+
+    /**
+     * IPv6-литерал. Разбираем сами, а не через InetAddress.getByName: тот принимает
+     * сокращённые формы вроде «1.2.3» (это становится 1.2.0.3) и для строки из цифр
+     * с точками уходит в резолвер — блокирующий DNS-запрос прямо на пути подключения.
+     */
+    fun isIpv6Literal(h: String): Boolean {
+        if (!h.contains(':')) return false
+        if (h.any { it !in "0123456789abcdefABCDEF:." }) return false
+        val double = h.split("::")
+        if (double.size > 2) return false
+        val groups = mutableListOf<String>()
+        var tail4 = false
+        for (half in double) {
+            for (g in half.split(':')) {
+                if (g.isEmpty()) continue
+                if (g.contains('.')) {
+                    // Смешанная запись ::ffff:1.2.3.4 — хвост занимает две группы.
+                    if (!isIpv4Literal(g)) return false
+                    tail4 = true
+                    groups += listOf(g, g)
+                } else {
+                    if (g.length > 4) return false
+                    groups += g
+                }
+            }
+        }
+        val count = groups.size
+        return if (double.size == 2) count <= 7 || (tail4 && count <= 8) else count == 8
+    }
+
+    private fun isIpLiteral(h: String): Boolean = isIpv4Literal(h) || isIpv6Literal(h)
+
+    /**
+     * Годится ли регулярное выражение для движка. Java понимает больше, чем RE2 в
+     * Go: просмотр вперёд/назад и обратные ссылки она примет, а движок — нет, и одна
+     * такая строка из чужого списка сделает ВЕСЬ конфиг невалидным. Отсекаем заранее.
+     */
+    fun safeRegex(pattern: String): Boolean {
+        val p = pattern.trim()
+        if (p.isEmpty() || p.contains(',')) return false
+        if (p.contains("(?=") || p.contains("(?!") || p.contains("(?<=") || p.contains("(?<!")) return false
+        // Обратные ссылки RE2 тоже не поддерживает.
+        for (i in 0 until p.length - 1) {
+            if (p[i].code == 92 && p[i + 1] in '1'..'9') return false
+        }
+        return runCatching { Regex(p) }.isSuccess
+    }
 
     private fun pushSubnets(out: MutableList<String>) {
         // Локальные подсети — напрямую ВСЕГДА и ПЕРВЫМИ.
@@ -244,7 +298,7 @@ object Config {
             val h = raw.trim()
             if (h.isEmpty()) continue
             if (isIpLiteral(h)) {
-                val mask = if (runCatching { InetAddress.getByName(h) is Inet6Address }.getOrDefault(false)) 128 else 32
+                val mask = if (isIpv6Literal(h)) 128 else 32
                 out += "IP-CIDR,$h/$mask,DIRECT,no-resolve"
             } else {
                 cleanDomain(h)?.let { out += "DOMAIN,$it,DIRECT" }
@@ -293,9 +347,7 @@ object Config {
         for (re in r.listVpnRegex) {
             // Запятая внутри регэкспа сломала бы разбор строки правила движком.
             val rx = re.trim()
-            if (rx.isNotEmpty() && !rx.contains(',') && runCatching { Regex(rx) }.isSuccess) {
-                out += "DOMAIN-REGEX,$rx,$GROUP"
-            }
+            if (safeRegex(rx)) out += "DOMAIN-REGEX,$rx,$GROUP"
         }
         for (ip in r.listVpnIps) {
             val a = ip.trim()

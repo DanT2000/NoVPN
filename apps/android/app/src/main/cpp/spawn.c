@@ -21,6 +21,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -30,6 +31,8 @@
 /* Закрываем всё лишнее, что могло утечь из JVM (сокеты, файлы, inotify).
    Верхняя граница взята с запасом: реальных дескрипторов у процесса единицы. */
 #define MAX_FD 1024
+
+static void free_array(char **a);
 
 static char *dup_utf(JNIEnv *env, jstring s) {
     if (s == NULL) return NULL;
@@ -50,8 +53,16 @@ static char **dup_array(JNIEnv *env, jobjectArray arr, char *head) {
     if (head != NULL) out[at++] = head;
     for (jsize i = 0; i < n; i++) {
         jstring item = (jstring) (*env)->GetObjectArrayElement(env, arr, i);
-        out[at++] = dup_utf(env, item);
+        char *copy = dup_utf(env, item);
         if (item != NULL) (*env)->DeleteLocalRef(env, item);
+        if (copy == NULL) {
+            /* Частично собранный argv хуже, чем отказ: движок запустился бы
+               с обрезанными аргументами, без конфига и без туннеля. */
+            out[at] = NULL;
+            free_array(out);
+            return NULL;
+        }
+        out[at++] = copy;
     }
     out[at] = NULL;
     return out;
@@ -97,6 +108,16 @@ Java_ru_appswire_novpn_vpn_Native_spawn(JNIEnv *env, jclass clazz,
         logFd = open("/dev/null", O_WRONLY);
     }
     int nullFd = open("/dev/null", O_RDONLY);
+    /* Оба служебных дескриптора уводим выше TUN_TARGET_FD: если бы open вернул 3,
+       dup2 туннеля затёр бы журнал, а вывод движка поехал бы в сам туннель. */
+    if (logFd >= 0 && logFd <= TUN_TARGET_FD) {
+        int moved = fcntl(logFd, F_DUPFD, TUN_TARGET_FD + 1);
+        if (moved >= 0) { close(logFd); logFd = moved; }
+    }
+    if (nullFd >= 0 && nullFd <= TUN_TARGET_FD) {
+        int moved = fcntl(nullFd, F_DUPFD, TUN_TARGET_FD + 1);
+        if (moved >= 0) { close(nullFd); nullFd = moved; }
+    }
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -116,8 +137,15 @@ Java_ru_appswire_novpn_vpn_Native_spawn(JNIEnv *env, jclass clazz,
             dup2(logFd, STDOUT_FILENO);
             dup2(logFd, STDERR_FILENO);
         }
-        /* Всё, что выше туннеля, ребёнку не нужно и не должно утечь. */
-        for (int fd = TUN_TARGET_FD + 1; fd < MAX_FD; fd++) close(fd);
+        /* Всё, что выше туннеля, ребёнку не нужно и не должно утечь. Граница —
+           реальный лимит процесса: на Android он давно больше тысячи. */
+        struct rlimit rl;
+        int top = MAX_FD;
+        if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur > (rlim_t) top) {
+            top = (int) rl.rlim_cur;
+        }
+        if (tunFd < 0) close(TUN_TARGET_FD);
+        for (int fd = TUN_TARGET_FD + 1; fd < top; fd++) close(fd);
 
         if (workDir != NULL) {
             if (chdir(workDir) != 0) _exit(126);
@@ -154,9 +182,12 @@ JNIEXPORT jint JNICALL
 Java_ru_appswire_novpn_vpn_Native_waitPid(JNIEnv *env, jclass clazz, jint pid, jboolean block) {
     (void) env; (void) clazz;
     int status = 0;
-    pid_t r = waitpid((pid_t) pid, &status, block ? 0 : WNOHANG);
-    if (r == 0) return -1;
-    if (r < 0) return -2;
+    pid_t r;
+    do {
+        r = waitpid((pid_t) pid, &status, block ? 0 : WNOHANG);
+    } while (r < 0 && errno == EINTR);
+    if (r == 0) return -1;            /* ещё работает */
+    if (r < 0) return -2;             /* нет такого ребёнка (уже подобран) */
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
     return -3;

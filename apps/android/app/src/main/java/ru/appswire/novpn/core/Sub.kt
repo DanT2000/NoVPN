@@ -64,11 +64,22 @@ object Sub {
         // 2. Готовый Clash/Mihomo YAML.
         if (text.contains("proxies:")) {
             val root = runCatching {
+                // SafeConstructor: текст приходит из сети, а обычный конструктор
+                // YAML умеет создавать произвольные классы по тегам.
                 @Suppress("UNCHECKED_CAST")
-                Yaml().load<Any?>(text) as? MutableMap<String, Any?>
+                Yaml(org.yaml.snakeyaml.constructor.SafeConstructor(org.yaml.snakeyaml.LoaderOptions()))
+                    .load<Any?>(text) as? MutableMap<String, Any?>
             }.getOrNull()
             if (root != null && (root["proxies"] as? List<*>)?.isNotEmpty() == true) {
-                return Parsed.Clash(root)
+                // Из чужого конфига берём ТОЛЬКО точки подключения и группы. Всё
+                // остальное (listeners, socks-port, bind-address, rule-providers,
+                // geox-url, hosts) — это команды движку, который крутится на телефоне
+                // человека: подписка не должна открывать порты в локальную сеть и
+                // заставлять его качать файлы с чужих адресов.
+                val safe = linkedMapOf<String, Any?>()
+                root["proxies"]?.let { safe["proxies"] = it }
+                root["proxy-groups"]?.let { safe["proxy-groups"] = it }
+                return Parsed.Clash(safe)
             }
         }
 
@@ -149,7 +160,38 @@ object Sub {
         fun q(key: String): String = query[key].orEmpty()
     }
 
-    private fun dec(s: String): String = runCatching { URLDecoder.decode(s, "UTF-8") }.getOrDefault(s)
+    private fun dec(s: String): String = runCatching {
+        // Именно percent-decode, а не URLDecoder: тот по правилам форм превращает
+        // «+» в пробел, и «RU+Moscow» стало бы «RU Moscow» — на десктопе имя другое.
+        val out = java.io.ByteArrayOutputStream()
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '%' && i + 2 < s.length) {
+                val hex = s.substring(i + 1, i + 3).toIntOrNull(16)
+                if (hex != null) {
+                    out.write(hex)
+                    i += 3
+                    continue
+                }
+            }
+            out.write(c.toString().toByteArray(Charsets.UTF_8))
+            i++
+        }
+        String(out.toByteArray(), Charsets.UTF_8)
+    }.getOrDefault(s)
+
+    /** Порт из ссылки. Мусор и выход за границы — 443, как на десктопе (u16). */
+    private fun port(raw: String?): Int {
+        val n = raw?.trim()?.toIntOrNull() ?: return 443
+        return if (n in 1..65535) n else 443
+    }
+
+    /** Кладём значение, только если оно непустое: движок отличает пустую строку от
+     *  отсутствующего ключа, а десктопный put_str пустые отбрасывает. */
+    private fun MutableMap<String, Any?>.putIfNotEmpty(key: String, value: String?) {
+        if (!value.isNullOrEmpty()) this[key] = value
+    }
 
     private fun splitUri(link: String, scheme: String): Uri? {
         val body = link.removePrefix(scheme)
@@ -182,7 +224,7 @@ object Sub {
             val i = kv.indexOf('=')
             if (i <= 0) null else kv.substring(0, i) to dec(kv.substring(i + 1))
         }.toMap()
-        return Uri(user, host, portText.toIntOrNull() ?: 443, query, frag)
+        return Uri(user, host, port(portText), query, frag)
     }
 
     /** Транспорт и маскировка — общая часть для vless и trojan. */
@@ -196,7 +238,9 @@ object Sub {
                 if (host.isNotEmpty()) ws["headers"] = linkedMapOf<String, Any?>("Host" to host)
                 m["ws-opts"] = ws
             }
-            "grpc" -> m["grpc-opts"] = linkedMapOf<String, Any?>("grpc-service-name" to u.q("serviceName"))
+            "grpc" -> m["grpc-opts"] = linkedMapOf<String, Any?>().apply {
+                putIfNotEmpty("grpc-service-name", u.q("serviceName"))
+            }
             "http" -> m["http-opts"] = linkedMapOf<String, Any?>("path" to listOf(u.q("path").ifEmpty { "/" }))
         }
         val sni = u.q("sni").ifEmpty { u.q("host") }
@@ -205,8 +249,9 @@ object Sub {
                 m["tls"] = true
                 if (sni.isNotEmpty()) m["servername"] = sni
                 m["client-fingerprint"] = u.q("fp").ifEmpty { "chrome" }
-                val r = linkedMapOf<String, Any?>("public-key" to u.q("pbk"))
-                if (u.q("sid").isNotEmpty()) r["short-id"] = u.q("sid")
+                val r = linkedMapOf<String, Any?>()
+                r.putIfNotEmpty("public-key", u.q("pbk"))
+                r.putIfNotEmpty("short-id", u.q("sid"))
                 m["reality-opts"] = r
             }
             "tls", "xtls" -> {
@@ -262,7 +307,7 @@ object Sub {
         val name = g("ps").ifEmpty { host }
         val m = linkedMapOf<String, Any?>(
             "name" to name, "type" to "vmess", "server" to host,
-            "port" to (g("port").toIntOrNull() ?: 443),
+            "port" to port(g("port")),
             "uuid" to g("id"),
             "alterId" to (g("aid").toIntOrNull() ?: 0),
             "cipher" to g("scy").ifEmpty { "auto" },
@@ -316,7 +361,7 @@ object Sub {
         val name = frag.ifEmpty { host }
         val m = linkedMapOf<String, Any?>(
             "name" to name, "type" to "ss", "server" to host,
-            "port" to (port.toIntOrNull() ?: 443),
+            "port" to port(port),
             "cipher" to method, "password" to password, "udp" to true,
         )
         return Node(name, m)
@@ -371,12 +416,13 @@ object Sub {
                     m["tls"] = true
                     (rs["serverName"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
                         ?.let { m["servername"] = it }
-                    m["client-fingerprint"] = (rs["fingerprint"] as? JsonPrimitive)?.contentOrNull ?: "chrome"
-                    val r = linkedMapOf<String, Any?>(
-                        "public-key" to ((rs["publicKey"] as? JsonPrimitive)?.contentOrNull ?: ""),
+                    m.putIfNotEmpty(
+                        "client-fingerprint",
+                        (rs["fingerprint"] as? JsonPrimitive)?.contentOrNull?.ifEmpty { null } ?: "chrome",
                     )
-                    (rs["shortId"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
-                        ?.let { r["short-id"] = it }
+                    val r = linkedMapOf<String, Any?>()
+                    r.putIfNotEmpty("public-key", (rs["publicKey"] as? JsonPrimitive)?.contentOrNull)
+                    r.putIfNotEmpty("short-id", (rs["shortId"] as? JsonPrimitive)?.contentOrNull)
                     m["reality-opts"] = r
                 } else if ((st?.get("security") as? JsonPrimitive)?.contentOrNull == "tls") {
                     m["tls"] = true

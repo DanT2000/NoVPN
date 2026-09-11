@@ -64,19 +64,24 @@ object ListsParser {
         )
     }
 
+    /** Маска в допустимом диапазоне. Пусто — маски нет, это тоже нормально.
+     *  Проверять надо и снизу: «/-1» Java разберёт как число, и в конфиг уехало бы
+     *  правило, от которого движок откажется целиком вместе с конфигом. */
+    private fun maskOk(mask: String?, max: Int): Boolean {
+        if (mask == null) return true
+        if (mask.isEmpty() || mask.any { it !in '0'..'9' }) return false
+        val n = mask.toIntOrNull() ?: return false
+        return n in 0..max
+    }
+
     private fun isIpv4(s: String): Boolean {
         val (addr, mask) = s.split("/", limit = 2).let { it[0] to it.getOrNull(1) }
-        val octets = addr.split(".")
-        if (octets.size != 4) return false
-        if (!octets.all { o -> o.isNotEmpty() && o.length <= 3 && o.all(Char::isDigit) && (o.toIntOrNull() ?: 256) <= 255 }) return false
-        return mask?.let { (it.toIntOrNull() ?: 33) <= 32 } ?: true
+        return Config.isIpv4Literal(addr) && maskOk(mask, 32)
     }
 
     private fun isIpv6(s: String): Boolean {
         val (addr, mask) = s.split("/", limit = 2).let { it[0] to it.getOrNull(1) }
-        if (!addr.contains(':')) return false
-        if (!addr.all { it.isDigit() || it in "abcdefABCDEF:" }) return false
-        return mask?.let { (it.toIntOrNull() ?: 129) <= 128 } ?: true
+        return Config.isIpv6Literal(addr) && maskOk(mask, 128)
     }
 
     /** Одна строка `upstream.items[]` → в нужное ведро. Всё в upstream — «через VPN». */
@@ -92,9 +97,10 @@ object ListsParser {
 
             s.startsWith("regexp:") -> {
                 val re = s.removePrefix("regexp:").trim()
-                // Панель регэкспы не проверяет — источники чужие. Одна кривая
-                // строка иначе сделала бы весь конфиг движка невалидным.
-                if (re.isNotEmpty() && runCatching { Regex(re) }.isSuccess) out.vpnRegex += re
+                // Панель регэкспы не проверяет — источники чужие. Одна кривая строка
+                // иначе сделала бы весь конфиг движка невалидным. Проверяем по меркам
+                // движка (RE2), а не по возможностям Java: см. Config.safeRegex.
+                if (Config.safeRegex(re)) out.vpnRegex += re
             }
 
             isIpv4(s) -> out.vpnIps += if (s.contains('/')) s else "$s/32"

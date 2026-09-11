@@ -5,6 +5,7 @@ import android.util.Log
 import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.store.Store
 import java.io.File
+import java.io.RandomAccessFile
 import java.security.SecureRandom
 
 /**
@@ -22,23 +23,35 @@ class Engine(private val context: Context, private val store: Store) {
     var pid: Int = 0
         private set
 
+    /** Код выхода движка, если он успел умереть, — для внятного сообщения. */
+    @Volatile
+    private var lastExit: Int? = null
+
     /** Токен управляющего канала: новый на каждый запуск, только в памяти. */
     @Volatile
     var secret: String = ""
         private set
 
+    @Volatile
+    private var controlCache: Control? = null
+
+    /** Канал управления. Клиент внутри общий, пересоздаём только при смене токена. */
     val control: Control
-        get() = Control(Config.CONTROLLER_PORT, secret)
+        get() = controlCache ?: Control(Config.CONTROLLER_PORT, secret).also { controlCache = it }
 
     fun binary(): File = File(context.applicationInfo.nativeLibraryDir, "libmihomo.so")
 
-    fun isInstalled(): Boolean = binary().let { it.exists() && it.canExecute() }
+    fun isInstalled(): Boolean = binary().exists()
 
     fun isAlive(): Boolean {
         val p = pid
         if (p <= 0) return false
         // -1 означает «ещё работает»; всё остальное — процесс завершился.
-        return Native.waitPid(p, false) == -1
+        val code = Native.waitPid(p, false)
+        if (code == -1) return true
+        if (code >= 0) lastExit = code
+        pid = 0
+        return false
     }
 
     /**
@@ -53,11 +66,10 @@ class Engine(private val context: Context, private val store: Store) {
         }
         stop()
         killLeftover()
+        lastExit = null
 
         val dir = store.engineDir()
-        val config = store.configFile()
-        runCatching { config.writeText(configYaml) }
-            .onFailure { return "Не удалось записать конфиг: ${it.message}" }
+        store.writeConfig(configYaml)?.let { return "Не удалось записать конфиг: $it" }
 
         val env = arrayOf(
             "HOME=${dir.absolutePath}",
@@ -65,7 +77,7 @@ class Engine(private val context: Context, private val store: Store) {
             // Движок не должен ходить в чужие каталоги за геобазами.
             "PATH=/system/bin",
         )
-        val args = arrayOf("-d", dir.absolutePath, "-f", config.absolutePath)
+        val args = arrayOf("-d", dir.absolutePath, "-f", store.configFile().absolutePath)
         val result = Native.spawn(
             exe.absolutePath, args, env, dir.absolutePath, store.logFile().absolutePath, tunFd,
         )
@@ -73,7 +85,7 @@ class Engine(private val context: Context, private val store: Store) {
             return "Движок не запустился (код $result). Подробности — в журнале."
         }
         pid = result
-        pidFile().writeText(result.toString())
+        runCatching { pidFile().writeText(result.toString()) }
         Log.i(TAG, "движок запущен, pid=$pid")
         return null
     }
@@ -88,18 +100,37 @@ class Engine(private val context: Context, private val store: Store) {
      * но управлять им уже некому. Если просто поднять второй, туннель окажется
      * поделён между двумя процессами, и «интернета нет» до перезагрузки.
      *
-     * Проверяем, что убиваем именно свой движок: pid мог достаться чужому
-     * процессу, и стрелять вслепую нельзя.
+     * Ищем двумя способами: по pid-файлу (быстро) и обходом /proc (надёжно —
+     * файл могли не успеть записать). Чужие процессы нам не видны: начиная с
+     * Android 9 в /proc видны только процессы своего UID, так что случайно
+     * выстрелить в постороннее приложение нельзя. Дополнительно сверяем cmdline.
      */
-    private fun killLeftover() {
-        val f = pidFile()
-        val old = runCatching { f.readText().trim().toInt() }.getOrNull() ?: return
-        f.delete()
-        if (old <= 0 || old == pid) return
-        val cmdline = runCatching { File("/proc/$old/cmdline").readText() }.getOrNull() ?: return
-        if (!cmdline.contains("libmihomo.so")) return
-        Log.w(TAG, "остался движок от прошлого запуска, pid=$old — убираем")
-        Native.killPid(old, Native.SIGKILL)
+    fun killLeftover() {
+        val victims = linkedSetOf<Int>()
+        runCatching { pidFile().readText().trim().toInt() }.getOrNull()?.let { victims += it }
+        runCatching {
+            File("/proc").listFiles()?.forEach { entry ->
+                val p = entry.name.toIntOrNull() ?: return@forEach
+                if (p == android.os.Process.myPid()) return@forEach
+                val cmd = runCatching { File(entry, "cmdline").readText() }.getOrNull() ?: return@forEach
+                if (cmd.contains("libmihomo.so")) victims += p
+            }
+        }
+        for (p in victims) {
+            if (p <= 0 || p == pid) continue
+            val cmd = runCatching { File("/proc/$p/cmdline").readText() }.getOrNull() ?: continue
+            if (!cmd.contains("libmihomo.so")) continue
+            Log.w(TAG, "остался движок от прошлого запуска, pid=$p — убираем")
+            Native.killPid(p, Native.SIGKILL)
+            // Ждём, пока освободится управляющий порт: иначе новый экземпляр
+            // упрётся в «address already in use», и человеку покажут ложное
+            // «порт занят другим приложением».
+            val deadline = System.currentTimeMillis() + 1500
+            while (System.currentTimeMillis() < deadline && File("/proc/$p").exists()) {
+                Thread.sleep(50)
+            }
+        }
+        runCatching { pidFile().delete() }
     }
 
     /** Новый токен управляющего канала. Вызывается перед сборкой конфига. */
@@ -107,6 +138,7 @@ class Engine(private val context: Context, private val store: Store) {
         val bytes = ByteArray(24)
         SecureRandom().nextBytes(bytes)
         secret = bytes.joinToString("") { "%02x".format(it) }
+        controlCache = null
         return secret
     }
 
@@ -120,24 +152,35 @@ class Engine(private val context: Context, private val store: Store) {
     fun waitReady(timeoutMs: Long = 15_000): Started {
         val deadline = System.currentTimeMillis() + timeoutMs
         val ctl = control
+        var checks = 0
         while (System.currentTimeMillis() < deadline) {
-            if (!isAlive()) return Started.Died(logHint())
+            if (!isAlive()) return Started.Died(diedReason())
             if (ctl.isOurEngine()) return Started.Ok
-            val hint = portBusyHint()
-            if (hint != null) return Started.PortBusy(hint)
+            // Журнал читаем не на каждой итерации: это файл на диске.
+            if (++checks % 7 == 0) portBusyHint()?.let { return Started.PortBusy(it) }
             Thread.sleep(150)
         }
-        return Started.Timeout(logHint())
+        return Started.Timeout(store.logTail(5))
     }
 
-    private fun logHint(): String {
-        val tail = store.logTail(30)
-        return tail.lines().lastOrNull { it.isNotBlank() }.orEmpty()
+    /** Почему движок умер: код выхода от хелпера плюс последняя строка журнала. */
+    private fun diedReason(): String {
+        val code = lastExit
+        val human = when (code) {
+            125 -> "не удалось передать туннель движку"
+            126 -> "не удалось перейти в рабочий каталог"
+            127 -> "файл движка не запустился"
+            else -> null
+        }
+        val tail = store.logTail(5).lines().lastOrNull { it.isNotBlank() }.orEmpty()
+        return listOfNotNull(human, code?.let { "код $it" }, tail.takeIf { it.isNotEmpty() })
+            .joinToString(", ")
+            .ifEmpty { "причина неизвестна" }
     }
 
     private fun portBusyHint(): String? {
-        val text = runCatching { store.logFile().readText() }.getOrNull()?.lowercase() ?: return null
-        return if (text.contains("address already in use") || text.contains("bind:")) {
+        val tail = store.logTail(40).lowercase()
+        return if (tail.contains("address already in use") || tail.contains("bind:")) {
             "Порт управления занят другим приложением."
         } else null
     }
@@ -149,10 +192,21 @@ class Engine(private val context: Context, private val store: Store) {
         data class Timeout(val message: String) : Started()
     }
 
-    fun stop() {
+    /**
+     * Останавливает движок.
+     * @param wait ждать корректного завершения. false — только сигнал, без
+     *   блокировки: так вызывают из onDestroy, где держать главный поток нельзя.
+     */
+    fun stop(wait: Boolean = true) {
         val p = pid
         if (p <= 0) return
         Native.killPid(p, Native.SIGTERM)
+        if (!wait) {
+            Native.killPid(p, Native.SIGKILL)
+            pid = 0
+            runCatching { pidFile().delete() }
+            return
+        }
         // Даём закрыть соединения, потом добиваем: висящий движок с живым
         // туннелем — это «интернета нет» до перезагрузки телефона.
         val deadline = System.currentTimeMillis() + 3000
@@ -170,5 +224,17 @@ class Engine(private val context: Context, private val store: Store) {
 
     companion object {
         private const val TAG = "novpn.engine"
+
+        /** Хвост текстового файла без чтения его целиком. */
+        fun tailOf(file: File, maxBytes: Long): String = runCatching {
+            if (!file.exists()) return ""
+            RandomAccessFile(file, "r").use { raf ->
+                val from = (raf.length() - maxBytes).coerceAtLeast(0)
+                raf.seek(from)
+                val buf = ByteArray((raf.length() - from).toInt())
+                raf.readFully(buf)
+                String(buf, Charsets.UTF_8)
+            }
+        }.getOrDefault("")
     }
 }

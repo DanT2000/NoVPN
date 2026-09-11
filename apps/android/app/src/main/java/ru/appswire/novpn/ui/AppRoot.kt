@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +39,11 @@ import ru.appswire.novpn.data.Repo
 
 enum class Tab { HOME, ROUTING, CONNECTION, SETTINGS }
 
+/** Хост ссылки для сообщения человеку: сравнивать он будет именно адрес панели. */
+private fun hostOf(url: String): String = runCatching {
+    java.net.URI(url).host ?: url
+}.getOrDefault(url).ifEmpty { url }
+
 @Composable
 fun AppRoot(
     repo: Repo,
@@ -50,15 +56,57 @@ fun AppRoot(
     val state by repo.state.collectAsState()
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
     var screen by rememberSaveable { mutableStateOf<String?>(null) }
+    // Ссылку, пришедшую снаружи, подставляем в поле только после явного согласия.
+    var accepted by remember { mutableStateOf<String?>(null) }
+    var ask by remember { mutableStateOf<String?>(null) }
 
-    // Ссылка из панели: если приложение ещё не настроено — ведём через первый
-    // запуск, иначе сразу открываем экран подписки с подставленным адресом.
+    // Ссылка из панели. Прислать её может любое приложение и любая веб-страница,
+    // поэтому молча подменять подписку нельзя: спрашиваем, и только потом
+    // открываем экран подписки с подставленным адресом.
     LaunchedEffect(deepLink) {
-        if (deepLink != null && state.onboarded) tab = Tab.CONNECTION
+        when {
+            deepLink == null -> Unit
+            !state.onboarded -> accepted = deepLink
+            state.subUrl.isBlank() || state.subUrl == deepLink -> {
+                accepted = deepLink
+                tab = Tab.CONNECTION
+            }
+            else -> ask = deepLink
+        }
+    }
+
+    ask?.let { incoming ->
+        AlertDialog(
+            onDismissRequest = {
+                ask = null
+                onDeepLinkUsed()
+            },
+            title = { Text("Заменить подписку?") },
+            text = {
+                Text(
+                    "Другое приложение или сайт предлагает подписку на " +
+                        "${hostOf(incoming)}. Сейчас подключена ${hostOf(state.subUrl)}. " +
+                        "Меняйте только если сами открыли эту ссылку у своего провайдера.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    accepted = incoming
+                    ask = null
+                    tab = Tab.CONNECTION
+                }) { Text("Подставить") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    ask = null
+                    onDeepLinkUsed()
+                }) { Text("Отмена") }
+            },
+        )
     }
 
     if (!state.onboarded) {
-        Onboarding(repo = repo, deepLink = deepLink, onDeepLinkUsed = onDeepLinkUsed)
+        Onboarding(repo = repo, deepLink = accepted, onDeepLinkUsed = onDeepLinkUsed)
         return
     }
 
@@ -119,7 +167,7 @@ fun AppRoot(
 
                 Tab.CONNECTION -> ConnectionScreen(
                     repo = repo,
-                    deepLink = deepLink,
+                    deepLink = accepted,
                     onDeepLinkUsed = onDeepLinkUsed,
                     onRulesChanged = onRulesChanged,
                 )

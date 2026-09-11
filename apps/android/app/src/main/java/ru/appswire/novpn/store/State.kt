@@ -31,8 +31,9 @@ data class Settings(
     /** Подключаться автоматически при запуске и после перезагрузки телефона. */
     val autoconnect: Boolean = true,
     val autoUpdateLists: Boolean = true,
-    /** Локальная сеть напрямую: роутер, NAS, внутренние сайты мимо VPN. */
-    val bypassLocal: Boolean = true,
+    /** Локальная сеть напрямую: роутер, NAS, внутренние сайты мимо VPN.
+     *  Выключено по умолчанию — так же, как на десктопе. */
+    val bypassLocal: Boolean = false,
     val customLocalDomains: List<String> = emptyList(),
     /** cloudflare | google | quad9 | custom. */
     val dnsProvider: String = "cloudflare",

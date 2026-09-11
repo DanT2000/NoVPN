@@ -93,12 +93,36 @@ class Store(context: Context) {
 
     fun logFile(): File = File(engineDir(), "engine.log")
 
-    /** Хвост журнала движка — для экрана диагностики. */
-    fun logTail(lines: Int = 200): String = runCatching {
+    /**
+     * Конфиг движка пишем атомарно и только отсюда: его одновременно
+     * перезаписывает и сторож (перезапуск движка), и применение правил при
+     * смене сети. Два одновременных обычных writeText дали бы перемешанный
+     * YAML, и движок отверг бы конфиг целиком.
+     * @return текст ошибки или null.
+     */
+    fun writeConfig(text: String): String? = runCatching {
+        engineDir()
+        writeAtomic("engine/config.yaml", text)
+        null
+    }.getOrElse { it.message ?: "ошибка записи" }
+
+    /** В конфиге ключи подписки и токен управления — после отключения он не нужен. */
+    fun deleteConfig() {
+        runCatching { configFile().delete() }
+    }
+
+    /**
+     * Хвост журнала движка — для экрана диагностики. Читаем с конца: за долгую
+     * сессию журнал вырастает, и грузить его целиком ради последних строк значит
+     * уронить приложение по памяти ровно тогда, когда человек пришёл разбираться.
+     */
+    fun logTail(lines: Int = 200): String {
         val f = logFile()
-        if (!f.exists()) return@runCatching "Журнал пока пуст."
-        f.readLines().takeLast(lines).joinToString("\n")
-    }.getOrDefault("Журнал прочитать не удалось.")
+        if (!f.exists()) return "Журнал пока пуст."
+        val text = ru.appswire.novpn.vpn.Engine.tailOf(f, maxBytes = 64L * 1024)
+        if (text.isEmpty()) return "Журнал прочитать не удалось."
+        return text.lines().takeLast(lines).joinToString(System.lineSeparator())
+    }
 
     companion object {
         private const val STATE = "state.json"

@@ -12,6 +12,7 @@ import ru.appswire.novpn.core.ListsParser
 import ru.appswire.novpn.core.Meta
 import ru.appswire.novpn.core.Rules
 import ru.appswire.novpn.core.Sub
+import ru.appswire.novpn.core.deniedHuman
 
 /**
  * Контрактные тесты клиента. Повторяют тесты десктопа (`core.rs`, `sub.rs`,
@@ -238,5 +239,207 @@ class CoreTest {
         assertFalse(ListsParser.looksLikeList("[]"))
         assertFalse(ListsParser.looksLikeList("""{"detail":"not found"}"""))
         assertTrue(ListsParser.looksLikeList("""{"items":["a.com"]}"""))
+    }
+
+    // ── проверки под находки сверки с десктопом ──
+
+    @Test
+    fun `литерал адреса не путается с доменом и не уходит в резолвер`() {
+        assertTrue(Config.isIpv4Literal("203.0.113.7"))
+        assertFalse(Config.isIpv4Literal("1.2.3"))
+        assertFalse(Config.isIpv4Literal("1.2.3.4.5"))
+        assertFalse(Config.isIpv4Literal("1.2.3.256"))
+        assertTrue(Config.isIpv6Literal("2001:db8::1"))
+        assertTrue(Config.isIpv6Literal("::1"))
+        assertFalse(Config.isIpv6Literal("1:2:3:4:5:6:7:8:9:10"))
+        assertFalse(Config.isIpv6Literal("example.com"))
+    }
+
+    @Test
+    fun `анти-петля для адресов сервера даёт корректную маску`() {
+        assertEquals(
+            "IP-CIDR,203.0.113.7/32,DIRECT,no-resolve",
+            Config.buildRules(Rules(), listOf("203.0.113.7")).first(),
+        )
+        assertEquals(
+            "IP-CIDR,2001:db8::1/128,DIRECT,no-resolve",
+            Config.buildRules(Rules(), listOf("2001:db8::1")).first(),
+        )
+        assertEquals("DOMAIN,1.2.3.4.5,DIRECT", Config.buildRules(Rules(), listOf("1.2.3.4.5")).first())
+    }
+
+    @Test
+    fun `анти-петля работает и в полном режиме, и выше правил человека`() {
+        val full = Config.buildRules(Rules(smart = false), listOf("1.vpn.example"))
+        assertEquals("DOMAIN,1.vpn.example,DIRECT", full.first())
+        val smart = Config.buildRules(
+            Rules(userDomains = listOf(DomainRule("1.vpn.example", vpn = true))),
+            listOf("1.vpn.example"),
+        )
+        assertEquals("DOMAIN,1.vpn.example,DIRECT", smart.first())
+    }
+
+    @Test
+    fun `регэкспы не по силам движку отбрасываются`() {
+        assertFalse(Config.safeRegex("^(?=.*ad).*"))
+        assertFalse(Config.safeRegex("(a)\\1"))
+        assertFalse(Config.safeRegex("a,b"))
+        assertTrue(Config.safeRegex("^ads\\..*"))
+        val b = ListsParser.Builder()
+        ListsParser.absorbUpstreamItem("regexp:^(?=.*ad).*", b)
+        ListsParser.absorbUpstreamItem("regexp:^ok\\..*", b)
+        assertEquals(listOf("^ok\\..*"), b.build(null, null, null).vpnRegex)
+    }
+
+    @Test
+    fun `битые адреса и маски не попадают в список`() {
+        val b = ListsParser.Builder()
+        listOf("1:2:3:4:5:6:7:8:9:10", "1.2.3.4/-1", "1.2.3.4/33", "10.0.0.0/8").forEach {
+            ListsParser.absorbUpstreamItem(it, b)
+        }
+        val l = b.build(null, null, null)
+        assertEquals(listOf("10.0.0.0/8"), l.vpnIps)
+        assertFalse(Config.buildRules(Rules(listVpnIps = l.vpnIps), emptyList()).any { it.contains("-1") })
+    }
+
+    @Test
+    fun `плюс в имени сервера остаётся плюсом`() {
+        val nodes = (Sub.parse("vless://u1@a.example:443#RU+Moscow") as Sub.Parsed.Nodes).nodes
+        assertEquals("RU+Moscow", nodes[0].name)
+    }
+
+    @Test
+    fun `негодный порт откатывается на 443`() {
+        val nodes = (Sub.parse("vless://u1@a.example:99999#Х") as Sub.Parsed.Nodes).nodes
+        assertEquals(443, nodes[0].map["port"])
+    }
+
+    @Test
+    fun `пустые значения в точку подключения не пишутся`() {
+        val nodes = (Sub.parse("vless://u1@a.example:443?type=grpc&security=reality#Х") as Sub.Parsed.Nodes).nodes
+        @Suppress("UNCHECKED_CAST")
+        val grpc = nodes[0].map["grpc-opts"] as Map<String, Any?>
+        assertTrue(grpc.isEmpty())
+        @Suppress("UNCHECKED_CAST")
+        val reality = nodes[0].map["reality-opts"] as Map<String, Any?>
+        assertFalse(reality.containsKey("public-key"))
+    }
+
+    @Test
+    fun `из чужого clash-конфига берём только точки и группы`() {
+        val yaml = """
+            mixed-port: 7890
+            listeners:
+              - name: open
+                type: socks
+                listen: 0.0.0.0
+                port: 1080
+            proxies:
+              - { name: A, type: ss, server: a.example, port: 443, cipher: aes-128-gcm, password: p }
+        """.trimIndent()
+        val parsed = Sub.parse(yaml) as Sub.Parsed.Clash
+        assertEquals(setOf("proxies"), parsed.root.keys)
+        val out = Config.build(parsed, Rules(), selected = "A", tunFd = 3)
+        assertFalse("чужие слушатели в конфиг не попадают", out.contains("listeners"))
+    }
+
+    @Test
+    fun `в туннельном режиме локальный прокси выключен`() {
+        val parsed = Sub.parse("vless://u1@a.example:443#Х")
+        val withTun = Yaml().load<Map<String, Any?>>(Config.build(parsed, Rules(), selected = null, tunFd = 3))
+        assertEquals(0, withTun["mixed-port"])
+        val noTun = Yaml().load<Map<String, Any?>>(Config.build(parsed, Rules(), selected = null, tunFd = null))
+        assertEquals(Config.MIXED_PORT, noTun["mixed-port"])
+    }
+
+    @Test
+    fun `свой DNS разбирается, мусор откатывается на cloudflare`() {
+        val parsed = Sub.parse("vless://u1@a.example:443#Х")
+        fun ns(provider: String): List<*> {
+            val root = Yaml().load<Map<String, Any?>>(
+                Config.build(parsed, Rules(dnsProvider = provider), selected = null, tunFd = 3),
+            )
+            return (root["dns"] as Map<*, *>)["nameserver"] as List<*>
+        }
+        assertEquals(listOf("https://dns.google/dns-query", "https://8.8.8.8/dns-query"), ns("google"))
+        assertEquals(listOf("https://a.example/dns-query", "1.1.1.1"), ns("https://a.example/dns-query, 1.1.1.1"))
+        assertTrue(ns("   ").first().toString().contains("1.1.1.1"))
+    }
+
+    @Test
+    fun `строгий private dns не понижается до открытого резолвера`() {
+        val parsed = Sub.parse("vless://u1@a.example:443#Х")
+        val root = Yaml().load<Map<String, Any?>>(
+            Config.build(
+                parsed,
+                Rules(systemDns = listOf("tls://dns.adguard.com"), listDirectDomains = listOf("gosuslugi.ru")),
+                selected = null,
+                tunFd = 3,
+            ),
+        )
+        val dns = root["dns"] as Map<*, *>
+        assertEquals(listOf("tls://dns.adguard.com"), (dns["nameserver-policy"] as Map<*, *>)["+.gosuslugi.ru"])
+        assertFalse(dns.containsKey("default-nameserver"))
+    }
+
+    @Test
+    fun `причины отказа панели человеческие`() {
+        assertTrue(deniedHuman("disabled").contains("отключён"))
+        assertTrue(deniedHuman("expired").contains("истёк"))
+        assertTrue(deniedHuman("traffic").contains("трафика"))
+        assertTrue(deniedHuman("not_found").contains("недействительна"))
+    }
+
+    @Test
+    fun `адрес панели выводится из ссылки-подписки`() {
+        assertEquals("https://vpn.example", Meta.baseOf("https://vpn.example/sub/T/full"))
+        assertEquals("https://vpn.example", Meta.baseOf("https://vpn.example"))
+        assertNull(Meta.baseOf("не ссылка"))
+    }
+
+    @Test
+    fun `vmess и base64-список разбираются`() {
+        val payload = "{" +
+            "\"add\":\"a.example\",\"port\":\"443\",\"id\":\"uuid-1\"," +
+            "\"ps\":\"Точка\",\"net\":\"ws\",\"tls\":\"tls\",\"path\":\"/ws\"}"
+        val vmess = "vmess://" + java.util.Base64.getEncoder().encodeToString(payload.toByteArray())
+        val nodes = (Sub.parse(vmess) as Sub.Parsed.Nodes).nodes
+        assertEquals("vmess", nodes[0].map["type"])
+        assertEquals("Точка", nodes[0].name)
+        @Suppress("UNCHECKED_CAST")
+        val ws = nodes[0].map["ws-opts"] as Map<String, Any?>
+        assertEquals("/ws", ws["path"])
+
+        val links = "vless://u1@a.example:443#A" + "\n" + "vless://u2@b.example:443#B"
+        val list = java.util.Base64.getEncoder().encodeToString(links.toByteArray())
+        assertEquals(2, (Sub.parse(list) as Sub.Parsed.Nodes).nodes.size)
+    }
+
+    @Test
+    fun `мусор вместо подписки даёт понятную ошибку`() {
+        val e = runCatching { Sub.parse("это не подписка") }.exceptionOrNull()
+        assertTrue(e is IllegalArgumentException)
+        assertTrue(e!!.message!!.contains("разобрать"))
+    }
+
+    @Test
+    fun `в каждом правиле ровно три поля — запятая не просочилась`() {
+        val out = Config.buildRules(
+            Rules(
+                userDomains = listOf(DomainRule("a,b.example", vpn = true), DomainRule("ok.example", vpn = true)),
+                listVpnKeywords = listOf("хорошее", "пло хое", "с,запятой"),
+                listDirectDomains = listOf("gosuslugi.ru"),
+            ),
+            listOf("1.vpn.example"),
+        )
+        for (rule in out) {
+            // MATCH,<цель> и составное AND-правило устроены иначе — они не про шаблон.
+            if (rule.startsWith("AND,") || rule.startsWith("MATCH,")) continue
+            val parts = rule.split(",")
+            assertTrue("кривое правило: " + rule, parts.size in 3..4)
+            assertTrue("пустой шаблон: " + rule, parts[1].isNotBlank())
+        }
+        assertFalse(out.any { it.contains("a,b.example") })
+        assertFalse(out.any { it.contains("пло хое") })
     }
 }

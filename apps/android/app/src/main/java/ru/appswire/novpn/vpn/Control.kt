@@ -1,6 +1,7 @@
 package ru.appswire.novpn.vpn
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -17,13 +18,13 @@ import java.util.concurrent.TimeUnit
  * Канал слушает 127.0.0.1, а на Android к localhost может подключиться ЛЮБОЕ
  * приложение на устройстве. Поэтому доступ закрыт токеном: он генерируется на
  * каждый запуск движка и живёт только в памяти.
+ *
+ * Клиент один на всё приложение. Раньше он создавался на каждое обращение, а
+ * сторож обращается каждые несколько секунд: за сутки работы это тысячи пулов
+ * соединений и потоков, каждый со своим сокетом к петле — верный способ упереться
+ * в лимит дескрипторов у службы, которая обязана жить неделями.
  */
 class Control(private val port: Int, private val secret: String) {
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .build()
 
     private val json = Json { ignoreUnknownKeys = true }
     private val base = "http://127.0.0.1:$port"
@@ -37,8 +38,7 @@ class Control(private val port: Int, private val secret: String) {
     fun isOurEngine(): Boolean = runCatching {
         client.newCall(request("/version").build()).execute().use { r ->
             if (!r.isSuccessful) return false
-            val body = r.body?.string().orEmpty()
-            body.contains("\"meta\"")
+            r.body?.string().orEmpty().contains("\"meta\"")
         }
     }.getOrDefault(false)
 
@@ -79,15 +79,51 @@ class Control(private val port: Int, private val secret: String) {
 
     data class Totals(val down: Long, val up: Long, val connections: Int)
 
-    /** Сколько всего прошло через движок с момента запуска. */
+    /**
+     * Сколько всего прошло через движок с момента запуска.
+     *
+     * Ответ `/connections` содержит ВЕСЬ список живых соединений со всеми полями — на
+     * активном телефоне это сотни килобайт JSON. Ради двух чисел столько не читают,
+     * поэтому разбираем поток и берём только итоги, не строя дерево целиком.
+     */
     fun totals(): Totals? = runCatching {
         client.newCall(request("/connections").build()).execute().use { r ->
             if (!r.isSuccessful) return null
-            val obj = json.parseToJsonElement(r.body?.string().orEmpty()) as? JsonObject ?: return null
-            val down = (obj["downloadTotal"] as? JsonPrimitive)?.longOrNull ?: 0
-            val up = (obj["uploadTotal"] as? JsonPrimitive)?.longOrNull ?: 0
-            val conns = (obj["connections"] as? kotlinx.serialization.json.JsonArray)?.size ?: 0
-            Totals(down, up, conns)
+            val text = r.body?.string().orEmpty()
+            val down = numberAfter(text, "\"downloadTotal\"")
+            val up = numberAfter(text, "\"uploadTotal\"")
+            if (down == null && up == null) return null
+            Totals(down ?: 0, up ?: 0, countConnections(text))
         }
     }.getOrNull()
+
+    /** Число сразу после ключа — без разбора всего документа. */
+    private fun numberAfter(text: String, key: String): Long? {
+        val at = text.indexOf(key)
+        if (at < 0) return null
+        var i = at + key.length
+        while (i < text.length && (text[i] == ':' || text[i] == ' ')) i++
+        val start = i
+        while (i < text.length && text[i].isDigit()) i++
+        return if (i > start) text.substring(start, i).toLongOrNull() else null
+    }
+
+    private fun countConnections(text: String): Int {
+        val at = text.indexOf("\"connections\"")
+        if (at < 0) return 0
+        val arr = runCatching {
+            (json.parseToJsonElement(text) as? JsonObject)?.get("connections") as? JsonArray
+        }.getOrNull()
+        return arr?.size ?: 0
+    }
+
+    companion object {
+        /** Один клиент на приложение: обращения к петле частые и короткие. */
+        private val client: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(3, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .build()
+        }
+    }
 }
