@@ -59,6 +59,22 @@ export function flagFromIso(iso: string): string {
   return String.fromCodePoint(...[...up].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
 }
 
+/**
+ * ISO-код страны для имени сервера: из ведущего эмодзи-флага (если панель его
+ * поставила) либо подобранный по названию страны в имени. На компьютере эмодзи-
+ * флаги не рисуются (Windows показывает буквы), поэтому по коду грузим картинку.
+ */
+export function isoOf(name: string): string | null {
+  const ri = name.trim().match(/^(\p{Regional_Indicator})(\p{Regional_Indicator})/u);
+  if (ri) {
+    const a = ri[1].codePointAt(0)! - 0x1f1e6 + 65;
+    const b = ri[2].codePointAt(0)! - 0x1f1e6 + 65;
+    return String.fromCharCode(a, b);
+  }
+  for (const [re, iso] of COUNTRIES) if (re.test(name)) return iso;
+  return null;
+}
+
 /** Флаг для имени сервера: готовый из remarks либо подобранный по стране в имени. */
 export function flagOf(name: string): string {
   const ready = name.trim().match(RI)?.[1];

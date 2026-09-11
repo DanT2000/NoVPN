@@ -7,7 +7,7 @@ import { RouteFork } from '../components/RouteFork';
 import { Banner, STATE_INFO, StatusDot, Toggle } from '../components/ui';
 import { IconChevron } from '../components/icons';
 import { count } from '../lib/plural';
-import { withFlag } from '../lib/flag';
+import { FlagName } from '../components/Flag';
 import { inTauri, isElevated, relaunchElevated, vpnConflicts } from '../lib/tauri';
 
 const BTN: Record<string, string> = {
@@ -106,11 +106,16 @@ export function Home() {
           {info.label}
         </div>
         <div className="mono" style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 7 }}>
-          {reconnecting
-            ? 'Переподключение…'
-            : live && server
-              ? `${withFlag((selectedNode ?? server).name)}${server.ping != null ? ` · ${server.ping} ms` : ''}`
-              : info.note || '—'}
+          {reconnecting ? (
+            'Переподключение…'
+          ) : live && server ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+              <FlagName name={(selectedNode ?? server).name} height={12} />
+              {server.ping != null ? `· ${server.ping} ms` : ''}
+            </span>
+          ) : (
+            info.note || '—'
+          )}
         </div>
       </div>
 
