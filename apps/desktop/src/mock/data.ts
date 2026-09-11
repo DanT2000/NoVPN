@@ -14,6 +14,7 @@ interface PresetApp {
   reason: string;
   processes: string[];
   installedOnSource: boolean;
+  icon?: string;
 }
 
 interface PresetSite {
@@ -39,6 +40,7 @@ export const APPS: AppRule[] = P_APPS.map((a) => ({
   found: a.installedOnSource,
   processes: a.processes,
   reason: a.reason,
+  icon: a.icon,
   source: 'list',
 }));
 

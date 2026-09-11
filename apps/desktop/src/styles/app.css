@@ -305,6 +305,13 @@
   line-height: 1;
 }
 
+/* Значок приложения картинкой: вписываем в ту же плитку, с лёгкой подложкой. */
+.avatar-img {
+  object-fit: contain;
+  padding: 5px;
+  background: var(--surface-btn-2);
+}
+
 /* ─── Метка маршрута ──────────────────────────────────────── */
 .route {
   flex: none;
@@ -495,4 +502,13 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* Значок приложения в пункте быстрой настройки. */
+.check-icon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  object-fit: contain;
+  border-radius: 5px;
 }

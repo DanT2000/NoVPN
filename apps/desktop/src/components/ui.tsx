@@ -13,8 +13,12 @@ function tint(hex: string, a: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
 
-/** Значок сервиса: буква фирменным цветом на его же приглушённой подложке. */
-export function Avatar({ name, domain }: { name: string; domain?: string }) {
+/** Значок сервиса. Если задан icon (готовый значок приложения) — рисуем картинку,
+ *  иначе букву фирменным цветом на приглушённой подложке. */
+export function Avatar({ name, domain, icon }: { name: string; domain?: string; icon?: string }) {
+  if (icon) {
+    return <img className="avatar avatar-img" src={icon} alt="" aria-hidden />;
+  }
   const n = name.toLowerCase();
   const svc =
     (domain ? lookup(domain) : undefined) ??
@@ -56,15 +60,19 @@ export function Check({
   onChange,
   title,
   note,
+  icon,
 }: {
   on: boolean;
   onChange: (v: boolean) => void;
   title: string;
   note?: string;
+  /** Значок приложения (для быстрой настройки), необязательно. */
+  icon?: string;
 }) {
   return (
     <button type="button" className="check" role="checkbox" aria-checked={on} onClick={() => onChange(!on)}>
       <span className="box">{on ? <IconCheck size={11} /> : null}</span>
+      {icon ? <img className="check-icon" src={icon} alt="" aria-hidden /> : null}
       <span style={{ flex: 1 }}>
         <span className="t-name" style={{ display: 'block' }}>{title}</span>
         {note ? (

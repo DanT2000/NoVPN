@@ -7,6 +7,7 @@ import { useStore } from '../state/store';
 import { Avatar, Dialog, Empty, RouteSwitch, RouteTag, Toggle } from '../components/ui';
 import { IconChevron, IconPlus, IconRefresh, IconTrash } from '../components/icons';
 import { domainForApp, search } from '../mock/catalog';
+import { appIconUrl } from '../lib/appIcon';
 import { appsInstalled, appsRunning, pickExe, pickFolder } from '../lib/tauri';
 import type { AppItem } from '../lib/tauri';
 import { useEffect } from 'react';
@@ -114,7 +115,7 @@ function AppsTab() {
 
       {shown.map((a) => (
         <div key={a.id} className="item">
-          <Avatar name={a.name} />
+          <Avatar name={a.name} icon={appIconUrl(a.icon)} />
           <button type="button" className="item-main" onClick={() => setEdit(a)}>
             <span className="item-name">{a.name}</span>
             <span className="item-meta">
@@ -124,10 +125,13 @@ function AppsTab() {
                 'Не найдено'
               ) : advanced ? (
                 a.processes.join(', ')
-              ) : a.source === 'auto' ? (
-                'Найдено'
-              ) : (
+              ) : a.source === 'manual' ? (
+                // Вручную — только то, что человек сам добавил файлом/папкой.
+                // Всё остальное найденное — «Найдено» (раньше ошибочно писалось
+                // «Указано вручную», потому что source='auto' нигде не ставился).
                 'Указано вручную'
+              ) : (
+                'Найдено'
               )}
             </span>
           </button>

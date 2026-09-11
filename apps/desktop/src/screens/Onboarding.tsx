@@ -2,6 +2,7 @@
    галочки. Технических подробностей на этих экранах нет намеренно. */
 
 import { useState } from 'react';
+import { appIconUrl } from '../lib/appIcon';
 import { useStore } from '../state/store';
 import { Check } from '../components/ui';
 import { IconCheck } from '../components/icons';
@@ -197,7 +198,8 @@ function StepSetup({ quick = false }: { quick?: boolean }) {
             on={apps[a.id] ?? false}
             onChange={(v) => setApps((x) => ({ ...x, [a.id]: v }))}
             title={a.name}
-            note="Найдено на компьютере"
+            note="Пойдёт через VPN"
+            icon={appIconUrl(a.icon)}
           />
         ))
       )}

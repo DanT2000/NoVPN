@@ -75,6 +75,8 @@ export interface AppRule {
   path?: string;
   /** Почему приложению нужен VPN — показываем человеку вместо догадок. */
   reason?: string;
+  /** Значок приложения из встроенного пака (apps.json icon), если есть. */
+  icon?: string;
   source: 'auto' | 'manual' | 'list';
 }
 
