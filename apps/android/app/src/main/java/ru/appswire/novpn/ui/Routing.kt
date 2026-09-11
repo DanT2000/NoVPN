@@ -183,9 +183,17 @@ private fun AppsTab(repo: Repo) {
 
     val rules = state.apps.associate { it.pkg to it.route }
     val needle = query.trim()
+    // Сначала выбранные приложения, потом остальные: через VPN → напрямую → авто.
+    // Внутри группы — по алфавиту. Так видно, что человек уже настроил.
+    fun rank(route: String?): Int = when (route) {
+        "vpn" -> 0
+        "direct" -> 1
+        else -> 2
+    }
     val shown = (all ?: emptyList())
         .filter { showSystem || !it.system }
         .filter { needle.isEmpty() || it.label.contains(needle, true) || it.pkg.contains(needle, true) }
+        .sortedWith(compareBy({ rank(rules[it.pkg]) }, { it.label.lowercase() }))
 
     fun setRoute(pkg: String, route: String?) {
         val was = rules[pkg]

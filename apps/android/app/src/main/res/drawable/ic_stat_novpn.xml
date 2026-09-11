@@ -1,6 +1,7 @@
 <!-- Значок в строке состояния и на плитке быстрых настроек: система красит его
-     в один цвет, поэтому только белый силуэт щита с буквой N — те же контуры,
-     что у иконки приложения (ic_launcher_foreground) и NoVpnIcons.Brand. -->
+     в один цвет. Сплошной щит с вырезанной буквой N (evenOdd) — так силуэт
+     читается крупнее и заметнее, чем тонкий контур. Те же контуры, что у иконки
+     приложения (ic_launcher_foreground) и NoVpnIcons.Brand. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
@@ -9,8 +10,6 @@
     android:tint="#FFFFFF">
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M12,2L4,5.5v6.2c0,4.6 3.4,8.9 8,10.3c4.6,-1.4 8,-5.7 8,-10.3V5.5L12,2zM12,4.2l6,2.6v4.9c0,3.5 -2.5,6.9 -6,8.1c-3.5,-1.2 -6,-4.6 -6,-8.1V6.8L12,4.2z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M8.7,8h1.9l3,4.6V8h1.7v8h-1.9l-3,-4.6V16H8.7z" />
+        android:fillType="evenOdd"
+        android:pathData="M12,2L4,5.5v6.2c0,4.6 3.4,8.9 8,10.3c4.6,-1.4 8,-5.7 8,-10.3V5.5L12,2zM8.7,8h1.9l3,4.6V8h1.7v8h-1.9l-3,-4.6V16H8.7z" />
 </vector>

@@ -402,7 +402,22 @@ class NoVpnService : VpnService() {
                 val now = System.currentTimeMillis()
                 if (now - lastHealthTick >= HEALTH_TICK_MS && VpnBus.state.value == ConnState.ON) {
                     lastHealthTick = now
-                    triggerFailover()
+                    if (VpnBus.reserve.value != null) {
+                        // В резервном режиме подбор нужен всегда (проверить возврат).
+                        triggerFailover()
+                    } else {
+                        // Обычный режим: не срываемся на первом же промахе — одиночный
+                        // сбой проверки бывает при микрообрыве сети и проходит сам.
+                        // Полноценный подбор запускаем только после двух подряд, чтобы
+                        // не пугать человека ложным «резерв недоступен».
+                        val cur = VpnBus.server.value
+                        if (cur != null && worksThrough(eng, cur)) {
+                            healthMisses = 0
+                        } else if (++healthMisses >= 2) {
+                            healthMisses = 0
+                            triggerFailover()
+                        }
+                    }
                 }
             }
         }
@@ -410,6 +425,9 @@ class NoVpnService : VpnService() {
 
     @Volatile
     private var lastHealthTick = 0L
+
+    @Volatile
+    private var healthMisses = 0
 
     private fun restartEngine(eng: Engine): Boolean {
         val fd = tun?.fd ?: return false
@@ -636,6 +654,21 @@ class NoVpnService : VpnService() {
             firstWorking(eng, reserveCandidates())?.let { c ->
                 Log.i(TAG, "уход на рабочий резервный сервер ${c.name}")
                 applySelection(eng, c)
+                return
+            }
+
+            // Пока перебирали резерв (это секунды), обычный сервер мог ожить —
+            // блокировки и микрообрывы бывают краткими. Перепроверяем текущий и
+            // все обычные, прежде чем пугать человека: именно из-за этого приходило
+            // ложное «резерв недоступен», хотя интернет уже работал.
+            if (current != null && worksThrough(eng, current)) {
+                VpnBus.setDiagnosis(NetDiagnosis.OK)
+                lastNotifiedDiag = NetDiagnosis.OK
+                return
+            }
+            firstWorking(eng, normalCandidates().filter { it.name != current })?.let { c ->
+                applySelection(eng, c)
+                VpnBus.setDiagnosis(NetDiagnosis.OK)
                 return
             }
 
