@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "09ee6f3809aa56c1782cbd6e366d5813bbbd067d2347879400a7ae6f5fba0eaf",
-  "signature": "lhIJ14JKc7llM0D+vNyxwya8tYirxgeMisFprL2fVLw1W5swa66vdl9Segc56tHtedFud0v9YCWlZtPmMX1KDg==",
-  "sizeBytes": 16568282,
-  "notes": "Расширение теперь ставится из папки приложения: Настройки → «Скачать расширение», один раз указать папку браузеру — дальше она обновляется сама при запуске и раз в час."
+  "sha256": "cd24877fff94e2da57530aae6b53ac2f961f73e24b8b1f66f2452706b698d07a",
+  "signature": "wjhTORRHCTiim/7fU5/Vwdl9o5ftZQgBizyJtjYLUotz+lwToit18qs2ao3lyzn0fnLsEqImNOwOyKKLHOi1Dg==",
+  "sizeBytes": 16571838,
+  "notes": "Флаг страны рядом с именем сервера — на главной и в списке серверов."
 }
