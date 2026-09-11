@@ -16,7 +16,7 @@
 | `vpn/Native.kt` + `cpp/spawn.c` | запуск движка процессом с передачей ему TUN-дескриптора |
 | `system/Oem.kt` | разрешения, без которых оболочки закрывают приложение в фоне |
 
-Движок — **mihomo**, тот же, что на десктопе, и конфиг для него собирается из тех
+Движок — **mihomo** (linux-сборка, см. «Грабли»), тот же, что на десктопе, и конфиг для него собирается из тех
 же правил. Туннель поднимает система (`VpnService`), а дескриптор отдаётся движку
 через `tun.file-descriptor`: отдельного tun2socks не нужно.
 
@@ -58,9 +58,14 @@ APK окажется в `app/build/outputs/apk/debug/`.
 
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb logcat -s novpn.service novpn.engine novpn.boot
+adb logcat -s novpn.service novpn.engine novpn.boot   # служба и запуск движка
+adb logcat -s novpn.mihomo                            # журнал самого движка (и на боевой сборке)
 adb shell run-as ru.appswire.novpn.debug cat files/engine/engine.log
 ```
+
+Первое, что должно появиться в `novpn.mihomo` после «Запустить»: строка
+`[TUN] Tun adapter listening at: tun0(fd=3)`. Если её нет — туннель поднят системой,
+но движок его не читает, и «Подключено» на экране ничего не значит.
 
 Что проверять обязательно:
 
@@ -77,6 +82,7 @@ adb shell run-as ru.appswire.novpn.debug cat files/engine/engine.log
 
 | Что | Чем кончалось | Как решено |
 |---|---|---|
+| **android**-сборка mihomo при старте TUN читает `/data/system/packages.xml` (root-only) | слушатель TUN не поднимался, а движок жил и отвечал — «Подключено» при полной тишине в туннеле | берём **linux**-сборки (`mihomo-linux-*`): статические, на Android работают как есть, этой ветки в них нет (`server_notandroid.go`) |
 | targetSdk 35 запрещает открытый HTTP **всему** приложению, включая 127.0.0.1 | управляющий канал движка не отвечал, VPN не поднимался вовсе | `network_security_config.xml`: cleartext разрешён только петле |
 | `useLegacyPackaging = false` | движок остаётся внутри apk, запускать нечего | флаг включён |
 | `nameserver: system` | движок не находит резолвер и молча уезжает на свои зашитые адреса | системные DNS берём у ConnectivityManager с **не-VPN** сети |

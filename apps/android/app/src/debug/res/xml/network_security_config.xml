@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Отладочная сборка: то же, что и в main, плюс адрес хоста эмулятора (10.0.2.2).
+  Нужен для локального стенда — подписка и meta.json отдаются с компьютера, и
+  туннель проверяется целиком без боевой панели. В боевую сборку не попадает:
+  source set debug перекрывает main только для debug.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

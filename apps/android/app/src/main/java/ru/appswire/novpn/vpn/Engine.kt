@@ -16,6 +16,11 @@ import java.security.SecureRandom
  * execve запрещён политикой W^X). Файл там появляется благодаря
  * `useLegacyPackaging = true` в build.gradle.kts; без этого флага библиотеки
  * остаются внутри apk и запускать будет нечего.
+ *
+ * Сборка движка — GOOS=linux, не android (scripts/fetch-engine.py). Android-
+ * вариант при старте TUN читает /data/system/packages.xml, а это root-only:
+ * слушатель туннеля не поднимался, движок при этом жил и отвечал по
+ * управляющему каналу, и телефон показывал «Подключено» без единого пакета.
  */
 class Engine(private val context: Context, private val store: Store) {
 
@@ -87,7 +92,42 @@ class Engine(private val context: Context, private val store: Store) {
         pid = result
         runCatching { pidFile().writeText(result.toString()) }
         Log.i(TAG, "движок запущен, pid=$pid")
+        mirrorLog()
         return null
+    }
+
+    /**
+     * Пишет журнал движка в системный лог.
+     *
+     * Без этого разобрать «подключено, но трафика нет» нельзя вообще: боевая
+     * сборка не отлаживаемая, файлы приложения снаружи не прочитать, а движок
+     * пишет только в свой файл. Строки уровня info секретов не содержат —
+     * там домены и адреса серверов, то же самое видно в экране журнала.
+     */
+    private fun mirrorLog() {
+        val file = store.logFile()
+        val startedFor = pid
+        Thread {
+            var shown = 0L
+            while (pid == startedFor && pid > 0) {
+                runCatching {
+                    val size = file.length()
+                    if (size < shown) shown = 0            // журнал обрезали при рестарте
+                    if (size > shown) {
+                        java.io.RandomAccessFile(file, "r").use { raf ->
+                            raf.seek(shown)
+                            val buf = ByteArray((size - shown).toInt())
+                            raf.readFully(buf)
+                            shown = size
+                            String(buf, Charsets.UTF_8).lineSequence()
+                                .filter { it.isNotBlank() }
+                                .forEach { Log.i(LOG_TAG, it) }
+                        }
+                    }
+                }
+                Thread.sleep(700)
+            }
+        }.apply { isDaemon = true; name = "novpn-engine-log" }.start()
     }
 
     private fun pidFile(): File = File(store.engineDir(), "engine.pid")
@@ -224,6 +264,9 @@ class Engine(private val context: Context, private val store: Store) {
 
     companion object {
         private const val TAG = "novpn.engine"
+
+        /** Отдельная метка, чтобы отфильтровать журнал движка: adb logcat -s novpn.mihomo */
+        private const val LOG_TAG = "novpn.mihomo"
 
         /** Хвост текстового файла без чтения его целиком. */
         fun tailOf(file: File, maxBytes: Long): String = runCatching {

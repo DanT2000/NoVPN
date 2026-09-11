@@ -32,18 +32,29 @@ MIHOMO = "v1.19.30"
 #
 # При смене версии: поменять MIHOMO, запустить с --update-hashes, глазами сверить
 # суммы с опубликованными в релизе mihomo и вписать сюда.
+# Сборки GOOS=linux, а не android — это не опечатка.
+#
+# Android-сборка mihomo при старте TUN безусловно строит «android rules»
+# (listener/sing_tun/server_android.go, тег `android && !cmfa`): читает
+# /data/system/packages.xml, чтобы сопоставить пакеты и UID. Без root файл
+# недоступен, слушатель TUN не поднимается, а движок при этом жив и отвечает по
+# управляющему каналу — приложение показывало «Подключено» при полной тишине в
+# туннеле. Linux-сборка статическая, на Android запускается как есть, а эта
+# ветка в ней отсутствует (server_notandroid.go). Проверено на эмуляторе
+# Android 16: TUN поднимается, трафик идёт. Для x86_64 берём -compatible
+# (GOAMD64=v1): эмуляторы и редкие x86-планшеты не обязаны уметь AVX2.
 ABIS = {
     "arm64-v8a": (
-        "mihomo-android-arm64-v8-{v}.gz",
-        "94344144936968f25e7089bbeac2d87f3caf67574ba433511424724ad7435dad",
+        "mihomo-linux-arm64-{v}.gz",
+        "b9456718a8955364b9a77c80f74dca49ded10f071c1c6b4513a0ea68a3d87a50",
     ),
     "armeabi-v7a": (
-        "mihomo-android-armv7-{v}.gz",
-        "db22d32f3d6816daabca14b6df7c5513c1d8d4e636a9ccc7c470ef0d9f36679d",
+        "mihomo-linux-armv7-{v}.gz",
+        "79b0f192c79fff6de39cf29c3a974e6fd26bb30cc4317892a890fc7c14c4f758",
     ),
     "x86_64": (
-        "mihomo-android-amd64-{v}.gz",
-        "07f38978fae8067d110acdd78a02af6d37ef8b8719ef67d4f9c0d6c22b9e7781",
+        "mihomo-linux-amd64-compatible-{v}.gz",
+        "8ad44e28fe72be4640254b96741b677f4074991b99186cc4486a1c28ded02b1a",
     ),
 }
 

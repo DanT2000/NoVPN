@@ -109,3 +109,6 @@ apps/desktop/src-tauri/bin/*.exe
 apps/desktop/src-tauri/bin/*.dll
 # Сгенерированные Tauri схемы ACL пересоздаются при сборке.
 apps/desktop/src-tauri/gen/
+
+# рабочие деревья агентов Claude Code
+.claude/worktrees/
