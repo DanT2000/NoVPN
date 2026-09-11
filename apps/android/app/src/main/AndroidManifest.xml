@@ -75,6 +75,22 @@
                  она true, а значение false отключило бы «Постоянный VPN» целиком. -->
         </service>
 
+        <!-- Плитка в шторке быстрых настроек: тот же щит с буквой N, что и в
+             уведомлении. Состояние берёт из VpnBus, включает/выключает службу. -->
+        <service
+            android:name=".system.QuickTile"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_novpn"
+            android:label="NoVPN"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
+
         <receiver
             android:name=".system.BootReceiver"
             android:directBootAware="false"

@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, true)
         repo = Repo.get(this)
         handleDeepLink(intent)
+        handleConnectRequest(intent)
 
         setContent {
             val state by repo.state.collectAsState()
@@ -65,6 +66,18 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleDeepLink(intent)
+        handleConnectRequest(intent)
+    }
+
+    /**
+     * Плитка быстрых настроек не может показать системный диалог разрешения на
+     * VPN — открывает нас с просьбой подключиться. Флаг снимаем сразу, чтобы
+     * поворот экрана не запускал подключение второй раз.
+     */
+    private fun handleConnectRequest(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_CONNECT, false) != true) return
+        intent.removeExtra(EXTRA_CONNECT)
+        if (repo.state.value.onboarded && !VpnBus.isRunning) connect()
     }
 
     private fun handleDeepLink(intent: Intent?) {
@@ -101,5 +114,10 @@ class MainActivity : ComponentActivity() {
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         if (!granted) runCatching { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
+    }
+
+    companion object {
+        /** Открыть приложение и сразу подключиться (из плитки быстрых настроек). */
+        const val EXTRA_CONNECT = "ru.appswire.novpn.CONNECT"
     }
 }
