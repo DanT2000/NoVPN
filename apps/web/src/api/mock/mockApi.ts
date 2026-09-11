@@ -267,6 +267,8 @@ export const mockApi: ApiClient = {
       allowedServers: input.allowedServers,
       allowedProtocols: input.allowedProtocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg'),
       allowedProxies: input.allowedProxies ?? [],
+      // Тип User теперь требует признак приоритетного доступа — новым по умолчанию нет.
+      priorityAccess: false,
       isActive: true, telegram: null, createdAt: nowIso(), lastActivityAt: null,
       // Новым — только личная ссылка: вход по коду для них не открывается.
       accessToken: 'tok-' + Math.random().toString(36).slice(2, 14), codeLoginUntil: null,
@@ -858,6 +860,80 @@ export const mockApi: ApiClient = {
       : [];
     return { query: q, hits };
   },
+
+  // ── резервная маршрутизация (in-memory) ──
+  async getBackup() {
+    await wait(150);
+    return {
+      shared: BACKUP_SUBS.filter((s) => s.ownerUserId === null).map((s) => ({ ...s })),
+      personal: BACKUP_SUBS.filter((s) => s.ownerUserId !== null).map((s) => ({ ...s })),
+    };
+  },
+  async addBackup(body) {
+    await wait(250);
+    const now = nowIso();
+    const sub: import('@novpn/shared').BackupSubscription = {
+      id: nextId('bk'), ownerUserId: null, title: body.title || body.url, url: body.url,
+      userAgent: body.userAgent?.trim() ? body.userAgent.trim() : null,
+      hwid: body.hwid?.trim() ? body.hwid.trim() : null,
+      enabled: body.enabled !== false,
+      provider: { upload: null, download: null, total: null, expire: null },
+      format: null, serverCount: 0, lastFetchedAt: null, lastError: null,
+      internalBytes: 0, createdAt: now, updatedAt: now,
+    };
+    BACKUP_SUBS.unshift(sub);
+    BACKUP_SERVERS[sub.id] = [];
+    log(`Добавлена резервная подписка «${sub.title}»`);
+    return { ...sub };
+  },
+  async updateBackup(id, body) {
+    await wait(200);
+    const s = BACKUP_SUBS.find((x) => x.id === id);
+    if (!s) throw new Error('Подписка не найдена.');
+    if (body.title !== undefined) s.title = body.title;
+    if (body.url !== undefined) s.url = body.url;
+    if (body.userAgent !== undefined) s.userAgent = body.userAgent?.trim() ? body.userAgent.trim() : null;
+    if (body.hwid !== undefined) s.hwid = body.hwid?.trim() ? body.hwid.trim() : null;
+    if (body.enabled !== undefined) s.enabled = body.enabled;
+    s.updatedAt = nowIso();
+    return { ...s };
+  },
+  async refreshBackup(id) {
+    await wait(500);
+    const s = BACKUP_SUBS.find((x) => x.id === id);
+    if (!s) throw new Error('Подписка не найдена.');
+    // Демо-фетч: заполняем состав и статистику провайдера правдоподобными числами.
+    const servers: import('@novpn/shared').BackupServer[] = [
+      { id: `${id}-1`, subscriptionId: id, name: 'Reserve NL', host: 'nl.reserve.example', port: 443, protocol: 'vless', enabled: true },
+      { id: `${id}-2`, subscriptionId: id, name: 'Reserve DE', host: 'de.reserve.example', port: 8443, protocol: 'trojan', enabled: true },
+    ];
+    BACKUP_SERVERS[id] = servers;
+    s.serverCount = servers.length;
+    s.format = 'base64';
+    s.lastFetchedAt = nowIso();
+    s.lastError = null;
+    s.provider = { upload: 12e9, download: 88e9, total: 500e9, expire: Math.floor(Date.now() / 1000) + 45 * 86400 };
+    s.internalBytes = Math.round(9e9 + Math.random() * 30e9);
+    return { ...s };
+  },
+  async deleteBackup(id): Promise<Ok> {
+    await wait(200);
+    const i = BACKUP_SUBS.findIndex((x) => x.id === id);
+    if (i >= 0) BACKUP_SUBS.splice(i, 1);
+    delete BACKUP_SERVERS[id];
+    return { ok: true };
+  },
+  async getBackupServers(id) {
+    await wait(180);
+    const s = BACKUP_SUBS.find((x) => x.id === id);
+    if (!s) throw new Error('Подписка не найдена.');
+    const servers = (BACKUP_SERVERS[id] ?? []).map((x) => ({ ...x }));
+    // Разбивка нашего расхода по людям: берём приоритетных пользователей демо-данных.
+    const usage = state.users
+      .filter((u) => u.priorityAccess)
+      .map((u, i) => ({ userId: u.id, name: u.name, bytes: Math.round((2 + 5 * ((i % 3) + 1)) * 1e9) }));
+    return { subscription: { ...s }, servers, usage };
+  },
 };
 
 // Демо-состояние канала обновлений десктопа.
@@ -909,6 +985,34 @@ const AR_BUILDS: import('@novpn/shared').AutoRouteBuild[] = [
     published: true,
   },
 ];
+// Демо-состояние резервной маршрутизации: один общий пул и одна личная подписка —
+// чтобы экран было видно в mock-режиме без бэкенда.
+const BACKUP_SUBS: import('@novpn/shared').BackupSubscription[] = [
+  {
+    id: 'bk_shared_1', ownerUserId: null, title: 'Аварийный пул (сборный)',
+    url: 'https://sub.reserve.example/abcd1234', userAgent: 'v2rayNG/1.9.5', hwid: null, enabled: true,
+    provider: { upload: 12e9, download: 88e9, total: 500e9, expire: Math.floor(Date.now() / 1000) + 45 * 86400 },
+    format: 'base64', serverCount: 2, lastFetchedAt: new Date(Date.now() - 36e5).toISOString(), lastError: null,
+    internalBytes: 21e9, createdAt: new Date(Date.now() - 20 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 36e5).toISOString(),
+  },
+  {
+    id: 'bk_personal_1', ownerUserId: 'u3', title: 'Личный резерв офиса',
+    url: 'https://sub.other.example/office-xyz', userAgent: null, hwid: 'HWID-OFFICE-01', enabled: true,
+    provider: { upload: 3e9, download: 40e9, total: null, expire: null },
+    format: 'base64', serverCount: 1, lastFetchedAt: new Date(Date.now() - 72e5).toISOString(), lastError: null,
+    internalBytes: 6e9, createdAt: new Date(Date.now() - 8 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 72e5).toISOString(),
+  },
+];
+const BACKUP_SERVERS: Record<string, import('@novpn/shared').BackupServer[]> = {
+  bk_shared_1: [
+    { id: 'bk_shared_1-1', subscriptionId: 'bk_shared_1', name: 'Reserve NL', host: 'nl.reserve.example', port: 443, protocol: 'vless', enabled: true },
+    { id: 'bk_shared_1-2', subscriptionId: 'bk_shared_1', name: 'Reserve DE', host: 'de.reserve.example', port: 8443, protocol: 'trojan', enabled: true },
+  ],
+  bk_personal_1: [
+    { id: 'bk_personal_1-1', subscriptionId: 'bk_personal_1', name: 'Office reserve', host: 'x.other.example', port: 443, protocol: 'vless', enabled: true },
+  ],
+};
+
 function mockFormat(url: string): 'json' | 'lst' | 'txt' | 'srs' {
   const ext = (url.split(/[?#]/)[0] ?? '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
   return ext === 'lst' || ext === 'txt' || ext === 'srs' ? ext : 'json';

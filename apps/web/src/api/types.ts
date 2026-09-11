@@ -4,6 +4,8 @@
 import type {
   AppClient,
   AppSettings,
+  BackupServer,
+  BackupSubscription,
   BootstrapData,
   CheckCodeResult,
   Device,
@@ -65,8 +67,30 @@ export type UpdateUserPatch = Partial<
     | 'allowedProtocols'
     | 'allowedProxies'
     | 'expiresAt'
+    // Привилегия «Приоритетный доступ» — общий резервный пул NoVPN. Патчится тем же
+    // updateUser, что и остальной профиль (бэкенд маппит поле в колонку).
+    | 'priorityAccess'
   >
 >;
+
+// ── резервная маршрутизация (внешние VPN-подписки как аварийный пул) ──
+/** Тело создания резервной подписки. Пустой userAgent — провайдеру уходит дефолтный. */
+export interface BackupInput {
+  title: string;
+  url: string;
+  userAgent?: string | null;
+  hwid?: string | null;
+  enabled?: boolean;
+}
+/** Патч резервной подписки — те же поля, все необязательны. */
+export type BackupPatch = Partial<BackupInput>;
+
+/** Развёрнутый состав подписки: серверы + наш расход по людям. */
+export interface BackupServersResult {
+  subscription: BackupSubscription;
+  servers: BackupServer[];
+  usage: Array<{ userId: string; name: string; bytes: number }>;
+}
 
 export interface AddServerInput {
   name: string;
@@ -289,6 +313,17 @@ export interface ApiClient {
   buildAutoRoute(opts?: { refresh?: boolean }): Promise<AutoRouteBuildResult>;
   rollbackAutoRoute(version: number): Promise<{ ok: boolean; reason: string }>;
   searchAutoRoute(q: string): Promise<{ query: string; hits: AutoRouteSearchHit[] }>;
+
+  // ── admin: резервная маршрутизация (внешние VPN-подписки) ──
+  /** shared — общий пул администратора; personal — личные подписки пользователей (справочно). */
+  getBackup(): Promise<{ shared: BackupSubscription[]; personal: BackupSubscription[] }>;
+  addBackup(body: BackupInput): Promise<BackupSubscription>;
+  updateBackup(id: string, body: BackupPatch): Promise<BackupSubscription>;
+  /** Форсированный фетч подписки у провайдера (обновляет серверы и статистику). */
+  refreshBackup(id: string): Promise<BackupSubscription>;
+  deleteBackup(id: string): Promise<Ok>;
+  /** Состав подписки: список серверов + разбивка нашего расхода по пользователям. */
+  getBackupServers(id: string): Promise<BackupServersResult>;
 
   // ── admin: графики истории + здоровье серверов ──
   getStats(days: number): Promise<{ days: number; series: StatsPoint[] }>;

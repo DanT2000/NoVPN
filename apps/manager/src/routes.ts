@@ -29,6 +29,8 @@ import { resolveTgProxyUrl, restartBot, tgApi, broadcastToLinked } from './servi
 import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
 import * as repo from './repo.js';
+import * as backupRepo from './backupRepo.js';
+import { refreshBackup } from './services/backupSync.js';
 import { checkMirror } from './services/routingSync.js';
 import * as autoroute from './services/autoroute.js';
 import { renderGuidePage } from './services/guides.js';
@@ -573,7 +575,53 @@ router.get('/sub/:token/meta.json', (req, res) => {
       geoip: `${origin}/routing/autoroute/geoip.dat`,
     },
     profiles,
+    // Резервный пул: сколько аварийных серверов доступно этому пользователю и где
+    // их забрать. Сами серверы в обычном списке НЕ показываются — клиент держит
+    // их скрытыми и уходит на них только при недоступности обычной инфраструктуры.
+    backup: {
+      available: backupRepo.userHasBackup(u.id),
+      count: backupRepo.backupServerLinksForUser(u.id).length,
+      priority: u.priorityAccess,
+      sub: `${origin}/sub/${token}/backup`,
+    },
   });
+});
+
+// Резервный пул конкретного пользователя: base64-список ссылок аварийных серверов
+// (общий пул при «Приоритетном доступе» + личная резервная подписка). Формат тот же,
+// что у обычной подписки — на устройстве его разбирает тот же движок.
+router.get('/sub/:token/backup', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).send('');
+  const entries = backupRepo.backupServerLinksForUser(u.id);
+  const links = entries.map((e) => e.link).filter(Boolean);
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Profile-Title', 'NoVPN Reserve');
+  res.send(Buffer.from(links.join('\n'), 'utf8').toString('base64'));
+});
+
+// Личная резервная подписка пользователя: добавить/заменить и удалить. Не смешивается
+// с обычной подпиской — участвует только в аварийном пуле. Управляется из приложения.
+router.put('/sub/:token/backup/personal', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  const url = String((req.body ?? {}).url ?? '').trim();
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json(err('bad_url', 'Ссылка должна начинаться с http:// или https://'));
+  // Одна личная резервная подписка на пользователя: если есть — заменяем URL.
+  const existing = backupRepo.listBackupSubscriptions(u.id)[0];
+  const sub = existing
+    ? backupRepo.updateBackupSubscription(existing.id, { url, enabled: 1, etag: null, last_modified: null })!
+    : backupRepo.insertBackupSubscription({ ownerUserId: u.id, title: 'Личная резервная', url });
+  void refreshBackup(sub.id).catch(() => {});
+  res.json({ ok: true, id: sub.id });
+});
+
+router.delete('/sub/:token/backup/personal', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  for (const s of backupRepo.listBackupSubscriptions(u.id)) backupRepo.deleteBackupSubscription(s.id);
+  res.json({ ok: true });
 });
 
 // Пер-серверная подписка: ОДИН сервер со СВОИМ обходом/политикой (не общий балансир).
@@ -1019,6 +1067,7 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.trafficLimitGb !== undefined) fields.traffic_limit_gb = b.trafficLimitGb;
   if (b.expiresAt !== undefined) fields.expires_at = b.expiresAt; // null = снять срок
   if (b.resetPolicy !== undefined) fields.reset_policy = b.resetPolicy === 'monthly' ? 'monthly' : 'never';
+  if (b.priorityAccess !== undefined) fields.priority_access = b.priorityAccess ? 1 : 0;
   if (b.allowedServers !== undefined) fields.allowed_servers = JSON.stringify(b.allowedServers);
   if (b.allowedProtocols !== undefined)
     fields.allowed_protocols = JSON.stringify(
@@ -2104,6 +2153,72 @@ router.post('/api/admin/autoroute/rollback', requireAdmin, (req, res) => {
 router.get('/api/admin/autoroute/search', requireAdmin, (req, res) => {
   const q = String(req.query.q ?? '').slice(0, 253);
   res.json({ query: q, hits: autoroute.searchRules(q) });
+});
+
+// ── admin: резервная маршрутизация (внешние резервные подписки) ──
+// Общий пул администратора (owner=NULL) виден и управляется здесь; личные
+// резервные подписки пользователей показываем справочно (для их учёта расхода).
+router.get('/api/admin/backup', requireAdmin, (_req, res) => {
+  res.json({ shared: backupRepo.listBackupSubscriptions(null), personal: backupRepo.listBackupSubscriptions().filter((s) => s.ownerUserId) });
+});
+
+router.get('/api/admin/backup/:id/servers', requireAdmin, (req, res) => {
+  const sub = backupRepo.getBackupSubscription(req.params.id!);
+  if (!sub) return res.status(404).json(err('not_found', 'Резервная подписка не найдена.'));
+  res.json({ subscription: sub, servers: backupRepo.listBackupServers(sub.id), usage: backupRepo.backupTrafficBySub(sub.id) });
+});
+
+router.post('/api/admin/backup', requireAdmin, (req, res) => {
+  const b = req.body ?? {};
+  const url = String(b.url ?? '').trim();
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json(err('bad_url', 'Ссылка должна начинаться с http:// или https://'));
+  const sub = backupRepo.insertBackupSubscription({
+    ownerUserId: null, // общий пул админа
+    title: String(b.title ?? '').slice(0, 200),
+    url,
+    userAgent: b.userAgent ? String(b.userAgent).slice(0, 200) : null,
+    hwid: b.hwid ? String(b.hwid).slice(0, 200) : null,
+    enabled: b.enabled !== false,
+  });
+  repo.addLog(`Резервная подписка добавлена: ${sub.title || sub.url}`);
+  // Первый фетч сразу, чтобы админ увидел серверы и статистику без ожидания цикла.
+  void refreshBackup(sub.id).catch(() => {});
+  res.json(sub);
+});
+
+router.patch('/api/admin/backup/:id', requireAdmin, (req, res) => {
+  const cur = backupRepo.getBackupSubscription(req.params.id!);
+  if (!cur) return res.status(404).json(err('not_found', 'Резервная подписка не найдена.'));
+  const b = req.body ?? {};
+  const fields: Record<string, unknown> = {};
+  if (b.title !== undefined) fields.title = String(b.title).slice(0, 200);
+  if (b.url !== undefined) {
+    const url = String(b.url).trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json(err('bad_url', 'Ссылка должна начинаться с http:// или https://'));
+    fields.url = url;
+    fields.etag = null; // URL сменился — прежние условные заголовки недействительны
+    fields.last_modified = null;
+  }
+  if (b.userAgent !== undefined) fields.user_agent = b.userAgent ? String(b.userAgent).slice(0, 200) : null;
+  if (b.hwid !== undefined) fields.hwid = b.hwid ? String(b.hwid).slice(0, 200) : null;
+  if (b.enabled !== undefined) fields.enabled = b.enabled ? 1 : 0;
+  const updated = backupRepo.updateBackupSubscription(cur.id, fields);
+  res.json(updated);
+});
+
+router.post('/api/admin/backup/:id/refresh', requireAdmin, async (req, res) => {
+  const cur = backupRepo.getBackupSubscription(req.params.id!);
+  if (!cur) return res.status(404).json(err('not_found', 'Резервная подписка не найдена.'));
+  await refreshBackup(cur.id);
+  res.json(backupRepo.getBackupSubscription(cur.id));
+});
+
+router.delete('/api/admin/backup/:id', requireAdmin, (req, res) => {
+  const cur = backupRepo.getBackupSubscription(req.params.id!);
+  if (!cur) return res.status(404).json(err('not_found', 'Резервная подписка не найдена.'));
+  backupRepo.deleteBackupSubscription(cur.id);
+  repo.addLog(`Резервная подписка удалена: ${cur.title || cur.url}`);
+  res.json({ ok: true });
 });
 
 // ── admin: канал обновлений NoVPN Desktop ──

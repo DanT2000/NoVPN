@@ -343,12 +343,69 @@ CREATE TABLE IF NOT EXISTS proxy_accounts (
   quota_blocked INTEGER NOT NULL DEFAULT 0
 );
 
+-- ── Резервная маршрутизация ────────────────────────────────────────────────
+-- Внешние (сторонние) VPN-подписки как аварийный пул: когда обычные серверы
+-- NoVPN недоступны (белые списки, блокировки), приложение временно уходит на
+-- резерв. owner_user_id = NULL — общий пул администратора (доступен по привилегии
+-- «Приоритетный доступ»); заполнен — личная резервная подписка этого пользователя.
+CREATE TABLE IF NOT EXISTS backup_subscriptions (
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT,                                  -- NULL = общий пул админа
+  title TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL,
+  user_agent TEXT,                                     -- какой UA слать провайдеру (NULL = дефолт)
+  hwid TEXT,                                           -- HWID, если провайдер его требует
+  enabled INTEGER NOT NULL DEFAULT 1,
+  -- статистика самой внешней подписки (из заголовка Subscription-Userinfo)
+  sub_upload INTEGER,
+  sub_download INTEGER,
+  sub_total INTEGER,
+  sub_expire INTEGER,                                  -- unix-секунды
+  -- служебное для условного GET и диагностики
+  etag TEXT,
+  last_modified TEXT,
+  last_fetched_at TEXT,
+  last_error TEXT,
+  format TEXT,                                         -- base64|plain|clash|unknown
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Разобранные из подписки серверы (обновляются целиком при каждом успешном фетче).
+CREATE TABLE IF NOT EXISTS backup_servers (
+  id TEXT PRIMARY KEY,
+  subscription_id TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  link TEXT NOT NULL DEFAULT '',                       -- исходная ссылка конфига (отдаём клиенту как есть)
+  host TEXT NOT NULL DEFAULT '',
+  port INTEGER NOT NULL DEFAULT 443,
+  protocol TEXT NOT NULL DEFAULT 'unknown',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (subscription_id) REFERENCES backup_subscriptions(id) ON DELETE CASCADE
+);
+
+-- Наш внутренний учёт резервного расхода. Внешние серверы мы не опрашиваем по SSH,
+-- поэтому цифры сюда шлёт клиент (сколько прошло через резерв), в разрезе
+-- пользователь × подписка.
+CREATE TABLE IF NOT EXISTS backup_traffic (
+  user_id TEXT NOT NULL,
+  subscription_id TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, subscription_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 CREATE INDEX IF NOT EXISTS idx_devices_server ON devices(server_id);
 CREATE INDEX IF NOT EXISTS idx_history_user ON user_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_server ON jobs(server_id, state);
 CREATE INDEX IF NOT EXISTS idx_proxy_user ON proxy_accounts(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_login ON proxy_accounts(server_id, login);
+CREATE INDEX IF NOT EXISTS idx_backup_servers_sub ON backup_servers(subscription_id);
+CREATE INDEX IF NOT EXISTS idx_backup_subs_owner ON backup_subscriptions(owner_user_id);
 `);
 
 // Миграции для существующих БД (ADD COLUMN идемпотентно — игнорируем дубликаты).
@@ -462,6 +519,9 @@ for (const stmt of [
   'ALTER TABLE servers ADD COLUMN speedtest TEXT',
   // Самотесты сервера (JSON-массив результатов, новые первыми, до 10).
   'ALTER TABLE servers ADD COLUMN selftest TEXT',
+  // Приоритетный доступ: пользователь получает общий резервный пул NoVPN
+  // (внешние подписки админа) как аварийный маршрут поверх своей обычной подписки.
+  'ALTER TABLE users ADD COLUMN priority_access INTEGER NOT NULL DEFAULT 0',
 ]) {
   try {
     db.exec(stmt);

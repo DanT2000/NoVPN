@@ -113,6 +113,9 @@ function UserCardInner({ user }: { user: User }) {
   const [allowedServers, setAllowedServers] = useState<string[]>([...user.allowedServers]);
   const [protocols, setProtocols] = useState<Protocol[]>([...user.allowedProtocols]);
   const [proxies, setProxies] = useState<ProxyType[]>([...(user.allowedProxies ?? [])]);
+  // Приоритетный доступ — привилегия к общему резервному пулу NoVPN. Сохраняется
+  // тем же «Сохранить профиль», что и остальные поля.
+  const [priorityAccess, setPriorityAccess] = useState(user.priorityAccess);
   const [savingProfile, setSavingProfile] = useState(false);
 
   // ── Личная ссылка ──
@@ -228,6 +231,7 @@ function UserCardInner({ user }: { user: User }) {
         allowedServers,
         allowedProtocols: eff as User['allowedProtocols'],
         allowedProxies: effProxies,
+        priorityAccess,
       });
       showToast('Профиль сохранён');
     } finally {
@@ -630,6 +634,20 @@ function UserCardInner({ user }: { user: User }) {
             <span className="small muted">Каждому пользователю выдаётся отдельный логин.</span>
           </div>
         ) : null}
+
+        {/* Приоритетный доступ — привилегия к общему резервному пулу NoVPN (внешние
+            подписки-резервы). Стоит рядом с остальными правами профиля. */}
+        <div className="field" style={{ marginTop: 4 }}>
+          <label className="row" style={{ gap: 10, alignItems: 'center', cursor: 'pointer', justifyContent: 'space-between' }}>
+            <span>
+              <span style={{ fontWeight: 600 }}>Приоритетный доступ</span>
+              <span className="body small muted" style={{ display: 'block', marginTop: 2 }}>
+                Доступ к общему резервному пулу NoVPN.
+              </span>
+            </span>
+            <Toggle on={priorityAccess} onChange={setPriorityAccess} ariaLabel="Приоритетный доступ" />
+          </label>
+        </div>
       </Panel>
 
       <Panel

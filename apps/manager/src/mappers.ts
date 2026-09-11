@@ -33,6 +33,7 @@ export function rowToUser(r: any): User {
     allowedProtocols: j<Array<'xray' | 'amneziawg'>>(r.allowed_protocols, ['xray']),
     allowedProxies: j<Array<'http' | 'https' | 'socks5'>>(r.allowed_proxies, []),
     isActive: b(r.is_active),
+    priorityAccess: b(r.priority_access),
     telegram: r.telegram ?? null,
     createdAt: r.created_at,
     lastActivityAt: r.last_activity_at ?? null,

@@ -27,7 +27,7 @@ export type PublicRoute = 'home' | 'cabinet' | 'wizard' | 'devices' | 'apps';
 export type AdminRoute =
   | 'login' | 'dashboard' | 'users' | 'user-create' | 'user-created'
   | 'user-card' | 'servers' | 'server-wizard' | 'server-migrate' | 'telegram' | 'apps' | 'logs' | 'settings'
-  | 'smart-routing' | 'autoroute' | 'desktop-updates';
+  | 'smart-routing' | 'autoroute' | 'backup' | 'desktop-updates';
 
 export interface NavParams {
   userId?: string;
@@ -153,6 +153,7 @@ function pathForNav(nav: NavState): string {
       case 'settings': return '/admin/settings';
       case 'smart-routing': return '/admin/smart-routing';
       case 'autoroute': return '/admin/autoroute';
+      case 'backup': return '/admin/backup';
       case 'desktop-updates': return '/admin/desktop';
       default: return '/admin'; // dashboard и login
     }
@@ -181,7 +182,7 @@ function navForPath(p: string): NavState {
       if (seg[1] && seg[2] === 'migrate') return { area: 'admin', route: 'server-migrate', params: { serverId: seg[1] } };
       return { area: 'admin', route: 'servers', params: {} };
     }
-    if (seg[0] === 'telegram' || seg[0] === 'apps' || seg[0] === 'logs' || seg[0] === 'settings' || seg[0] === 'smart-routing' || seg[0] === 'autoroute') {
+    if (seg[0] === 'telegram' || seg[0] === 'apps' || seg[0] === 'logs' || seg[0] === 'settings' || seg[0] === 'smart-routing' || seg[0] === 'autoroute' || seg[0] === 'backup') {
       return { area: 'admin', route: seg[0], params: {} };
     }
     if (seg[0] === 'desktop') return { area: 'admin', route: 'desktop-updates', params: {} };

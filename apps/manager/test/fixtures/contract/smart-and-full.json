@@ -69,5 +69,11 @@
         "fullTimeoutHours": 0
       }
     }
-  ]
+  ],
+  "backup": {
+    "available": false,
+    "count": 0,
+    "priority": false,
+    "sub": "https://panel.example/sub/FIXTURE-TOKEN/backup"
+  }
 }

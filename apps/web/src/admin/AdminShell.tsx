@@ -15,6 +15,7 @@ import { Telegram } from './Telegram';
 import { AppsAdmin } from './AppsAdmin';
 import { SmartRouting } from './SmartRouting';
 import { AutoRoute } from './AutoRoute';
+import { BackupRouting } from './BackupRouting';
 import { DesktopUpdates } from './DesktopUpdates';
 import { Logs } from './Logs';
 import { Settings } from './Settings';
@@ -33,6 +34,7 @@ const NAV: NavItem[] = [
   { key: 'apps', label: 'Приложения', match: ['apps'] },
   { key: 'smart-routing', label: 'Умная маршрутизация', match: ['smart-routing'] },
   { key: 'autoroute', label: 'AutoRoute', match: ['autoroute'] },
+  { key: 'backup', label: 'Резервная маршрутизация', match: ['backup'] },
   { key: 'desktop-updates', label: 'Обновления приложения', match: ['desktop-updates'] },
   { key: 'logs', label: 'Логи', match: ['logs'] },
   { key: 'settings', label: 'Настройки', match: ['settings'] },
@@ -80,6 +82,7 @@ export function AdminShell() {
       {route === 'apps' && <AppsAdmin />}
       {route === 'smart-routing' && <SmartRouting />}
       {route === 'autoroute' && <AutoRoute />}
+      {route === 'backup' && <BackupRouting />}
       {route === 'desktop-updates' && <DesktopUpdates />}
       {route === 'logs' && <Logs />}
       {route === 'settings' && <Settings />}

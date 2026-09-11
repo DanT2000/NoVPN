@@ -228,4 +228,13 @@ export const httpApi: ApiClient = {
   rollbackAutoRoute: (version) => req<{ ok: boolean; reason: string }>('POST', '/api/admin/autoroute/rollback', { version }),
   searchAutoRoute: (q) =>
     req<{ query: string; hits: import('@novpn/shared').AutoRouteSearchHit[] }>('GET', `/api/admin/autoroute/search?q=${encodeURIComponent(q)}`),
+
+  // ── резервная маршрутизация ──
+  getBackup: () =>
+    req<{ shared: import('@novpn/shared').BackupSubscription[]; personal: import('@novpn/shared').BackupSubscription[] }>('GET', '/api/admin/backup'),
+  addBackup: (body) => req<import('@novpn/shared').BackupSubscription>('POST', '/api/admin/backup', body),
+  updateBackup: (id, body) => req<import('@novpn/shared').BackupSubscription>('PATCH', `/api/admin/backup/${id}`, body),
+  refreshBackup: (id) => req<import('@novpn/shared').BackupSubscription>('POST', `/api/admin/backup/${id}/refresh`),
+  deleteBackup: (id) => req<Ok>('DELETE', `/api/admin/backup/${id}`),
+  getBackupServers: (id) => req<import('../types').BackupServersResult>('GET', `/api/admin/backup/${id}/servers`),
 };

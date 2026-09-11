@@ -174,9 +174,53 @@ export interface User {
    *  установлены на сервере). Пусто — прокси недоступны. */
   allowedProxies: ProxyType[];
   isActive: boolean;
+  /** Приоритетный доступ: вместе с обычной подпиской пользователь получает общий
+   *  резервный пул NoVPN (внешние подписки админа) как аварийный маршрут. */
+  priorityAccess: boolean;
   telegram: string | null;
   createdAt: string;
   lastActivityAt: string | null;
+}
+
+/** Внешняя резервная подписка (сторонний провайдер) — аварийный пул. */
+export interface BackupSubscription {
+  id: string;
+  /** null — общий пул администратора; иначе id пользователя-владельца (личная резервная подписка). */
+  ownerUserId: string | null;
+  title: string;
+  url: string;
+  /** User-Agent для запроса к провайдеру (пусто — дефолтный). */
+  userAgent: string | null;
+  /** HWID, если провайдер его требует. */
+  hwid: string | null;
+  enabled: boolean;
+  /** Статистика самой внешней подписки (из заголовка Subscription-Userinfo). */
+  provider: {
+    upload: number | null;
+    download: number | null;
+    total: number | null;
+    /** unix-секунды. */
+    expire: number | null;
+  };
+  format: string | null;
+  serverCount: number;
+  lastFetchedAt: string | null;
+  lastError: string | null;
+  /** Наш внутренний расход по этой подписке (сумма по пользователям), байт. */
+  internalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Один сервер, разобранный из резервной подписки. */
+export interface BackupServer {
+  id: string;
+  subscriptionId: string;
+  name: string;
+  host: string;
+  port: number;
+  protocol: string;
+  enabled: boolean;
 }
 
 export interface Device {
