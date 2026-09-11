@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "cd24877fff94e2da57530aae6b53ac2f961f73e24b8b1f66f2452706b698d07a",
-  "signature": "wjhTORRHCTiim/7fU5/Vwdl9o5ftZQgBizyJtjYLUotz+lwToit18qs2ao3lyzn0fnLsEqImNOwOyKKLHOi1Dg==",
-  "sizeBytes": 16571838,
-  "notes": "Флаг страны рядом с именем сервера — на главной и в списке серверов."
+  "sha256": "0df043d6d5a75a2af0f8387b6338f6d7647abac5e6bead1d404a63089de6a543",
+  "signature": "Ogi8T5wdh7ZbM48xGn5bJuAlghMvhGB/qc+tcqA1a68sB3EV7d/zGCiyJERem4FY+w2Dc+8up22ybCDgNQfPDQ==",
+  "sizeBytes": 16652986,
+  "notes": "Настоящие флаги стран вместо букв на компьютере."
 }
