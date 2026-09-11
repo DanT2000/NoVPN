@@ -116,3 +116,4 @@ apps/desktop/src-tauri/gen/
 # Пакет data/ Android-клиента — исходники, а не данные панели. Правило data/
 # выше глушило его, и Repo.kt не попадал в git: свежий клон не собирался.
 !apps/android/app/src/main/java/ru/appswire/novpn/data/
+!apps/desktop/src/data/
