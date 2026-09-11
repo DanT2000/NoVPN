@@ -624,6 +624,28 @@ router.delete('/sub/:token/backup/personal', (req, res) => {
   res.json({ ok: true });
 });
 
+// Журнал диагностики от клиента (§13): телефон копит записи о том, что проверял и
+// как решил, и досылает их, когда интернет восстановился. Помогает понять причину
+// сбоев на этапе тестирования. Отправку можно выключить в настройках приложения.
+router.post('/sub/:token/diag', (req, res) => {
+  const u = repo.getUserBySubToken(String(req.params.token ?? ''));
+  if (!u || !u.isActive) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
+  const items = Array.isArray((req.body ?? {}).items) ? (req.body.items as unknown[]) : [];
+  const entries = items
+    .map((it) => it as { at?: unknown; kind?: unknown; text?: unknown })
+    .filter((it) => it && typeof it.text === 'string')
+    .map((it) => ({ at: String(it.at ?? ''), kind: String(it.kind ?? ''), text: String(it.text ?? '') }));
+  const saved = backupRepo.addClientDiag(u.id, entries);
+  res.json({ ok: true, saved });
+});
+
+// Админ: журнал диагностики конкретного пользователя.
+router.get('/api/admin/users/:id/diag', requireAdmin, (req, res) => {
+  const u = repo.getUser(req.params.id!);
+  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+  res.json({ entries: backupRepo.listClientDiag(u.id) });
+});
+
 // Отчёт клиента о резервном расходе: внешние серверы мы по SSH не опрашиваем,
 // поэтому сколько трафика ушло через резерв, знает только приложение. Присылает
 // host сервера и байты за интервал; подписку сопоставляем по host на бэкенде.

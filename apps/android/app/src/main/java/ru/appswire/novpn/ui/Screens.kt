@@ -693,14 +693,51 @@ fun BackgroundScreen(repo: Repo, onBack: () -> Unit) {
 fun LogScreen(repo: Repo, onBack: () -> Unit) {
     val c = NoVpnTheme.colors
     var text by remember { mutableStateOf(repo.store.logTail()) }
+    var diag by remember { mutableStateOf(repo.recentDiag()) }
     Viewport {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             BackRow(onBack)
             Spacer(Modifier.weight(1f))
-            Btn("Обновить", onClick = { text = repo.store.logTail() }, kind = BtnKind.SECONDARY, size = BtnSize.SM, icon = NoVpnIcons.Refresh)
+            Btn(
+                "Обновить",
+                onClick = { text = repo.store.logTail(); diag = repo.recentDiag() },
+                kind = BtnKind.SECONDARY,
+                size = BtnSize.SM,
+                icon = NoVpnIcons.Refresh,
+            )
         }
-        ScreenTitle("Журнал движка")
-        ScreenSub("Последние строки. Что происходило при подключении.")
+        ScreenTitle("Журнал")
+        ScreenSub("Диагностика подключения и последние строки движка.")
+
+        // Диагностика: что приложение проверяло и как решало (нет интернета, сервер
+        // недоступен, ограниченный режим, уход на резерв). Понятным языком.
+        if (diag.isNotEmpty()) {
+            SectionLabel("Диагностика", first = true)
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(ShapeCtrl)
+                    .background(c.surface)
+                    .border(1.dp, c.borderInner, ShapeCtrl)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                diag.forEach { e ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(e.at.substringAfter('T'), fontFamily = Mono, fontSize = 11.sp, color = c.textMuted2)
+                        Text(
+                            e.text,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            color = if (e.kind == "error") c.redFg else if (e.kind == "reserve") c.amberFg else c.textBody,
+                        )
+                    }
+                }
+            }
+            SectionLabel("Журнал движка")
+        } else {
+            SectionLabel("Журнал движка", first = true)
+        }
         Text(
             text,
             modifier = Modifier

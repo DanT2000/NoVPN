@@ -387,6 +387,19 @@ CREATE TABLE IF NOT EXISTS backup_servers (
   FOREIGN KEY (subscription_id) REFERENCES backup_subscriptions(id) ON DELETE CASCADE
 );
 
+-- Журнал диагностики подключения от клиента (§13): что телефон проверял и как
+-- решил (нет интернета / сервер недоступен / ограниченный режим / ушёл на резерв).
+-- Копится на устройстве и досылается, когда интернет восстановился. Помогает
+-- понять реальную причину сбоев. Храним ограниченный хвост на пользователя.
+CREATE TABLE IF NOT EXISTS client_diag (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  at TEXT NOT NULL,                                    -- время события (ISO, время устройства)
+  kind TEXT NOT NULL DEFAULT '',                       -- diagnosis|switch|reserve|error|info
+  text TEXT NOT NULL DEFAULT '',
+  received_at TEXT NOT NULL
+);
+
 -- Наш внутренний учёт резервного расхода. Внешние серверы мы не опрашиваем по SSH,
 -- поэтому цифры сюда шлёт клиент (сколько прошло через резерв), в разрезе
 -- пользователь × подписка.
@@ -406,6 +419,7 @@ CREATE INDEX IF NOT EXISTS idx_proxy_user ON proxy_accounts(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_login ON proxy_accounts(server_id, login);
 CREATE INDEX IF NOT EXISTS idx_backup_servers_sub ON backup_servers(subscription_id);
 CREATE INDEX IF NOT EXISTS idx_backup_subs_owner ON backup_subscriptions(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_client_diag_user ON client_diag(user_id, id);
 `);
 
 // Миграции для существующих БД (ADD COLUMN идемпотентно — игнорируем дубликаты).

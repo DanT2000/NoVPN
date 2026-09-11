@@ -239,6 +239,10 @@ export interface ApiClient {
   /** forever — бессрочно, без автосброса через N дней. */
   setCodeLogin(id: string, enabled: boolean, forever?: boolean): Promise<User>;
   deleteUser(id: string): Promise<Ok>;
+  /** Журнал диагностики клиента: что приложение проверяло и как решало при сбоях
+   *  подключения. Присылает телефон, если включена отправка диагностики. Новые
+   *  первыми, до 100 записей. */
+  getUserDiag(id: string): Promise<{ entries: Array<{ at: string; kind: string; text: string; receivedAt: string }> }>;
 
   // ── admin: servers ──
   testServerConnection(input: AddServerInput): Promise<TestServerConnectionResult>;

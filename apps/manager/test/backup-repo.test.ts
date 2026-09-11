@@ -110,6 +110,21 @@ test('расход относится на подписку по host серве
   assert.equal(backup.getBackupSubscription(sub.id)!.internalBytes, 5000);
 });
 
+test('журнал диагностики клиента копится и обрезается до 200', () => {
+  const u = mkUser('Диагностика');
+  backup.addClientDiag(u.id, [{ at: '2026-01-01T10:00:00', kind: 'info', text: 'Подключено' }]);
+  backup.addClientDiag(u.id, [{ at: '2026-01-01T10:01:00', kind: 'diagnosis', text: 'ru=+ ext=- → RESTRICTED' }]);
+  let list = backup.listClientDiag(u.id);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].text, 'ru=+ ext=- → RESTRICTED', 'новые первыми');
+  // Приём ограничен 100 за раз; тремя пачками загоняем > 200 и проверяем обрезку.
+  for (let b = 0; b < 3; b++) {
+    backup.addClientDiag(u.id, Array.from({ length: 100 }, (_, i) => ({ at: `t${b}-${i}`, kind: 'info', text: `e${b}-${i}` })));
+  }
+  list = backup.listClientDiag(u.id, 500);
+  assert.equal(list.length, 200, 'хвост обрезан до 200');
+});
+
 test('статистика провайдера из Subscription-Userinfo сохраняется', () => {
   const sub = backup.insertBackupSubscription({ ownerUserId: null, url: 'https://prov.example/stats' });
   backup.setBackupFetchResult(sub.id, {

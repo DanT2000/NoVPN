@@ -24,6 +24,7 @@ import ru.appswire.novpn.core.ServerEntry
 import ru.appswire.novpn.core.Sub
 import ru.appswire.novpn.core.deniedHuman
 import ru.appswire.novpn.net.Http
+import ru.appswire.novpn.store.DiagEntry
 import ru.appswire.novpn.store.SiteRule
 import ru.appswire.novpn.store.State
 import ru.appswire.novpn.store.Store
@@ -475,6 +476,65 @@ class Repo(private val app: Context) {
         val metaUrl = Meta.metaUrl(_state.value.subUrl) ?: return null
         return metaUrl.removeSuffix("/meta.json") + "/backup/personal"
     }
+
+    // ── журнал диагностики (§13) ──
+
+    private val diagLock = Any()
+    private val DIAG_MAX = 300
+
+    @Volatile
+    private var diagCache: MutableList<DiagEntry>? = null
+
+    private fun diagList(): MutableList<DiagEntry> {
+        diagCache?.let { return it }
+        synchronized(diagLock) {
+            diagCache?.let { return it }
+            val loaded = store.loadDiag().toMutableList()
+            diagCache = loaded
+            return loaded
+        }
+    }
+
+    /** Записать событие диагностики. Хвост ограничиваем, чтобы файл не рос. */
+    fun recordDiag(kind: String, text: String) {
+        synchronized(diagLock) {
+            val list = diagList()
+            list.add(DiagEntry(at = nowIsoLocal(), kind = kind, text = text))
+            while (list.size > DIAG_MAX) list.removeAt(0)
+            store.saveDiag(list)
+        }
+    }
+
+    /** Последние записи для показа в приложении (новые первыми). */
+    fun recentDiag(limit: Int = 50): List<DiagEntry> =
+        synchronized(diagLock) { diagList().takeLast(limit).asReversed() }
+
+    /** Досылает неотправленные записи на панель, когда есть интернет. Не бросает. */
+    suspend fun uploadDiag(): Unit = withContext(Dispatchers.IO) {
+        if (!_state.value.settings.sendDiagnostics) return@withContext
+        val pending = synchronized(diagLock) { diagList().filterNot { it.uploaded } }
+        if (pending.isEmpty()) return@withContext
+        val metaUrl = Meta.metaUrl(_state.value.subUrl) ?: return@withContext
+        val endpoint = metaUrl.removeSuffix("/meta.json") + "/diag"
+        val items = pending.joinToString(",") {
+            JsonObject(
+                mapOf(
+                    "at" to JsonPrimitive(it.at),
+                    "kind" to JsonPrimitive(it.kind),
+                    "text" to JsonPrimitive(it.text),
+                ),
+            ).toString()
+        }
+        val code = Http.send("POST", endpoint, "{\"items\":[$items]}") ?: return@withContext
+        if (code in 200..299) synchronized(diagLock) {
+            val list = diagList()
+            for (i in list.indices) if (!list[i].uploaded) list[i] = list[i].copy(uploaded = true)
+            store.saveDiag(list)
+        }
+    }
+
+    private fun nowIsoLocal(): String = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+        .format(java.util.Date())
 
     /** Отчёт о резервном расходе: сколько байт ушло через резервный host. */
     suspend fun reportReserveUsage(host: String, bytes: Long): Unit = withContext(Dispatchers.IO) {

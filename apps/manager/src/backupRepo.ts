@@ -237,6 +237,41 @@ export function attributeBackupTraffic(userId: string, host: string, bytes: numb
   return true;
 }
 
+// ── журнал диагностики от клиента (§13) ──
+
+export interface DiagEntry {
+  at: string;
+  kind: string;
+  text: string;
+}
+
+/** Принять пачку записей диагностики от клиента и обрезать хвост до лимита. */
+export function addClientDiag(userId: string, entries: DiagEntry[]): number {
+  if (!entries.length) return 0;
+  const now = nowIso();
+  const ins = db.prepare('INSERT INTO client_diag(user_id, at, kind, text, received_at) VALUES(?,?,?,?,?)');
+  const tx = db.transaction(() => {
+    for (const e of entries.slice(0, 100)) {
+      ins.run(userId, String(e.at || now).slice(0, 40), String(e.kind || '').slice(0, 24), String(e.text || '').slice(0, 500), now);
+    }
+    // Оставляем последние 200 записей на пользователя.
+    db.prepare(
+      `DELETE FROM client_diag WHERE user_id = @u AND id NOT IN (
+         SELECT id FROM client_diag WHERE user_id = @u ORDER BY id DESC LIMIT 200)`,
+    ).run({ u: userId });
+  });
+  tx();
+  return Math.min(entries.length, 100);
+}
+
+/** Последние записи диагностики пользователя (новые первыми). */
+export function listClientDiag(userId: string, limit = 100): Array<DiagEntry & { receivedAt: string }> {
+  const rows = db
+    .prepare('SELECT at, kind, text, received_at FROM client_diag WHERE user_id = ? ORDER BY id DESC LIMIT ?')
+    .all(userId, Math.min(limit, 200)) as any[];
+  return rows.map((r) => ({ at: r.at, kind: r.kind, text: r.text, receivedAt: r.received_at }));
+}
+
 /** Разбивка внутреннего резервного расхода по пользователям для одной подписки. */
 export function backupTrafficBySub(subscriptionId: string): Array<{ userId: string; name: string; bytes: number }> {
   const rows = db

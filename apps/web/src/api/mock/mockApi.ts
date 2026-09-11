@@ -656,6 +656,16 @@ export const mockApi: ApiClient = {
     await wait(300);
     return { ok: true, status: 200, version: '1.0.0' };
   },
+  async getUserDiag(_id: string) {
+    await wait(150);
+    const now = Date.now();
+    return {
+      entries: [
+        { at: new Date(now - 2 * 60000).toISOString(), kind: 'reserve', text: 'Основной сервер не отвечал — переключился на резервный.', receivedAt: new Date(now - 90000).toISOString() },
+        { at: new Date(now - 5 * 60000).toISOString(), kind: 'info', text: 'Проверка соединения: узел доступен, задержка 42 мс.', receivedAt: new Date(now - 4 * 60000).toISOString() },
+      ],
+    };
+  },
   async getServerMetrics(id: string, hours: number) {
     await wait(160);
     // Синтетика: точка в минуту, как на проде; нагрузка дышит по времени суток.

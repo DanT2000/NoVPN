@@ -5,6 +5,7 @@ import { useState } from 'react';
 import type { Device, IssueDeviceResult, Protocol, ProxyType, Server, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
+import { api } from '../api';
 import { CategoryPicker, Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader, Toggle } from '../components/ui';
 import { CleanupDialog, RenameDialog, isInactive } from '../components/DeviceDialogs';
 import { Qr } from '../components/Qr';
@@ -23,6 +24,13 @@ const posNum = (s: string): number | null => {
   const n = parseFloat(s.replace(',', '.'));
   return Number.isFinite(n) && n > 0 ? n : null;
 };
+/** Дата+время записи диагностики (моно, компактно): «11 сент., 14:30». */
+const diagTime = (iso: string): string =>
+  new Date(iso)
+    .toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    .replace(/\s*г\.?/, '');
+
+type DiagEntry = { at: string; kind: string; text: string; receivedAt: string };
 
 /** Какие VPN-протоколы реально установлены хотя бы на одном из выбранных серверов. */
 function installedOn(servers: Server[], ids: string[]): Protocol[] {
@@ -163,6 +171,24 @@ function UserCardInner({ user }: { user: User }) {
   const [issErr, setIssErr] = useState<string | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Device | null>(null);
+
+  // ── Диагностика подключения (ленивая загрузка при раскрытии) ──
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagEntries, setDiagEntries] = useState<DiagEntry[] | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagErr, setDiagErr] = useState<string | null>(null);
+  async function loadDiag() {
+    setDiagLoading(true);
+    setDiagErr(null);
+    try {
+      const r = await api.getUserDiag(user.id);
+      setDiagEntries(r.entries);
+    } catch (e) {
+      setDiagErr(e instanceof Error ? e.message : 'Не удалось загрузить диагностику');
+    } finally {
+      setDiagLoading(false);
+    }
+  }
 
   if (!data) return null;
 
@@ -830,6 +856,59 @@ function UserCardInner({ user }: { user: User }) {
       <Panel title="Telegram">
         <div>{user.telegram ? `Привязан: ${user.telegram}` : 'Не привязан'}</div>
         <span className="small muted">Привязка выполняется пользователем через бота.</span>
+      </Panel>
+
+      <Panel
+        title="Диагностика подключения"
+        extra={
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => {
+              const next = !diagOpen;
+              setDiagOpen(next);
+              if (next && diagEntries === null && !diagLoading) void loadDiag();
+            }}
+          >
+            {diagOpen ? 'Свернуть' : 'Показать'}
+          </button>
+        }
+      >
+        {diagOpen ? (
+          <>
+            <div className="body small muted" style={{ marginBottom: 10 }}>
+              Что приложение проверяло и как решало при сбоях подключения. Присылает телефон,
+              если в настройках включена отправка диагностики.
+            </div>
+            <div className="row" style={{ marginBottom: 10 }}>
+              <button className="btn btn-outline btn-sm" disabled={diagLoading} onClick={() => void loadDiag()}>
+                {diagLoading ? 'Обновляем…' : 'Обновить'}
+              </button>
+            </div>
+            {diagErr ? <div className="notice notice-red small">{diagErr}</div> : null}
+            {diagLoading && diagEntries === null ? (
+              <span className="small muted">Загрузка…</span>
+            ) : diagEntries && diagEntries.length > 0 ? (
+              diagEntries.map((e, i) => (
+                <div key={i} className="divide-row">
+                  <span className="small muted mono" style={{ flex: 'none' }}>
+                    {diagTime(e.at)}
+                  </span>
+                  <span
+                    className="small"
+                    style={{
+                      textAlign: 'right',
+                      color: e.kind === 'error' ? 'var(--red-fg)' : e.kind === 'reserve' ? 'var(--amber-fg)' : undefined,
+                    }}
+                  >
+                    {e.text}
+                  </span>
+                </div>
+              ))
+            ) : !diagErr ? (
+              <span className="small muted">Пока нет записей</span>
+            ) : null}
+          </>
+        ) : null}
       </Panel>
 
       <Panel title="История изменений">

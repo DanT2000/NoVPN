@@ -98,6 +98,16 @@ class Store(context: Context) {
         runCatching { file(RESERVE).delete() }
     }
 
+    // ── журнал диагностики (§13): копится и досылается на панель ──
+
+    fun loadDiag(): List<DiagEntry> = runCatching {
+        readText(DIAG)?.let { json.decodeFromString<List<DiagEntry>>(it) }
+    }.getOrNull() ?: emptyList()
+
+    fun saveDiag(entries: List<DiagEntry>) {
+        runCatching { writeAtomic(DIAG, json.encodeToString(kotlinx.serialization.builtins.ListSerializer(DiagEntry.serializer()), entries)) }
+    }
+
     /** Рабочий каталог движка: конфиг и журнал. */
     fun engineDir(): File = File(dir, "engine").apply { mkdirs() }
 
@@ -142,5 +152,6 @@ class Store(context: Context) {
         private const val META = "meta.json"
         private const val SUB = "subscription.txt"
         private const val RESERVE = "reserve.txt"
+        private const val DIAG = "diag.json"
     }
 }

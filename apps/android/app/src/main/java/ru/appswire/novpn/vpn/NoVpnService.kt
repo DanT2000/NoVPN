@@ -261,9 +261,13 @@ class NoVpnService : VpnService() {
         registerNetworkCallback()
         startWatchdog()
 
+        repo.recordDiag("info", "Подключено к серверу: ${node.name}")
+
         // Резервный пул обновляем в фоне, а затем сразу проверяем, что выбранный
         // сервер реально работает — если нет, подбор запускается без ожидания.
+        // Заодно досылаем накопленный журнал диагностики (интернет уже есть).
         scope.launch {
+            runCatching { repo.uploadDiag() }
             runCatching { repo.syncReserve() }
             triggerFailover()
         }
@@ -542,9 +546,12 @@ class NoVpnService : VpnService() {
         if (c.reserve) {
             VpnBus.setReserve(ReserveInfo(c.name, c.host))
             notify(notification("Резервное подключение", c.name))
+            repo.recordDiag("reserve", "Ушли на резервный сервер: ${c.name}")
         } else {
+            val wasReserve = VpnBus.reserve.value != null
             VpnBus.setReserve(null)
             notify(notification("Подключено", c.name))
+            repo.recordDiag("switch", if (wasReserve) "Вернулись на обычный сервер: ${c.name}" else "Переключение на сервер: ${c.name}")
         }
     }
 
@@ -608,11 +615,16 @@ class NoVpnService : VpnService() {
             val d = Diag.diagnose(serverAddrs())
             VpnBus.setDiagnosis(d.diagnosis)
             Log.i(TAG, "диагностика: ${d.detail}")
+            repo.recordDiag("diagnosis", "Обычные серверы не пропускают трафик. Диагностика: ${d.detail}")
+            scope.launch { runCatching { repo.uploadDiag() } }
             if (d.diagnosis == NetDiagnosis.NO_INTERNET) {
                 // Интернета нет вовсе — переключаться некуда, ждём восстановления сети.
                 return
             }
-            if (!repo.reserveAvailable()) return
+            if (!repo.reserveAvailable()) {
+                repo.recordDiag("info", "Резервных серверов нет — восстановить нечем.")
+                return
+            }
 
             // Пробуем резерв с РЕАЛЬНОЙ проверкой интернета через него (§4). Из сотни
             // серверов реально работают единицы — параллельная проверка находит их быстро.
@@ -624,6 +636,8 @@ class NoVpnService : VpnService() {
 
             // Резерв есть, но ни один сервер реально не заработал (§11).
             Log.w(TAG, "резерв не восстановил соединение")
+            repo.recordDiag("error", "Резерв проверен, но ни один сервер не заработал.")
+            scope.launch { runCatching { repo.uploadDiag() } }
             VpnBus.setReserve(null)
             notifyError(
                 "Сеть работает в ограниченном режиме, но резервные серверы сейчас не смогли " +
@@ -767,6 +781,7 @@ class NoVpnService : VpnService() {
      */
     private fun fail(message: String) {
         Log.e(TAG, "подключение не удалось: $message")
+        runCatching { repo.recordDiag("error", message) }
         closeTunnelAndEngine()
         VpnBus.fail(message)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)

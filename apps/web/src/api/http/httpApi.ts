@@ -113,6 +113,7 @@ export const httpApi: ApiClient = {
   reissueLink: (id) => req<User>('POST', `/api/admin/users/${id}/reissue-link`),
   setCodeLogin: (id, enabled, forever) => req<User>('POST', `/api/admin/users/${id}/code-login`, { enabled, forever: !!forever }),
   deleteUser: (id) => req<Ok>('DELETE', `/api/admin/users/${id}`),
+  getUserDiag: (id) => req<{ entries: Array<{ at: string; kind: string; text: string; receivedAt: string }> }>('GET', `/api/admin/users/${id}/diag`),
 
   testServerConnection: (input: AddServerInput) =>
     req<TestServerConnectionResult>('POST', '/api/admin/servers/test-ssh', input),
