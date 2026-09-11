@@ -451,6 +451,10 @@ class NoVpnService : VpnService() {
                         val cur = VpnBus.server.value
                         if (cur != null && worksThrough(eng, cur)) {
                             healthMisses = 0
+                            // Связь есть — снимаем прежний диагноз (например «нет
+                            // интернета», выставленный при пропаже сети). Иначе метка
+                            // висела бы и после того, как интернет вернулся.
+                            if (VpnBus.diagnosis.value != NetDiagnosis.OK) markNormal()
                         } else if (++healthMisses >= 2) {
                             healthMisses = 0
                             triggerFailover()
