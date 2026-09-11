@@ -44,7 +44,7 @@ const COUNTRIES: [RegExp, string][] = [
   [/молдов|moldova|кишин/i, 'MD'],
   [/украин|ukraine|kyiv|киев/i, 'UA'],
   [/беларус|belarus|минск|minsk/i, 'BY'],
-  [/росси|russia|москв|moscow|петербург|home/i, 'RU'],
+  [/росси|russia|москв|moscow|петербург/i, 'RU'],
   [/индия|india|mumbai/i, 'IN'],
   [/бразил|brazil|brasil/i, 'BR'],
   [/австрали|australia|sydney/i, 'AU'],
@@ -73,6 +73,20 @@ export function isoOf(name: string): string | null {
   }
   for (const [re, iso] of COUNTRIES) if (re.test(name)) return iso;
   return null;
+}
+
+/**
+ * Ведущий значок-эмодзи, не являющийся флагом страны (например 🏠 у HomeVPN).
+ * Панель ставит его, когда у сервера в админке задан свой значок, а страны нет.
+ * Флаги-эмодзи на компьютере не рисуются, а обычный значок вроде домика — можно,
+ * как есть. Если впереди стоит флаг из региональных индикаторов, значка нет:
+ * страну показываем картинкой, значок в этом случае опускаем.
+ */
+export function leadingEmoji(name: string): string {
+  const s = name.trim();
+  if (RI.test(s)) return '';
+  const m = s.match(/^(\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)/u);
+  return m ? m[1] : '';
 }
 
 /** Флаг для имени сервера: готовый из remarks либо подобранный по стране в имени. */

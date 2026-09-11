@@ -3,7 +3,7 @@
    src/assets/flags и показываем их. Набор — flag-icons (MIT), лежит в сборке,
    работает офлайн. Имя сервера превращаем в ISO-код (lib/flag.isoOf). */
 
-import { bareName, isoOf } from '../lib/flag';
+import { bareName, isoOf, leadingEmoji } from '../lib/flag';
 
 // Vite соберёт все флаги и отдаст их URL'ы (по одному разбору для всего набора).
 const FLAG_URLS = import.meta.glob('../assets/flags/*.svg', {
@@ -40,14 +40,21 @@ export function Flag({ name, height = 13 }: { name: string; height?: number }) {
   );
 }
 
-/** Флаг + имя сервера (без ведущего эмодзи-флага) в одну строку. */
+/** Флаг + имя сервера (без ведущего эмодзи-флага) в одну строку. Если страны у
+    сервера нет, но админ задал свой значок (например 🏠 у HomeVPN), показываем
+    этот значок вместо флага — он и есть опознавательный знак сервера. */
 export function FlagName({ name, height = 13, gap = 7 }: { name: string; height?: number; gap?: number }) {
   const url = urlFor(isoOf(name));
   const bare = bareName(name);
-  if (!url) return <>{bare}</>;
+  const emoji = url ? '' : leadingEmoji(name);
+  if (!url && !emoji) return <>{bare}</>;
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap }}>
-      <Flag name={name} height={height} />
+      {url ? (
+        <Flag name={name} height={height} />
+      ) : (
+        <span style={{ fontSize: height + 2, lineHeight: 1, flex: 'none' }}>{emoji}</span>
+      )}
       {bare}
     </span>
   );
