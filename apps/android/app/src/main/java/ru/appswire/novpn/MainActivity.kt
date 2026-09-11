@@ -2,6 +2,7 @@ package ru.appswire.novpn
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -42,6 +43,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // На телефоне интерфейс вертикальный — фиксируем портрет, чтобы экран не
+        // проворачивался в руках. На планшете (ширина ≥ 600dp) поворот оставляем:
+        // там вёрстка адаптивная и ландшафт уместен.
+        requestedOrientation = if (resources.configuration.smallestScreenWidthDp >= 600) {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
         // Рисуем под системными панелями (статус-бар и полоса жестов), а отступы
         // добавляем сами в интерфейсе. Так фон приложения уходит под часы и под
         // полосу жестов без белых полей, а содержимое к ним не прилипает.

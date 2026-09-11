@@ -1,5 +1,6 @@
 package ru.appswire.novpn.vpn
 
+import ru.appswire.novpn.store.State
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -320,7 +321,26 @@ class NoVpnService : VpnService() {
             }
         }
 
-        return runCatching { builder.establish() }.getOrNull()
+        val fd = runCatching { builder.establish() }.getOrNull()
+        // Запоминаем состав исключений, с которым туннель поднят: если человек
+        // потом поменяет режим приложения, applyRules увидит расхождение и поднимет
+        // туннель заново, а не оставит старые исключения (см. tunAppsSignature).
+        if (fd != null) lastTunApps = tunAppsSignature(st)
+        return fd
+    }
+
+    /** Последний состав исключений туннеля — с чем он реально поднят сейчас. */
+    @Volatile
+    private var lastTunApps: String = ""
+
+    /**
+     * Отпечаток того, что влияет на СОСТАВ туннеля (addDisallowedApplication):
+     * список «прямых» приложений в умном режиме. В полном VPN исключений нет.
+     * Смена сайтовых правил на отпечаток не влияет — их движок применяет на лету.
+     */
+    private fun tunAppsSignature(st: State): String {
+        if (!repo.effectiveSmart(st)) return "full"
+        return st.apps.filter { it.route == "direct" }.map { it.pkg }.sorted().joinToString(",")
     }
 
     // ── перестройка правил без разрыва туннеля ──
@@ -345,6 +365,24 @@ class NoVpnService : VpnService() {
     private fun applyRules() {
         val eng = engine ?: return
         if (!eng.isAlive() || stopping) return
+        // Если поменялся СОСТАВ туннеля (человек перевёл приложение из «Напрямую» во
+        // «Через VPN» или обратно, либо сменился режим Умный/Полный), одним reload
+        // конфига не обойтись: список исключений задаётся только в establish().
+        // Поднимаем туннель заново автоматически — раньше это требовало ручного
+        // перезапуска, из-за чего приложение шло мимо VPN, хотя выбрано «Через VPN».
+        if (tunAppsSignature(repo.state.value) != lastTunApps) {
+            scope.launch {
+                lock.withLock {
+                    if (stopping) return@withLock
+                    // Пока стояли в очереди за мьютексом, туннель могли уже поднять с
+                    // нужным составом (пачка переключений подряд) — тогда не дёргаем.
+                    if (tunAppsSignature(repo.state.value) == lastTunApps) return@withLock
+                    closeTunnelAndEngine()
+                    connect()
+                }
+            }
+            return
+        }
         val node = repo.nodeFor() ?: return
         val config = repo.buildConfig(Config.TUN_FD, eng.secret) ?: return
         repo.store.writeConfig(config)?.let {
@@ -598,8 +636,7 @@ class NoVpnService : VpnService() {
                     if (back != null) {
                         Log.i(TAG, "обычная сеть восстановилась — возврат на ${back.name}")
                         applySelection(eng, back)
-                        VpnBus.setDiagnosis(NetDiagnosis.OK)
-                        lastNotifiedDiag = NetDiagnosis.OK
+                        markNormal()
                         return
                     }
                 }
@@ -608,8 +645,7 @@ class NoVpnService : VpnService() {
             } else if (current != null && worksThrough(eng, current)) {
                 // Обычный сервер работает — всё хорошо.
                 VpnBus.setReserve(null)
-                VpnBus.setDiagnosis(NetDiagnosis.OK)
-                lastNotifiedDiag = NetDiagnosis.OK
+                markNormal()
                 VpnBus.setOfferReserve(false)
                 return
             }
@@ -628,8 +664,7 @@ class NoVpnService : VpnService() {
             firstWorking(eng, normalCandidates().filter { it.name != current })?.let { c ->
                 Log.i(TAG, "переключение на рабочий обычный сервер ${c.name}")
                 applySelection(eng, c)
-                VpnBus.setDiagnosis(NetDiagnosis.OK)
-                lastNotifiedDiag = NetDiagnosis.OK
+                markNormal()
                 return
             }
 
@@ -662,25 +697,22 @@ class NoVpnService : VpnService() {
             // все обычные, прежде чем пугать человека: именно из-за этого приходило
             // ложное «резерв недоступен», хотя интернет уже работал.
             if (current != null && worksThrough(eng, current)) {
-                VpnBus.setDiagnosis(NetDiagnosis.OK)
-                lastNotifiedDiag = NetDiagnosis.OK
+                markNormal()
                 return
             }
             firstWorking(eng, normalCandidates().filter { it.name != current })?.let { c ->
                 applySelection(eng, c)
-                VpnBus.setDiagnosis(NetDiagnosis.OK)
+                markNormal()
                 return
             }
 
-            // Резерв есть, но ни один сервер реально не заработал (§11).
+            // Резерв есть, но ни один сервер реально не заработал (§11). Отдельным
+            // уведомлением НЕ пугаем: про белые списки уже сообщили выше через
+            // maybeNotifyDiagnosis, а состояние резерва человек видит в приложении.
             Log.w(TAG, "резерв не восстановил соединение")
             repo.recordDiag("error", "Резерв проверен, но ни один сервер не заработал.")
             scope.launch { runCatching { repo.uploadDiag() } }
             VpnBus.setReserve(null)
-            notifyError(
-                "Сеть работает в ограниченном режиме, но резервные серверы сейчас не смогли " +
-                    "восстановить соединение. Попробуйте другую сеть или Wi-Fi.",
-            )
         } finally {
             evaluating = false
         }
@@ -763,6 +795,13 @@ class NoVpnService : VpnService() {
 
             override fun onLost(network: Network) {
                 runCatching { setUnderlyingNetworks(null) }
+                // Если заменяющей сети нет (выключили и Wi-Fi, и мобильный) —
+                // интернета сейчас нет вовсе. Показываем это сразу, чтобы на главной
+                // не висело «Подключено» при мёртвой сети. При переходе Wi-Fi ↔ LTE
+                // activeNetwork уже указывает на новую сеть, и мы сюда не заходим.
+                if (runCatching { cm.activeNetwork }.getOrNull() == null) {
+                    VpnBus.setDiagnosis(NetDiagnosis.NO_INTERNET)
+                }
             }
 
             override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) {
@@ -782,6 +821,11 @@ class NoVpnService : VpnService() {
         val ok = runCatching { cm.registerDefaultNetworkCallback(cb) }.isSuccess
         if (ok) {
             netCallback = cb
+            // Подключились, когда сети уже нет: onAvailable не придёт, поэтому
+            // выставляем диагноз сразу, иначе на главной висит «Подключено».
+            if (runCatching { cm.activeNetwork }.getOrNull() == null) {
+                VpnBus.setDiagnosis(NetDiagnosis.NO_INTERNET)
+            }
         } else {
             Log.e(TAG, "не удалось подписаться на смену сети: после переключения Wi-Fi/LTE потребуется переподключение")
         }
@@ -909,29 +953,55 @@ class NoVpnService : VpnService() {
     @Volatile
     private var lastNotifiedDiag: NetDiagnosis = NetDiagnosis.OK
 
+    /** Были ли мы уже уведомили об ограничениях (белых списках) — чтобы затем
+        отправить парное «сняты» и не слать «сняты» без «обнаружены». */
+    @Volatile
+    private var notifiedRestricted = false
+
     /**
-     * Временное решение по просьбе владельца: как только диагностика ловит
-     * ограниченный режим (белые списки) или пропажу связи — шлём уведомление с
-     * деталями, чтобы можно было сразу сверить, например, в Hub. Только на
-     * переходе состояния, без спама.
+     * Уведомления по просьбе владельца — временное решение, пока собираем базу по
+     * логам. Шлём ТОЛЬКО про белые списки: «обнаружены ограничения» при переходе в
+     * ограниченный режим и «ограничения сняты», когда сеть нормализовалась. Про
+     * «нет интернета» и «серверы недоступны» не уведомляем: человек и так это
+     * видит, а лишние всплывашки только мешают. Диагностика при этом пишется в лог
+     * в любом случае — уведомления её не заменяют.
      */
     private fun maybeNotifyDiagnosis(d: Diag.Result) {
         if (d.diagnosis == lastNotifiedDiag) return
-        val (title, text) = when (d.diagnosis) {
-            NetDiagnosis.RESTRICTED -> "Обнаружены ограничения сети" to
-                "Похоже на белые списки: российские ресурсы доступны, а внешние и серверы NoVPN — нет. " +
-                "Признаки: ${d.detail}. Можно проверить в Hub."
-            NetDiagnosis.NO_INTERNET -> "Нет интернета" to
-                "Соединение с сетью пропало. Признаки: ${d.detail}."
-            NetDiagnosis.SERVER_DOWN -> "Серверы NoVPN недоступны" to
-                "Интернет есть, но обычные серверы NoVPN не отвечают. Признаки: ${d.detail}."
-            else -> {
-                lastNotifiedDiag = d.diagnosis
-                return
-            }
-        }
         lastNotifiedDiag = d.diagnosis
-        notifyInfo(title, text)
+        when (d.diagnosis) {
+            NetDiagnosis.RESTRICTED -> {
+                notifiedRestricted = true
+                notifyInfo(
+                    "Обнаружены ограничения сети",
+                    "Похоже на белые списки: российские ресурсы доступны, а внешние и серверы NoVPN — нет. " +
+                        "Признаки: ${d.detail}. Можно проверить в Hub.",
+                )
+            }
+            NetDiagnosis.OK -> emitRestrictedLifted()
+            else -> Unit // NO_INTERNET, SERVER_DOWN — молча, только лог
+        }
+    }
+
+    /** Если раньше сообщали об ограничениях — уведомить, что они сняты (один раз). */
+    private fun emitRestrictedLifted() {
+        if (!notifiedRestricted) return
+        notifiedRestricted = false
+        notifyInfo(
+            "Ограничения сети сняты",
+            "Белые списки больше не обнаруживаются — обычная сеть восстановилась.",
+        )
+    }
+
+    /**
+     * Сеть снова нормальная. Единая точка для всех путей возврата на обычный
+     * сервер: сбрасывает диагноз в OK и, если до этого сообщали об ограничениях,
+     * шлёт парное «ограничения сняты».
+     */
+    private fun markNormal() {
+        VpnBus.setDiagnosis(NetDiagnosis.OK)
+        lastNotifiedDiag = NetDiagnosis.OK
+        emitRestrictedLifted()
     }
 
     /** Информационное уведомление (диагностика). Отдельный id, чтобы не затирать ошибку. */

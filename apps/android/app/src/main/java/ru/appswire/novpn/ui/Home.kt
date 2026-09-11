@@ -93,16 +93,20 @@ fun HomeScreen(
     // вместо зелёного «Подключено»: человек должен видеть, что это подстраховка,
     // а не обычный сервер. Захватываем в локальную val, чтобы работал smart-cast.
     val res = reserve
+    // Туннель поднят, но под ним нет сети (выключены и Wi-Fi, и мобильный): честно
+    // пишем «нет соединения с интернетом» вместо зелёного «Подключено», иначе
+    // человек думает, что VPN виноват, хотя интернета нет вовсе.
+    val noInternet = conn == ConnState.ON && res == null && diagnosis == NetDiagnosis.NO_INTERNET
     val label = if (res != null) "Резервное подключение" else when (conn) {
         ConnState.OFF -> "Не подключено"
         ConnState.CONNECTING -> "Подключаемся…"
-        ConnState.ON -> "Подключено"
+        ConnState.ON -> if (noInternet) "Нет соединения с интернетом" else "Подключено"
         ConnState.RECONNECTING -> "Восстанавливаем связь…"
         ConnState.ERROR -> "Не удалось подключиться"
     }
-    val labelColor = if (res != null) c.amberFg else c.textPrimary
+    val labelColor = if (res != null || noInternet) c.amberFg else c.textPrimary
     val dot = if (res != null) c.amberFg else when (conn) {
-        ConnState.ON -> c.greenDot
+        ConnState.ON -> if (noInternet) c.amberFg else c.greenDot
         ConnState.CONNECTING, ConnState.RECONNECTING -> c.amberFg
         ConnState.ERROR -> c.redFg
         ConnState.OFF -> c.textMuted2
@@ -163,7 +167,7 @@ fun HomeScreen(
                 // вполголоса. В резервном режиме объяснять уже нечего.
                 if (res == null) {
                     val hint = when {
-                        diagnosis == NetDiagnosis.NO_INTERNET && live -> "Похоже, интернета сейчас нет"
+                        diagnosis == NetDiagnosis.NO_INTERNET && live && !noInternet -> "Похоже, интернета сейчас нет"
                         diagnosis == NetDiagnosis.RESTRICTED && !repo.reserveAvailable() -> "Возможно, сеть работает в ограниченном режиме"
                         else -> null
                     }
