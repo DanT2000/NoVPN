@@ -27,7 +27,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.appswire.novpn.core.Preset
 import ru.appswire.novpn.data.Repo
-import ru.appswire.novpn.system.Oem
 import ru.appswire.novpn.vpn.ConnState
 import ru.appswire.novpn.vpn.VpnBus
 
@@ -54,7 +53,6 @@ fun HomeScreen(
     onRulesChanged: () -> Unit,
     onOpenRoutingApps: () -> Unit,
     onOpenConnection: () -> Unit,
-    onOpenBackground: () -> Unit,
 ) {
     val c = NoVpnTheme.colors
     val state by repo.state.collectAsState()
@@ -214,31 +212,8 @@ fun HomeScreen(
                 }
             }
 
-            // Ограничения фона — главная причина «сам выключился». Подсказка тише
-            // основных карточек: это напоминание, а не действие на каждый день.
-            val batteryOk = Oem.ignoresBatteryOptimizations(context)
-            if (!batteryOk || Oem.needsAutostart) {
-                Card(
-                    modifier = Modifier.padding(top = 9.dp),
-                    padding = PaddingValues(horizontal = 14.dp, vertical = 11.dp),
-                    borderColor = c.borderInner,
-                    onClick = onOpenBackground,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Работа в фоне", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = c.textBody)
-                            Text(
-                                if (!batteryOk) "Система может усыпить приложение, и связь оборвётся" else "На вашей оболочке нужен автозапуск после перезагрузки",
-                                modifier = Modifier.padding(top = 2.dp),
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp,
-                                color = c.textMuted2,
-                            )
-                        }
-                        Chevron(size = 15)
-                    }
-                }
-            }
+            // Карточки «Работа в фоне» на главной больше нет: она отвлекала от
+            // главного действия. Настройка фона осталась в разделе «Настройки».
             Spacer(Modifier.height(16.dp))
         }
 

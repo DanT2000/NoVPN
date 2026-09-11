@@ -42,7 +42,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        // Рисуем под системными панелями (статус-бар и полоса жестов), а отступы
+        // добавляем сами в интерфейсе. Так фон приложения уходит под часы и под
+        // полосу жестов без белых полей, а содержимое к ним не прилипает.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         repo = Repo.get(this)
         handleDeepLink(intent)
         handleConnectRequest(intent)

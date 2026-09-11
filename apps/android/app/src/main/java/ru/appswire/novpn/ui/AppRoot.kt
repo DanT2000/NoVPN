@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -120,23 +122,29 @@ fun AppRoot(
 
     Box(modifier = Modifier.fillMaxSize().background(c.bgRoot)) {
         if (!state.onboarded) {
-            Onboarding(repo = repo, deepLink = accepted, onDeepLinkUsed = onDeepLinkUsed)
+            Box(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Onboarding(repo = repo, deepLink = accepted, onDeepLinkUsed = onDeepLinkUsed)
+            }
             return@Box
         }
 
         when (screen) {
             "background" -> {
-                BackgroundScreen(repo = repo, onBack = { screen = null })
+                Box(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                    BackgroundScreen(repo = repo, onBack = { screen = null })
+                }
                 return@Box
             }
             "log" -> {
-                LogScreen(repo = repo, onBack = { screen = null })
+                Box(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                    LogScreen(repo = repo, onBack = { screen = null })
+                }
                 return@Box
             }
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().statusBarsPadding()) {
                 when (tab) {
                     Tab.HOME -> HomeScreen(
                         repo = repo,
@@ -148,7 +156,6 @@ fun AppRoot(
                             tab = Tab.ROUTING
                         },
                         onOpenConnection = { tab = Tab.CONNECTION },
-                        onOpenBackground = { screen = "background" },
                     )
 
                     Tab.ROUTING -> RoutingScreen(
@@ -201,7 +208,7 @@ private val TABS = listOf(
 @Composable
 private fun TabBar(tab: Tab, onGo: (Tab) -> Unit) {
     val c = NoVpnTheme.colors
-    Column(modifier = Modifier.fillMaxWidth().background(c.bgRoot)) {
+    Column(modifier = Modifier.fillMaxWidth().background(c.bgRoot).navigationBarsPadding()) {
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(c.border))
         Row(modifier = Modifier.fillMaxWidth()) {
             for (spec in TABS) {
