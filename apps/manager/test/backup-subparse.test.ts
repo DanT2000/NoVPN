@@ -71,6 +71,51 @@ test('Clash-YAML: эвристика тянет server/port/name', () => {
   assert.equal(fr?.port, 8443);
 });
 
+test('Xray-JSON (массив конфигов v2rayN) разбирается в ссылки', () => {
+  const configs = [
+    {
+      remarks: '🇳🇱 Reality',
+      outbounds: [
+        {
+          protocol: 'vless',
+          settings: { vnext: [{ address: '188.130.209.185', port: 443, users: [{ id: 'uuid-1', flow: 'xtls-rprx-vision', encryption: 'none' }] }] },
+          streamSettings: { network: 'tcp', security: 'reality', realitySettings: { serverName: 'cdn.example', fingerprint: 'qq', publicKey: 'PBK', shortId: 'SID', spiderX: '/' } },
+        },
+        { protocol: 'freedom', tag: 'direct' },
+      ],
+    },
+    {
+      remarks: 'WS TLS',
+      outbounds: [
+        {
+          protocol: 'vless',
+          settings: { vnext: [{ address: 'ws.example.ru', port: 443, users: [{ id: 'uuid-2', encryption: 'none' }] }] },
+          streamSettings: { network: 'ws', security: 'tls', tlsSettings: { serverName: 'ws.example.ru' }, wsSettings: { path: '/chws', headers: { Host: 'ws.example.ru' } } },
+        },
+      ],
+    },
+  ];
+  const r = parseSubscription(JSON.stringify(configs));
+  assert.equal(r.format, 'xray-json');
+  assert.equal(r.nodes.length, 2);
+  const reality = r.nodes[0];
+  assert.equal(reality.host, '188.130.209.185');
+  assert.equal(reality.port, 443);
+  assert.ok(reality.link.startsWith('vless://uuid-1@188.130.209.185:443?'));
+  assert.ok(reality.link.includes('security=reality'));
+  assert.ok(reality.link.includes('pbk=PBK'));
+  assert.ok(reality.link.includes('sid=SID'));
+  assert.ok(reality.link.includes('flow=xtls-rprx-vision'));
+  const ws = r.nodes[1];
+  assert.equal(ws.host, 'ws.example.ru');
+  assert.ok(ws.link.includes('type=ws'));
+  assert.ok(ws.link.includes('security=tls'));
+  assert.ok(ws.link.includes('path=%2Fchws'));
+  // Восстановленная ссылка должна снова разбираться как обычная подписка.
+  const back = parseSubscription([reality.link, ws.link].join('\n'));
+  assert.equal(back.nodes.length, 2);
+});
+
 test('Subscription-Userinfo парсится в байты и срок', () => {
   const u = parseSubUserinfo('upload=100; download=200; total=107374182400; expire=1767225600');
   assert.equal(u.upload, 100);

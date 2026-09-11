@@ -25,7 +25,7 @@ export interface BackupNode {
 }
 
 export interface ParsedSub {
-  format: 'base64' | 'plain' | 'clash' | 'unknown';
+  format: 'base64' | 'plain' | 'clash' | 'xray-json' | 'unknown';
   nodes: BackupNode[];
 }
 
@@ -143,6 +143,159 @@ function parseLine(raw: string): BackupNode | null {
   return null;
 }
 
+// ── Xray-JSON (массив полных конфигов v2rayN) → share-ссылки ────────────────
+// Некоторые провайдеры (BuzzVPN и т.п.) отдают не список ссылок, а JSON-массив
+// готовых Xray-конфигов, у каждого remarks (имя) и outbounds с прокси. Собираем
+// из них стандартные vless://…/vmess://… ссылки — тот же формат, что понимает
+// клиент. Реконструируем то, что реально используют: vless (reality/tls/none)
+// поверх tcp/ws/grpc, плюс vmess/trojan/ss.
+
+function q(params: Array<[string, string | undefined | null]>): string {
+  const parts = params
+    .filter(([, v]) => v !== undefined && v !== null && `${v}` !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? '?' + parts.join('&') : '';
+}
+
+/** Параметры транспорта/безопасности из streamSettings в стиль share-ссылки. */
+function streamParams(ss: any): Array<[string, string | undefined]> {
+  const net = ss?.network ?? 'tcp';
+  const sec = ss?.security ?? 'none';
+  const out: Array<[string, string | undefined]> = [
+    ['type', net],
+    ['security', sec],
+  ];
+  if (sec === 'reality') {
+    const r = ss?.realitySettings ?? {};
+    out.push(['sni', r.serverName], ['fp', r.fingerprint], ['pbk', r.publicKey], ['sid', r.shortId], ['spx', r.spiderX]);
+  } else if (sec === 'tls' || sec === 'xtls') {
+    const t = ss?.tlsSettings ?? {};
+    out.push(['sni', t.serverName]);
+    if (t.fingerprint) out.push(['fp', t.fingerprint]);
+    if (Array.isArray(t.alpn) && t.alpn.length) out.push(['alpn', t.alpn.join(',')]);
+    if (t.allowInsecure) out.push(['allowInsecure', '1']);
+  }
+  if (net === 'ws') {
+    const w = ss?.wsSettings ?? {};
+    out.push(['path', w.path], ['host', w.headers?.Host ?? w.host]);
+  } else if (net === 'grpc') {
+    const g = ss?.grpcSettings ?? {};
+    out.push(['serviceName', g.serviceName], ['mode', g.multiMode ? 'multi' : 'gun']);
+  } else if (net === 'tcp') {
+    const t = ss?.tcpSettings ?? {};
+    const type = t?.header?.type;
+    if (type && type !== 'none') {
+      out.push(['headerType', type]);
+      const host = t?.header?.request?.headers?.Host;
+      if (Array.isArray(host) && host.length) out.push(['host', host.join(',')]);
+    }
+  } else if (net === 'http' || net === 'h2') {
+    const h = ss?.httpSettings ?? {};
+    out.push(['path', h.path]);
+    if (Array.isArray(h.host) && h.host.length) out.push(['host', h.host.join(',')]);
+  }
+  return out;
+}
+
+function outboundToLink(ob: any, name: string): BackupNode | null {
+  const proto = ob?.protocol;
+  const ss = ob?.streamSettings ?? {};
+  try {
+    if (proto === 'vless' || proto === 'vmess') {
+      const v = ob?.settings?.vnext?.[0];
+      const user = v?.users?.[0];
+      const host = String(v?.address ?? '').trim();
+      const port = clampPort(Number(v?.port));
+      const id = String(user?.id ?? '').trim();
+      if (!host || !id) return null;
+      if (proto === 'vless') {
+        const params: Array<[string, string | undefined]> = [
+          ['encryption', 'none'],
+          ...(user?.flow ? [['flow', String(user.flow)] as [string, string]] : []),
+          ...streamParams(ss),
+        ];
+        const link = `vless://${id}@${host}:${port}${q(params)}#${encodeURIComponent(name)}`;
+        return { name: nameOr(name, host, port), link, host, port, protocol: 'vless' };
+      }
+      // vmess: собираем классический vmess://base64(json).
+      const w = ss?.wsSettings ?? {};
+      const t = ss?.tlsSettings ?? {};
+      const vm = {
+        v: '2',
+        ps: name,
+        add: host,
+        port: String(port),
+        id,
+        aid: String(user?.alterId ?? 0),
+        scy: user?.security ?? 'auto',
+        net: ss?.network ?? 'tcp',
+        type: ss?.tcpSettings?.header?.type ?? 'none',
+        host: w.headers?.Host ?? '',
+        path: w.path ?? '',
+        tls: ss?.security === 'tls' ? 'tls' : '',
+        sni: t.serverName ?? '',
+      };
+      const link = 'vmess://' + Buffer.from(JSON.stringify(vm)).toString('base64');
+      return { name: nameOr(name, host, port), link, host, port, protocol: 'vmess' };
+    }
+    if (proto === 'trojan') {
+      const s = ob?.settings?.servers?.[0];
+      const host = String(s?.address ?? '').trim();
+      const port = clampPort(Number(s?.port));
+      const pass = String(s?.password ?? '').trim();
+      if (!host || !pass) return null;
+      const link = `trojan://${encodeURIComponent(pass)}@${host}:${port}${q(streamParams(ss))}#${encodeURIComponent(name)}`;
+      return { name: nameOr(name, host, port), link, host, port, protocol: 'trojan' };
+    }
+    if (proto === 'shadowsocks') {
+      const s = ob?.settings?.servers?.[0];
+      const host = String(s?.address ?? '').trim();
+      const port = clampPort(Number(s?.port));
+      const method = String(s?.method ?? '').trim();
+      const pass = String(s?.password ?? '').trim();
+      if (!host || !method) return null;
+      const userinfo = Buffer.from(`${method}:${pass}`).toString('base64');
+      const link = `ss://${userinfo}@${host}:${port}#${encodeURIComponent(name)}`;
+      return { name: nameOr(name, host, port), link, host, port, protocol: 'ss' };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Разобрать Xray-JSON (массив/один конфиг) в узлы со ссылками. */
+function parseXrayJson(body: string): BackupNode[] {
+  const data = JSON.parse(body);
+  const configs: any[] = Array.isArray(data) ? data : [data];
+  const out: BackupNode[] = [];
+  for (const cfg of configs) {
+    const obs: any[] = cfg?.outbounds ?? [];
+    // Берём первый прокси-outbound (freedom/blackhole пропускаем).
+    const proxy = obs.find((o) => ['vless', 'vmess', 'trojan', 'shadowsocks'].includes(o?.protocol));
+    if (!proxy) continue;
+    const name = String(cfg?.remarks ?? cfg?.tag ?? '').trim();
+    const node = outboundToLink(proxy, name);
+    if (node) out.push(node);
+  }
+  return out;
+}
+
+/** Похоже ли тело на Xray-JSON (массив конфигов или конфиг с outbounds). */
+function looksXrayJson(trimmed: string): boolean {
+  if (!(trimmed.startsWith('[') || trimmed.startsWith('{'))) return false;
+  return trimmed.includes('"outbounds"');
+}
+
+/** Разбор Xray-JSON, который никогда не бросает. */
+function runCatchingXray(trimmed: string): BackupNode[] {
+  try {
+    return parseXrayJson(trimmed);
+  } catch {
+    return [];
+  }
+}
+
 /** Clash-YAML без зависимости от парсера YAML: тянем name/server/port из блока proxies. */
 function parseClash(body: string): BackupNode[] {
   const out: BackupNode[] = [];
@@ -191,6 +344,12 @@ function parseClash(body: string): BackupNode[] {
 export function parseSubscription(body: string): ParsedSub {
   if (!body || !body.trim()) return { format: 'unknown', nodes: [] };
   const trimmed = body.trim();
+
+  // Xray-JSON: массив готовых конфигов v2rayN (BuzzVPN и подобные).
+  if (looksXrayJson(trimmed)) {
+    const nodes = dedupe(runCatchingXray(trimmed));
+    if (nodes.length) return { format: 'xray-json', nodes };
+  }
 
   // Clash-YAML определяем по ключу proxies: до раскодирования base64.
   if (/^\s*(port|proxies|proxy-groups|mixed-port)\s*:/m.test(trimmed) && /proxies\s*:/.test(trimmed)) {

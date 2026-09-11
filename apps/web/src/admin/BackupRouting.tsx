@@ -21,8 +21,9 @@ function fmtDateTime(iso: string | null): string {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// Байты трафика показываем через общий gb() (как на дашборде: gb(bytes / 1e9)).
-const bytes = (n: number | null | undefined) => (n == null ? '—' : gb(n / 1e9));
+// Статистику ВНЕШНЕЙ подписки провайдеры отдают в ГиБ (по 1024), не в ГБ по 1000:
+// у BuzzVPN total=193273528320 — это ровно 180 ГиБ, а не 193. Поэтому делим на 1024³.
+const bytes = (n: number | null | undefined) => (n == null ? '—' : gb(n / 1024 ** 3));
 
 // В подписке-ссылке зашит секрет — по умолчанию показываем только хост.
 function hostOf(url: string): string {
