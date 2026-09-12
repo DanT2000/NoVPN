@@ -448,6 +448,21 @@ pub fn relaunch_elevated(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Перезапуск с правами администратора без смены режима — для отдельной кнопки
+/// «Режим администратора» в настройках. В отличие от relaunch_elevated не трогает
+/// флаг режима адаптера: человек мог захотеть повышенные права сами по себе
+/// (например для режима TUN заранее), не включая при этом сам режим.
+#[tauri::command]
+pub fn relaunch_admin(app: tauri::AppHandle) -> Result<(), String> {
+    // Отказ в UAC вернёт Err — тогда просто остаёмся в обычном режиме, ничего
+    // не меняя. Согласие закрывает текущий процесс, повышенный экземпляр ждёт
+    // нашего выхода по --await-pid и поднимается на нашем же месте.
+    elevate::relaunch()?;
+    shutdown(&app);
+    app.exit(0);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn vpn_connect(
     running: tauri::State<'_, Running>,

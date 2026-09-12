@@ -264,6 +264,8 @@ export const openExtensionDir = (kind: string) => call('open_extension_dir', { k
 export const isElevated = () => call<boolean>('is_elevated').then((v) => v ?? false);
 /** Перезапуск с запросом прав. Согласие даёт человек в окне Windows. */
 export const relaunchElevated = () => callOrThrow<void>('relaunch_elevated');
+/** Перезапуск с запросом прав без смены режима — отдельная кнопка «Режим администратора». */
+export const relaunchAdmin = () => callOrThrow<void>('relaunch_admin');
 
 /* ── Хранение ─────────────────────────────────────────────── */
 
