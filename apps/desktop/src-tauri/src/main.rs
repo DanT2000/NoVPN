@@ -174,6 +174,18 @@ fn promote_tray_icon() {
 fn promote_tray_icon() {}
 
 fn main() {
+    // Движок (Chromium в WebView2) по умолчанию держит низкоуровневый клавиатурный
+    // хук для аппаратных медиа-клавиш. Побочный эффект: при активном окне NoVPN
+    // физическое нажатие системных клавиш (в частности Scroll Lock) перехватывалось
+    // и не доходило до сторонних глобальных хуков — скриншот-тулы вроде PostShot не
+    // срабатывали. Нам эти медиа-фичи не нужны, отключаем их флагами движка, чтобы
+    // хук не ставился и клавиши проходили в систему как в обычной программе.
+    #[cfg(windows)]
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--disable-features=HardwareMediaKeyHandling,GlobalMediaControls,MediaSessionService",
+    );
+
     // Chrome запускает нас же как хост нативных сообщений — тогда окна нет,
     // а есть разговор по stdin/stdout.
     if host::requested() {
