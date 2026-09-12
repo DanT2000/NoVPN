@@ -213,16 +213,7 @@ fun ConnectionScreen(
                 ) {
                     Radio(selected)
                     if (parts.flag.isNotEmpty()) {
-                        // Ширину не фиксируем: у флага может идти ещё значок сервера
-                        // (🇳🇱🚀, 🏠) — в узком боксе он обрезался. maxLines/softWrap
-                        // держат флаг и значок в одну строку.
-                        Text(
-                            parts.flag,
-                            fontSize = 19.sp,
-                            maxLines = 1,
-                            softWrap = false,
-                            modifier = Modifier.widthIn(min = 26.dp),
-                        )
+                        Text(parts.flag, fontSize = 19.sp, maxLines = 1, softWrap = false, modifier = Modifier.widthIn(min = 26.dp))
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

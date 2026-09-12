@@ -439,12 +439,28 @@ object Sub {
     /** Приписка профиля панели («… · Умная маршрутизация») — не часть имени сервера. */
     private fun stripProfileSuffix(name: String): String = name.split(" · ")[0].trim()
 
-    /** Имена в подписках украшены эмодзи и хвостами вроде «| Обход белых списков». */
+    /** Имена в подписках украшены эмодзи и хвостами вроде «| Обход белых списков».
+        Ведущие значки-эмодзи (флаг страны + значок сервера, панель ставит их
+        осмысленно: «🇳🇱🚀 Нидерланды», «🏠 HomeVPN») СОХРАНЯЕМ — раньше фильтр срезал
+        их все, значок сервера терялся, а флаг приходилось угадывать по названию.
+        Чистим только текстовую часть после ведущих значков. */
     private fun cleanName(raw: String): String {
         val head = raw.substringBefore('|')
-        val cleaned = head.filter { it.isLetterOrDigit() || it in " -_#.·" }
-        val t = cleaned.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-        return t.ifEmpty { "Сервер" }
+        val prefixEnd = run {
+            var i = 0
+            while (i < head.length) {
+                val cp = head.codePointAt(i)
+                if (cp >= 0x2600 || cp == 0xFE0F || cp == 0x200D || cp == 0x20E3) {
+                    i += Character.charCount(cp)
+                } else break
+            }
+            i
+        }
+        val prefix = head.substring(0, prefixEnd).trim()
+        val restRaw = head.substring(prefixEnd).filter { it.isLetterOrDigit() || it in " -_#.·" }
+        val rest = restRaw.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val name = listOf(prefix, rest).filter { it.isNotEmpty() }.joinToString(" ")
+        return name.ifEmpty { "Сервер" }
     }
 
     /** Профили из подписки: id → профиль (для сопоставления с meta.json). */
