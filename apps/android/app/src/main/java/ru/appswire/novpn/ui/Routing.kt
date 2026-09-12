@@ -73,7 +73,7 @@ fun RoutingScreen(repo: Repo, tab: String, onTab: (String) -> Unit, onRulesChang
             Segmented(ROUTING_TABS, tab, onChange = onTab, modifier = Modifier.padding(bottom = 16.dp))
         }
         when (tab) {
-            "apps" -> AppsTab(repo)
+            "apps" -> AppsTab(repo, onRulesChanged)
             "sites" -> SitesTab(repo, onRulesChanged)
             else -> ListsTab(repo, onRulesChanged)
         }
@@ -166,15 +166,12 @@ private fun RouteTri(value: String?, onChange: (String?) -> Unit) {
 }
 
 @Composable
-private fun AppsTab(repo: Repo) {
+private fun AppsTab(repo: Repo, onRulesChanged: () -> Unit) {
     val c = NoVpnTheme.colors
     val context = LocalContext.current
     val state by repo.state.collectAsState()
-    val conn by VpnBus.state.collectAsState()
     var query by remember { mutableStateOf("") }
     var showSystem by remember { mutableStateOf(false) }
-    // «Напрямую» меняет состав туннеля — это применяется только переподключением.
-    var dirty by remember { mutableStateOf(false) }
     // Перечисление пакетов — не мгновенное, поэтому не на главном потоке.
     var all by remember { mutableStateOf<List<InstalledApps.Entry>?>(InstalledApps.cached()) }
     LaunchedEffect(Unit) {
@@ -196,12 +193,14 @@ private fun AppsTab(repo: Repo) {
         .sortedWith(compareBy({ rank(rules[it.pkg]) }, { it.label.lowercase() }))
 
     fun setRoute(pkg: String, route: String?) {
-        val was = rules[pkg]
         repo.update { st ->
             val rest = st.apps.filterNot { it.pkg == pkg }
             st.copy(apps = if (route == null) rest else rest + AppRule(pkg, route))
         }
-        if (was == "direct" || route == "direct") dirty = true
+        // Применяем сразу, без ручной кнопки: движок перечитывает правила, а если
+        // сменился состав «напрямую»-приложений (это и есть то, что реально влияет
+        // на туннель), служба сама поднимает туннель заново — см. applyRules.
+        onRulesChanged()
     }
 
     LazyColumn(
@@ -237,19 +236,6 @@ private fun AppsTab(repo: Repo) {
                         Text("Системные", fontSize = 13.sp, color = c.textMuted)
                         Toggle(on = showSystem, onChange = { showSystem = it })
                     }
-                }
-                if (dirty && conn == ConnState.ON) {
-                    Notice(
-                        "Изменения применятся после переподключения.",
-                        tone = Tone.WARN,
-                        modifier = Modifier.padding(top = 10.dp),
-                        trailing = {
-                            LinkBtn("Переподключить", onClick = {
-                                NoVpnService.reconnect(context)
-                                dirty = false
-                            })
-                        },
-                    )
                 }
                 Spacer(Modifier.height(4.dp))
             }
