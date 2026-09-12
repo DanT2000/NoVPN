@@ -194,6 +194,7 @@ fn main() {
     await_previous_instance();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Второй запуск (клик по ярлыку при живом трее) не поднимает новый

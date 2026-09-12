@@ -59,26 +59,21 @@ function Shell() {
     };
   }, []);
 
-  // Клавиша Scroll Lock не используется в приложении, но некоторые скриншот-тулы
-  // (PostShot) висят на ней. При её нажатии webview переходил в «клавиатурный
-  // режим» и рисовал фокус-рамку на кнопке меню — выглядело как случайное
-  // выделение. Глушим клавишу и снимаем фокус с кнопки (поля ввода не трогаем,
-  // чтобы не сбить набор).
+  // Клавиша Scroll Lock не используется в приложении, но скриншот-тулы (PostShot)
+  // висят на ней. Раньше мы её ГЛУШИЛИ (preventDefault + stopImmediatePropagation) —
+  // из-за этого при активном окне NoVPN Scroll Lock не доходил до таких программ.
+  // Клавишу больше НЕ перехватываем: только тихо снимаем фокус с кнопки, чтобы не
+  // появлялась случайная рамка выделения (это не потребляет событие и не мешает
+  // системе). Поля ввода не трогаем, чтобы не сбить набор.
   useEffect(() => {
-    const swallow = (e: KeyboardEvent) => {
+    const defocus = (e: KeyboardEvent) => {
       if (e.code !== 'ScrollLock' && e.key !== 'ScrollLock') return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
       const el = document.activeElement as HTMLElement | null;
       const tag = el?.tagName;
       if (el && tag !== 'INPUT' && tag !== 'TEXTAREA' && typeof el.blur === 'function') el.blur();
     };
-    window.addEventListener('keydown', swallow, true);
-    window.addEventListener('keyup', swallow, true);
-    return () => {
-      window.removeEventListener('keydown', swallow, true);
-      window.removeEventListener('keyup', swallow, true);
-    };
+    window.addEventListener('keyup', defocus, true);
+    return () => window.removeEventListener('keyup', defocus, true);
   }, []);
 
   // Глубокая ссылка «Добавить подписку» (novpn://): и холодный старт (забираем

@@ -1,6 +1,6 @@
 [package]
 name = "novpn-desktop"
-version = "0.3.26"
+version = "0.3.27"
 description = "NoVPN Desktop"
 # Из authors собирается поле CompanyName в свойствах exe: без него Windows показывает
 # пустого издателя (и в окне SmartScreen тоже). Подпись это не заменяет, но врать нечем.
@@ -18,6 +18,9 @@ tauri-build = { version = "2", features = [] }
 # image-png нужен для Image::from_bytes — иконка трея грузится из PNG
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
+# Запоминает размер и положение окна между запусками: человек один раз подбирает
+# удобный размер, дальше окно открывается таким же.
+tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Подписка чужого провайдера часто приходит готовым Clash-YAML: разбираем его
