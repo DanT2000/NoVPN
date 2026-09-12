@@ -1,14 +1,17 @@
-//! Автозапуск вместе с Windows — двумя способами.
+//! Автозапуск и привилегированный движок — два независимых механизма.
 //!
-//! 1. **Ключ реестра Run** — для обычного режима (прокси). Прав администратора
-//!    не требует, запускает приложение без повышения.
-//! 2. **Задача планировщика с наивысшими правами** — для режима адаптера (TUN).
-//!    Задача запускает приложение при входе в систему УЖЕ с правами
-//!    администратора и БЕЗ запроса UAC. Создать её можно только из повышенного
-//!    процесса (один раз), зато потом каждый вход — без единого клика.
+//! 1. **Ключ реестра Run** — автозапуск окна-интерфейса вместе с Windows. Окно
+//!    теперь ВСЕГДА работает с обычными правами (и в режиме прокси, и в режиме
+//!    адаптера), поэтому автозапуск один на все случаи и повышения не требует.
+//! 2. **Задача планировщика «NoVPN Engine»** — поднимает фоновый движок VPN
+//!    (`--engine-host`) с наивысшими правами и БЕЗ запроса UAC. Нужна только режиму
+//!    адаптера (TUN). Создаётся один раз (при первом включении TUN, с разовым
+//!    согласием в UAC), запускается по требованию из окна-интерфейса.
 //!
-//! Оба способа не должны действовать одновременно, иначе приложение
-//! запустится дважды. Кто активен — решает `sync`.
+//! Раньше существовала задача «NoVPN Autostart», которая поднимала с правами ВСЁ
+//! приложение вместе с окном — из-за чего окно администратора по UIPI глушило
+//! чужие горячие клавиши. Она больше не нужна: `delete_legacy_task` сносит её при
+//! запуске (миграция).
 
 #[cfg(windows)]
 mod win {
@@ -18,7 +21,10 @@ mod win {
 
     const RUN_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     const NAME: &str = "NoVPN";
-    const TASK: &str = "NoVPN Autostart";
+    /// Задача привилегированного фонового движка (режим адаптера).
+    const ENGINE_TASK: &str = "NoVPN Engine";
+    /// Старая задача, поднимавшая с правами всё окно. Сносим при миграции.
+    const LEGACY_TASK: &str = "NoVPN Autostart";
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     fn exe() -> Result<String, String> {
@@ -27,7 +33,7 @@ mod win {
             .map_err(|e| e.to_string())
     }
 
-    // ── Ключ реестра Run ─────────────────────────────────────
+    // ── Ключ реестра Run (окно-интерфейс, обычные права) ─────
     pub fn run_key_enabled() -> bool {
         RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey_with_flags(RUN_PATH, KEY_READ)
@@ -51,17 +57,28 @@ mod win {
         }
     }
 
-    // ── Задача планировщика (elevated, без UAC) ──────────────
+    // ── Задача планировщика «NoVPN Engine» (движок, elevated, по требованию) ──
     pub fn task_exists() -> bool {
         std::process::Command::new("schtasks")
-            .args(["/Query", "/TN", TASK])
+            .args(["/Query", "/TN", ENGINE_TASK])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
 
-    /// Экранирует спецсимволы XML (пути к exe их почти не содержат, но пусть).
+    /// Запускает задачу-движок по требованию (`schtasks /Run`) — поднимает
+    /// `--engine-host` с правами без запроса UAC. Второй запуск при уже живом
+    /// движке гасится политикой IgnoreNew внутри самой задачи.
+    pub fn run_task() -> bool {
+        std::process::Command::new("schtasks")
+            .args(["/Run", "/TN", ENGINE_TASK])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     fn xml_escape(s: &str) -> String {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
@@ -78,51 +95,31 @@ mod win {
         std::fs::write(path, bytes)
     }
 
-    /// Запускает уже созданную задачу по требованию (`schtasks /Run`). Это
-    /// поднимает приложение с правами БЕЗ запроса UAC — задача заранее
-    /// зарегистрирована с наивысшими правами. Нужно для авто-повышения при
-    /// обычном (непривилегированном) запуске: вместо тысячи кликов «перезапустить»
-    /// приложение само переезжает в привилегированный экземпляр.
-    pub fn run_task() -> bool {
-        std::process::Command::new("schtasks")
-            .args(["/Run", "/TN", TASK])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    /// `logon_enabled` — включён ли триггер входа в систему (то есть хочет ли
-    /// человек запуск вместе с Windows). Задача создаётся при включённом режиме
-    /// адаптера в любом случае — она нужна и для тихого авто-повышения по
-    /// требованию, — а вот сработает ли она сама при входе, решает этот флаг.
-    fn create_task(logon_enabled: bool) -> Result<(), String> {
-        // Создаём задачу из XML, а не флагами schtasks: у CLI нет ключей для
-        // условий питания и лимита времени, а их значения по умолчанию для
-        // VPN-приложения на ноутбуке вредны:
-        //   • DisallowStartIfOnBatteries — не запустится при входе на батарее;
-        //   • StopIfGoingOnBatteries — упадёт (и VPN отвалится) при отключении зарядки;
-        //   • ExecutionTimeLimit 72ч — процесс убьют через трое суток аптайма.
-        // Отключаем всё это и снимаем лимит времени.
-        //
-        // RunLevel=HighestAvailable даёт повышенные права без UAC при входе,
-        // LogonType=InteractiveToken — запуск в сессии пользователя (для TUN нужен
-        // рабочий стол), пароль не требуется.
+    /// Создаёт (или обновляет) задачу-движок. Требует прав администратора — её
+    /// вызывает `--install-task` из повышенного процесса при первом включении TUN.
+    ///
+    /// Структура XML намеренно повторяет прежнюю рабочую задачу (её принимал
+    /// планировщик на машинах пользователей): те же безопасные для VPN настройки
+    /// (не падать на батарее, без лимита времени), InteractiveToken для рабочего
+    /// стола, HighestAvailable для прав без UAC. Отличия: действие запускает
+    /// `--engine-host`, а триггер входа ВЫКЛЮЧЕН — задачу дёргает окно по
+    /// требованию (AllowStartOnDemand), сама при входе она не стартует.
+    pub fn create_engine_task() -> Result<(), String> {
         let exe_path = exe()?;
         let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
             (Ok(d), Ok(u)) if !d.is_empty() => format!("{d}\\{u}"),
             (_, Ok(u)) => u,
-            _ => return Err("Не удалось определить пользователя для автозапуска".into()),
+            _ => return Err("Не удалось определить пользователя для задачи движка".into()),
         };
         let xml = format!(
             r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Автозапуск NoVPN с правами (режим адаптера)</Description>
+    <Description>Фоновый движок NoVPN (режим адаптера)</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
-      <Enabled>{logon}</Enabled>
+      <Enabled>false</Enabled>
       <UserId>{user}</UserId>
     </LogonTrigger>
   </Triggers>
@@ -155,21 +152,19 @@ mod win {
   <Actions Context="Author">
     <Exec>
       <Command>{exe}</Command>
-      <Arguments>--elevated-relaunch</Arguments>
+      <Arguments>--engine-host</Arguments>
     </Exec>
   </Actions>
 </Task>
 "#,
             user = xml_escape(&user),
             exe = xml_escape(&exe_path),
-            logon = if logon_enabled { "true" } else { "false" },
         );
 
-        let xml_path = std::env::temp_dir().join("novpn-autostart.xml");
+        let xml_path = std::env::temp_dir().join("novpn-engine.xml");
         write_utf16le(&xml_path, &xml).map_err(|e| format!("Не удалось подготовить задачу: {e}"))?;
-
         let out = std::process::Command::new("schtasks")
-            .args(["/Create", "/TN", TASK, "/XML"])
+            .args(["/Create", "/TN", ENGINE_TASK, "/XML"])
             .arg(&xml_path)
             .arg("/F")
             .creation_flags(CREATE_NO_WINDOW)
@@ -179,73 +174,36 @@ mod win {
         if out.status.success() {
             Ok(())
         } else {
-            Err("Не удалось создать задачу автозапуска (нужны права администратора)".into())
+            Err("Не удалось создать задачу движка (нужны права администратора)".into())
         }
     }
 
-    fn delete_task() -> Result<(), String> {
+    /// Сносит старую задачу «NoVPN Autostart» (поднимала с правами всё окно) —
+    /// миграция на схему «обычное окно + отдельный движок».
+    pub fn delete_legacy_task() {
         let _ = std::process::Command::new("schtasks")
-            .args(["/Delete", "/TN", TASK, "/F"])
+            .args(["/Delete", "/TN", LEGACY_TASK, "/F"])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
-        Ok(())
     }
 
-    /// Приводит автозапуск к нужному виду.
-    ///
-    /// `autostart` — хочет ли человек запуск вместе с Windows вообще.
-    /// `tunnel` — включён ли режим адаптера. `elevated` — есть ли у нас права.
-    ///
-    /// Задача планировщика нужна ровно тогда, когда человек хочет и автозапуск,
-    /// и режим адаптера (`autostart && tunnel`). Сносим её ТОЛЬКО когда она
-    /// стала не нужна — то есть человек выключил автозапуск или TUN. Отсутствие
-    /// прав у ТЕКУЩЕГО процесса — не повод удалять уже созданную задачу: иначе
-    /// обычный (непривилегированный) запуск приложения молча сломал бы тихий
-    /// автозапуск и вернул бесконечные запросы UAC.
-    pub fn sync(autostart: bool, tunnel: bool, elevated: bool) -> Result<(), String> {
-        // Задача нужна при ЛЮБОМ включённом режиме адаптера: она поднимает
-        // приложение с правами и при входе в систему (если включён автозапуск),
-        // и по требованию — для тихого авто-повышения при обычном запуске (без
-        // повторных запросов UAC). Триггер входа включаем ровно тогда, когда
-        // человек хочет запуск вместе с Windows.
-        if tunnel {
-            if elevated {
-                // Есть права — создаём/обновляем задачу (путь к exe мог смениться
-                // при обновлении, триггер входа — по настройке автозапуска) и
-                // убираем Run-ключ, чтобы не запускаться дважды.
-                create_task(autostart)?;
-                let _ = set_run_key(false);
-            } else if task_exists() {
-                // Задача уже есть — её состояние (в т.ч. триггер входа) выставил
-                // прошлый привилегированный сеанс. Без прав переписать её нельзя,
-                // и это не беда. Снимаем Run-ключ, чтобы не задваивать запуск.
-                let _ = set_run_key(false);
-            } else {
-                // Задачи ещё нет, а прав на её создание нет. Обычный автозапуск
-                // хотя бы поднимет приложение при входе — дальше оно само
-                // повысится и создаст задачу, и следующие запуски будут тихими.
-                let _ = set_run_key(autostart);
-            }
-            Ok(())
-        } else {
-            let _ = delete_task();
-            set_run_key(autostart)
-        }
+    /// Приводит автозапуск окна к нужному виду. Окно всегда обычное, поэтому это
+    /// просто ключ реестра Run — в любом режиме. Заодно сносим устаревшую
+    /// elevated-задачу. Аргументы `tunnel`/`elevated` больше не влияют на выбор
+    /// механизма и сохранены только ради совместимости вызовов.
+    pub fn sync(autostart: bool, _tunnel: bool, _elevated: bool) -> Result<(), String> {
+        delete_legacy_task();
+        set_run_key(autostart)
     }
 
-    /// Общий признак «автозапуск включён» для интерфейса.
+    /// Признак «автозапуск окна включён» для интерфейса.
     pub fn any_enabled() -> bool {
-        run_key_enabled() || task_exists()
+        run_key_enabled()
     }
 }
 
 #[cfg(windows)]
-pub use win::{any_enabled, run_task, sync, task_exists};
-
-#[cfg(not(windows))]
-pub fn run_task() -> bool {
-    false
-}
+pub use win::{any_enabled, create_engine_task, delete_legacy_task, run_task, sync, task_exists};
 
 #[cfg(not(windows))]
 pub fn any_enabled() -> bool {
@@ -255,6 +213,16 @@ pub fn any_enabled() -> bool {
 pub fn task_exists() -> bool {
     false
 }
+#[cfg(not(windows))]
+pub fn run_task() -> bool {
+    false
+}
+#[cfg(not(windows))]
+pub fn create_engine_task() -> Result<(), String> {
+    Ok(())
+}
+#[cfg(not(windows))]
+pub fn delete_legacy_task() {}
 #[cfg(not(windows))]
 pub fn sync(_autostart: bool, _tunnel: bool, _elevated: bool) -> Result<(), String> {
     Ok(())

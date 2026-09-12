@@ -105,10 +105,44 @@ mod win {
             Err(format!("Не удалось перезапустить с правами администратора (код {code})"))
         }
     }
+
+    /// Разовое повышение для установки фонового движка: запускает себя же с
+    /// `--install-task` под правами (окно UAC). Тот экземпляр создаёт задачу
+    /// планировщика и становится движком. В отличие от `relaunch` НЕ передаёт
+    /// `--await-pid` и не закрывает текущий процесс — окно-интерфейс продолжает
+    /// работать с обычными правами, а рядом поднимается привилегированный движок.
+    pub fn install_engine_host() -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let verb = wide("runas");
+        let file = wide(&exe.to_string_lossy());
+        let params = wide("--install-task");
+        let dir = exe
+            .parent()
+            .map(|p| wide(&p.to_string_lossy()))
+            .unwrap_or_else(|| wide(""));
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                file.as_ptr(),
+                params.as_ptr(),
+                dir.as_ptr(),
+                SW_SHOWNORMAL,
+            )
+        };
+        let code = result as isize;
+        if code > 32 {
+            Ok(())
+        } else if code == 5 {
+            Err("Запуск с правами администратора отменён".into())
+        } else {
+            Err(format!("Не удалось поднять фоновый движок (код {code})"))
+        }
+    }
 }
 
 #[cfg(windows)]
-pub use win::{is_elevated, relaunch};
+pub use win::{install_engine_host, is_elevated, relaunch};
 
 #[cfg(not(windows))]
 pub fn is_elevated() -> bool {
@@ -117,5 +151,10 @@ pub fn is_elevated() -> bool {
 
 #[cfg(not(windows))]
 pub fn relaunch() -> Result<(), String> {
+    Err("Поддерживается только в Windows".into())
+}
+
+#[cfg(not(windows))]
+pub fn install_engine_host() -> Result<(), String> {
     Err("Поддерживается только в Windows".into())
 }

@@ -564,6 +564,28 @@ pub fn wait_port_free(port: u16, timeout: Duration) -> bool {
     false
 }
 
+/// Отвечает ли контроллер mihomo на localhost — по этому GUI понимает, что движок
+/// (в т.ч. поднятый привилегированным хостом в отдельном процессе) уже работает.
+/// UIPI на локальные TCP-сокеты не распространяется, поэтому обычное окно спокойно
+/// достучится до контроллера движка-администратора.
+pub fn controller_up(controller_port: u16) -> bool {
+    let addr: SocketAddr = ([127, 0, 0, 1], controller_port).into();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+}
+
+/// Ждёт, пока контроллер движка поднимется, — до таймаута. Нужно после команды
+/// хосту «включись»: движок стартует в другом процессе, и связь появляется не сразу.
+pub fn wait_controller_up(controller_port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if controller_up(controller_port) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
 pub const LOG_NAME: &str = "engine.log";
 
 /// Просит движок перечитать конфиг без перезапуска.

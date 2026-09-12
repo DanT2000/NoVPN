@@ -7,7 +7,7 @@ import { Banner, STATE_INFO, StatusDot, Toggle } from '../components/ui';
 import { count } from '../lib/plural';
 import { FlagName } from '../components/Flag';
 import { HomeHero } from '../components/HomeHero';
-import { inTauri, isElevated, relaunchElevated, vpnConflicts } from '../lib/tauri';
+import { vpnConflicts } from '../lib/tauri';
 
 const BTN: Record<string, string> = {
   connect: 'Запустить',
@@ -27,10 +27,6 @@ function fmtTimeout(hours: number): string {
 
 export function Home() {
   const { s, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, noInternet, fullAvailable, selectedNode } = useStore();
-  const [admin, setAdmin] = useState(true);
-  useEffect(() => {
-    if (inTauri) void isElevated().then(setAdmin);
-  }, []);
   const info = STATE_INFO[s.conn];
   const server = s.servers.find((x) => x.id === s.serverId) ?? null;
 
@@ -160,12 +156,10 @@ export function Home() {
             aria-selected={s.settings.tunnel}
             className={s.settings.tunnel ? 'active' : ''}
             onClick={() => {
-              if (!s.settings.tunnel) {
-                setSetting('tunnel', true);
-                // Отказ в UAC возвращает нас в рабочий режим прокси, а не
-                // оставляет в TUN без прав (там подключение только ошибалось бы).
-                if (!admin) void relaunchElevated().catch(() => setSetting('tunnel', false));
-              }
+              // Просто выбираем режим. Права для адаптера поднимает фоновый движок
+              // сам при подключении (окно остаётся обычным); при первом включении
+              // TUN один раз будет запрос прав на установку — дальше без запросов.
+              if (!s.settings.tunnel) setSetting('tunnel', true);
             }}
           >
             <span className="seg-mode-title">TUN</span>
@@ -179,19 +173,6 @@ export function Home() {
             Обнаружен другой активный VPN: {conflicts.join(', ')}. Два туннеля сразу забирают
             маршрут по умолчанию каждый на себя — интернет может пропасть совсем. Отключите один
             из них.
-          </div>
-        ) : null}
-        {s.settings.tunnel && !admin ? (
-          <div className="notice notice-amber" style={{ marginTop: 12 }}>
-            <div className="row-between">
-              <span>Один раз нужны права администратора — дальше без запросов.</span>
-              <button
-                className="link-btn"
-                onClick={() => void relaunchElevated().catch(() => setSetting('tunnel', false))}
-              >
-                Перезапустить
-              </button>
-            </div>
           </div>
         ) : null}
       </div>

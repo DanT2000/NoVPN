@@ -20,11 +20,9 @@ import {
   extensionInfo,
   extensionSync,
   openExtensionDir,
-  isElevated,
-  relaunchAdmin,
 } from '../lib/tauri';
 import type { ExtInfo, InstalledBrowser, UpdateInfo } from '../lib/tauri';
-import { IconChevron, IconRefresh, IconShield, IconCheck } from '../components/icons';
+import { IconChevron, IconRefresh } from '../components/icons';
 import type { Theme, UiScale } from '../state/types';
 
 const THEMES: { id: Theme; label: string }[] = [
@@ -264,18 +262,6 @@ export function Settings() {
   })();
   const [advOpen, setAdvOpen] = useState(false);
   const [upd, setUpd] = useState<{ state: 'idle' | 'checking' | 'done' | 'installing'; info?: UpdateInfo; error?: string }>({ state: 'idle' });
-  // Права администратора: вне Tauri их «нет», внутри — читаем у токена процесса.
-  const [admin, setAdmin] = useState(false);
-  const [elevating, setElevating] = useState(false);
-  useEffect(() => {
-    if (inTauri) void isElevated().then(setAdmin);
-  }, []);
-  const runAsAdmin = () => {
-    // Согласие даёт человек в окне UAC. Отказ (или закрытие) просто возвращает
-    // кнопку в исходное состояние — приложение продолжает работать как есть.
-    setElevating(true);
-    void relaunchAdmin().catch(() => setElevating(false));
-  };
 
   const checkUpdate = () => {
     setUpd({ state: 'checking' });
@@ -318,35 +304,6 @@ export function Settings() {
         onChange={(v) => setSetting('autoconnect', v)}
       />
       <Row title="Сворачивать в трей" on={s.settings.tray} onChange={(v) => setSetting('tray', v)} />
-
-      {inTauri ? (
-        <>
-          <div className="section-label">Права</div>
-          <div className={`admin-card${admin ? ' is-admin' : ''}`}>
-            <span className="admin-ico" aria-hidden="true">
-              <IconShield size={20} />
-              {admin ? (
-                <span className="admin-check">
-                  <IconCheck size={11} />
-                </span>
-              ) : null}
-            </span>
-            <div className="admin-body">
-              <div className="admin-title">{admin ? 'Администратор' : 'Обычный режим'}</div>
-              <div className="admin-note">
-                {admin
-                  ? 'Права получены — режим адаптера (TUN) работает без запросов.'
-                  : 'Нужны режиму адаптера (TUN): создать сетевой адаптер и переписать маршруты. Для прокси-режима не требуются.'}
-              </div>
-            </div>
-            {!admin ? (
-              <button className="btn btn-primary btn-sm admin-btn" disabled={elevating} onClick={runAsAdmin}>
-                {elevating ? 'Запрос…' : 'Запустить с правами'}
-              </button>
-            ) : null}
-          </div>
-        </>
-      ) : null}
 
       <div className="section-label">Маршрутизация</div>
       {fullAvailable ? (

@@ -10,6 +10,7 @@ pub mod host;
 pub mod lists;
 pub mod browsers;
 pub mod deeplink;
+pub mod enginehost;
 pub mod explain;
 pub mod meta;
 pub mod netcheck;

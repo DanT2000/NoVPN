@@ -4,6 +4,7 @@ use crate::core::{self, DomainRule, Engine, Ports, Rules};
 use crate::apps;
 use crate::autostart;
 use crate::elevate;
+use crate::enginehost;
 use crate::lists;
 use crate::proxy;
 use crate::store;
@@ -463,6 +464,27 @@ pub fn relaunch_admin(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Поднимает привилегированный фоновый движок (режим адаптера). Тихо через задачу
+/// планировщика (без UAC), а если задачи ещё нет — один раз просит права на её
+/// установку (первая настройка TUN). Окно-интерфейс при этом остаётся обычным.
+fn ensure_engine_host() -> Result<(), String> {
+    // Уже жив (недавний пульс) — ничего не делаем, он подхватит команду сам.
+    if enginehost::host_fresh() {
+        return Ok(());
+    }
+    if autostart::task_exists() {
+        if autostart::run_task() {
+            Ok(())
+        } else {
+            Err("Не удалось запустить фоновый движок VPN.".into())
+        }
+    } else {
+        // Первое включение режима адаптера: разовое согласие в UAC на установку
+        // задачи. Тот повышенный экземпляр создаёт её и сразу становится движком.
+        elevate::install_engine_host()
+    }
+}
+
 #[tauri::command]
 pub fn vpn_connect(
     running: tauri::State<'_, Running>,
@@ -476,12 +498,48 @@ pub fn vpn_connect(
 
     let ports = Ports::default();
     let tunnel = rules.tunnel;
-    // Права проверяем до запуска движка: иначе он поднимется, не сможет
-    // создать адаптер и оставит человека с «подключено» без подключения.
-    if tunnel && !elevate::is_elevated() {
-        return Err("Режим адаптера требует прав администратора. Перезапустите приложение с ними или выключите режим в настройках.".into());
-    }
     let config = make_config(selected.as_deref(), rules, ports)?;
+
+    // Режим адаптера (TUN) требует прав администратора. Окно-интерфейс теперь
+    // ВСЕГДА обычное (чтобы не глушить чужие горячие клавиши по UIPI), поэтому
+    // сам движок поднимается отдельным привилегированным процессом-хостом, а мы
+    // управляем им через файл-команду. Прокси-режим прав не требует и работает
+    // прямо здесь, в окне.
+    if tunnel {
+        // Прежний движок прокси-режима (если был) гасим — дальше рулит хост.
+        {
+            let mut guard = running.0.lock().map_err(|_| "Внутренняя ошибка состояния")?;
+            if let Some(mut old) = guard.take() {
+                old.stop();
+            }
+        }
+        // Системный прокси в режиме адаптера не нужен — возвращаем прежний.
+        restore_proxy();
+        // Конфиг для фонового движка кладём туда, откуда он его читает.
+        let dir = store::engine_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку движка: {e}"))?;
+        std::fs::write(dir.join("config.yaml"), &config)
+            .map_err(|e| format!("Не удалось записать конфиг: {e}"))?;
+        // Просим движок включиться и поднимаем сам хост (задача планировщика без
+        // UAC; при самом первом включении — разовое согласие в UAC на установку).
+        enginehost::request_start(ports)?;
+        ensure_engine_host()?;
+        // Ждём, пока движок поднимет контроллер. Не поднялся — честно сообщаем.
+        if !core::wait_controller_up(ports.controller, std::time::Duration::from_secs(20)) {
+            let err = enginehost::read_status().map(|s| s.error).unwrap_or_default();
+            return Err(if err.is_empty() {
+                "Фоновый движок VPN не поднялся. Попробуйте ещё раз.".into()
+            } else {
+                format!("Фоновый движок VPN не поднялся:\n{err}")
+            });
+        }
+        // Явно выбираем сервер (reload сохранял бы прежний выбор группы select).
+        if let Some(name) = selected.as_deref() {
+            let _ = core::select_proxy(ports.controller, core::GROUP, name);
+        }
+        return Ok(());
+    }
+
     let exe = locate_engine()?;
 
     // Старый движок забираем под коротким замком и СРАЗУ отпускаем его: запуск
@@ -564,7 +622,9 @@ pub fn vpn_reload(
         let mut guard = running.0.lock().map_err(|_| "Внутренняя ошибка состояния")?;
         let up = match guard.as_mut() {
             Some(e) => e.alive(),
-            None => false,
+            // Режим адаптера: движок в привилегированном хосте. Жив, если отвечает
+            // контроллер — тогда правила применяем ему по локальному API.
+            None => core::controller_up(ports.controller),
         };
         if !up {
             return Ok(());
@@ -609,6 +669,8 @@ pub fn vpn_disconnect(running: tauri::State<'_, Running>) -> Result<(), String> 
     if let Some(mut e) = guard.take() {
         e.stop();
     }
+    // Фоновому движку (режим адаптера) велим выключиться. Безвредно, если его нет.
+    enginehost::request_stop();
     restore_proxy();
     Ok(())
 }
@@ -620,9 +682,20 @@ pub fn vpn_disconnect(running: tauri::State<'_, Running>) -> Result<(), String> 
 pub fn cleanup_after_crash() {
     // Осиротевший после падения mihomo.exe продолжает жить и держит порт —
     // новый экземпляр не смог бы занять его, а проверка «наш ли движок»
-    // цеплялась бы к старому. Гасим таких до всего остального.
-    kill_stray_engines();
+    // цеплялась бы к старому. Гасим таких до всего остального. НО не трогаем
+    // движок, которым сейчас управляет живой привилегированный хост (режим
+    // адаптера): это не осиротевший процесс, а рабочий туннель — убить его при
+    // перезапуске окна значило бы уронить подключение на ровном месте.
+    if !enginehost::host_fresh() {
+        kill_stray_engines();
+    }
     restore_proxy();
+}
+
+/// Тот же сброс осиротевшего движка, но для привилегированного хоста: он гасит
+/// оставшийся с прошлого раза mihomo перед тем, как поднять свой.
+pub fn kill_stray_engines_pub() {
+    kill_stray_engines();
 }
 
 /// Завершает НАШ движок, оставшийся от прошлого сеанса. Берём PID из файла,
@@ -684,6 +757,9 @@ pub fn shutdown(app: &tauri::AppHandle) {
             }
         }
     }
+    // Фоновый движок (режим адаптера) тоже гасим: выход из приложения не должен
+    // оставлять туннель поднятым без окна.
+    enginehost::request_stop();
     restore_proxy();
 }
 
@@ -703,7 +779,10 @@ pub fn vpn_alive(running: tauri::State<'_, Running>) -> bool {
             }
             ok
         }
-        None => false,
+        // Своего движка в окне нет — значит либо мы отключены, либо работаем в
+        // режиме адаптера, где движок живёт в привилегированном хосте. Признак
+        // «жив» тогда — отвечает ли его контроллер (localhost, UIPI не мешает).
+        None => core::controller_up(Ports::default().controller),
     }
 }
 
@@ -721,7 +800,9 @@ pub fn vpn_probe(running: tauri::State<'_, Running>) -> bool {
         };
         let up = match guard.as_mut() {
             Some(e) => e.alive(),
-            None => false,
+            // Движок в привилегированном хосте (режим адаптера): жив, если
+            // отвечает контроллер.
+            None => core::controller_up(Ports::default().controller),
         };
         if !up {
             return false;
