@@ -178,11 +178,8 @@ export function Home() {
             <span className="seg-mode-sub">+ программы</span>
           </button>
         </div>
-        <div className="t-note" style={{ marginTop: 11 }}>
-          {s.settings.tunnel
-            ? 'Через VPN идут и программы (Discord, Telegram), не только браузеры'
-            : 'Через VPN идут браузеры и то, что уважает системный прокси'}
-        </div>
+        {/* Подпись под сегментами убрана по просьбе владельца: «Прокси» и «TUN»
+            говорят сами за себя, дублировать текстом не нужно. */}
         {conflicts.length > 0 ? (
           <div className="notice notice-amber" style={{ marginTop: 12 }}>
             Обнаружен другой активный VPN: {conflicts.join(', ')}. Два туннеля сразу забирают
