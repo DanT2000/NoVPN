@@ -102,7 +102,6 @@ fun ConnectionScreen(
     val scope = rememberCoroutineScope()
     val servers = repo.representatives(state)
     val fullAvailable = repo.fullAvailable(state)
-    val selectedNode = repo.nodeFor(state)
 
     fun refresh(url: String) {
         busy = true
@@ -194,7 +193,6 @@ fun ConnectionScreen(
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
             for (server in servers) {
                 val selected = state.serverKey == server.key
-                val offersFull = state.servers.any { it.key == server.key && it.mode == "full" }
                 val parts = Flags.split(server.name)
                 val shape = ShapeCtrl
                 Row(
@@ -211,9 +209,28 @@ fun ConnectionScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(11.dp),
                 ) {
-                    Radio(selected)
+                    // Флаг и значок сервера — друг под другом (флаг сверху, значок
+                    // снизу): рядом они съедали много места по ширине. Радио-кружок
+                    // убран — выбранный сервер и так виден по синей рамке.
                     if (parts.flag.isNotEmpty()) {
-                        Text(parts.flag, fontSize = 19.sp, maxLines = 1, softWrap = false, modifier = Modifier.widthIn(min = 26.dp))
+                        val riEnd = run {
+                            var i = 0
+                            while (i < parts.flag.length) {
+                                val cp = parts.flag.codePointAt(i)
+                                if (cp in 0x1F1E6..0x1F1FF) i += Character.charCount(cp) else break
+                            }
+                            i
+                        }
+                        val flagStr = parts.flag.substring(0, riEnd)
+                        val iconStr = parts.flag.substring(riEnd)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(1.dp),
+                            modifier = Modifier.widthIn(min = 26.dp),
+                        ) {
+                            if (flagStr.isNotEmpty()) Text(flagStr, fontSize = 18.sp, maxLines = 1, softWrap = false)
+                            if (iconStr.isNotEmpty()) Text(iconStr, fontSize = 18.sp, maxLines = 1, softWrap = false)
+                        }
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -221,10 +238,7 @@ fun ConnectionScreen(
                             if (server.recommended) Badge("рекомендуем")
                         }
                         TNote(
-                            buildString {
-                                append(server.host.ifEmpty { "—" })
-                                if (offersFull) append(" · умная + полный VPN")
-                            },
+                            server.host.ifEmpty { "—" },
                             modifier = Modifier.padding(top = 3.dp),
                             mono = true,
                         )
@@ -246,17 +260,7 @@ fun ConnectionScreen(
                 }
             }
         }
-        if (selectedNode != null) {
-            TNote(
-                if (fullAvailable) {
-                    "Умная маршрутизация · Полный VPN${if (selectedNode.mode == "full") " (выбран)" else ""}"
-                } else {
-                    "Умная маршрутизация"
-                },
-                modifier = Modifier.padding(top = 12.dp),
-            )
-        }
-        TNote("Список серверов приходит из подписки и обновляется вместе с ней.", modifier = Modifier.padding(top = 6.dp))
+        TNote("Список серверов приходит из подписки и обновляется вместе с ней.", modifier = Modifier.padding(top = 12.dp))
     }
 
     if (changing) {
