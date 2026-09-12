@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use novpn_desktop::{cmds, deeplink, extension, host, selftest, update};
+use novpn_desktop::{autostart, cmds, deeplink, elevate, extension, host, selftest, store, update};
 
 use std::sync::Mutex;
 use tauri::{
@@ -110,6 +110,88 @@ fn process_alive(_pid: u32) -> bool {
     false
 }
 
+/// Экземпляр, поднятый задачей планировщика для авто-повышения, стартует с
+/// `--elevated-relaunch`. Он должен дождаться, пока прежний непривилегированный
+/// экземпляр закроется, иначе защита от второго экземпляра примет его за дубль
+/// и закроет — и мы останемся без прав. Ждём, пока не останется других процессов
+/// novpn-desktop, кроме нас, — до нескольких секунд.
+#[cfg(windows)]
+fn await_elevated_relaunch() {
+    if !std::env::args().any(|a| a == "--elevated-relaunch") {
+        return;
+    }
+    let me = std::process::id();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    while std::time::Instant::now() < deadline && other_novpn_running(me) {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    }
+}
+
+/// Есть ли ДРУГОЙ процесс novpn-desktop.exe, кроме нас. Дочерние процессы движка
+/// (msedgewebview2.exe) сюда не попадают — считаем только сам exe оболочки.
+#[cfg(windows)]
+fn other_novpn_running(me: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq novpn-desktop.exe", "/FO", "CSV", "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    let Ok(out) = out else { return false };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let me = me.to_string();
+    // Строки CSV: "novpn-desktop.exe","<pid>",...
+    text.lines()
+        .filter_map(|l| l.split(',').nth(1))
+        .map(|p| p.trim_matches(|c| c == '"' || c == ' '))
+        .any(|pid| !pid.is_empty() && pid != me)
+}
+
+/// Amnezia-подобное поведение: если человек уже выбрал режим адаптера (TUN),
+/// приложение само поднимается с правами при КАЖДОМ запуске — без повторных
+/// кликов «перезапустить с администратором». Возвращает true, если запустили
+/// привилегированный экземпляр и текущий (обычный) должен тихо завершиться.
+#[cfg(windows)]
+fn auto_elevate_on_start() -> bool {
+    // Мы сами — результат попытки повышения (задача планировщика или UAC). Если
+    // прав всё равно нет (например, у пользователя нет админ-аккаунта), повторять
+    // бессмысленно — иначе петля перезапусков. Работаем как есть.
+    if std::env::args().any(|a| a == "--elevated-relaunch" || a == "--await-pid") {
+        return false;
+    }
+    // Уже с правами — выходить незачем (иначе петля повышения).
+    if elevate::is_elevated() {
+        return false;
+    }
+    // Повышаемся только под режим адаптера: прокси права не нужны, дёргать UAC
+    // или задачу планировщика на ровном месте нельзя.
+    let tunnel = store::read("state")
+        .and_then(|v| v.get("settings").cloned())
+        .and_then(|s| s.get("tunnel").cloned())
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !tunnel {
+        return false;
+    }
+    // Тихий путь: задача планировщика уже зарегистрирована с наивысшими правами —
+    // просто запускаем её. Она поднимет привилегированный экземпляр без UAC.
+    if autostart::task_exists() && autostart::run_task() {
+        return true;
+    }
+    // Задачи ещё нет (первый запуск после включения TUN или её удалили): один раз
+    // просим повышение через UAC. Отказ не критичен — продолжаем в обычном режиме,
+    // интерфейс покажет кнопку «перезапустить» как запасной путь.
+    elevate::relaunch().is_ok()
+}
+
+#[cfg(not(windows))]
+fn await_elevated_relaunch() {}
+
+#[cfg(not(windows))]
+fn auto_elevate_on_start() -> bool {
+    false
+}
+
 /// Windows 11 по умолчанию прячет значки новых приложений в «переполнение»
 /// (стрелка ^), а не держит у часов. Telegram и Amnezia висят на виду, потому
 /// что помечают свой значок как «продвинутый» в реестре — делаем так же.
@@ -198,6 +280,17 @@ fn main() {
     // (непривилегированный) экземпляр освободит блокировку единственного
     // экземпляра, иначе single-instance закрыл бы нас как дубль.
     await_previous_instance();
+    // То же ожидание для экземпляра, поднятого задачей планировщика (у него нет
+    // --await-pid, но есть --elevated-relaunch): ждём ухода обычного экземпляра.
+    await_elevated_relaunch();
+
+    // Если сохранён режим адаптера, а прав нет — тихо переезжаем в
+    // привилегированный экземпляр (через задачу планировщика без UAC, иначе один
+    // раз через UAC) и завершаемся. Так приложение всегда стартует с правами, как
+    // Amnezia, и человеку не нужно каждый раз перезапускать его вручную.
+    if auto_elevate_on_start() {
+        return;
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())

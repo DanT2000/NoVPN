@@ -78,7 +78,25 @@ mod win {
         std::fs::write(path, bytes)
     }
 
-    fn create_task() -> Result<(), String> {
+    /// Запускает уже созданную задачу по требованию (`schtasks /Run`). Это
+    /// поднимает приложение с правами БЕЗ запроса UAC — задача заранее
+    /// зарегистрирована с наивысшими правами. Нужно для авто-повышения при
+    /// обычном (непривилегированном) запуске: вместо тысячи кликов «перезапустить»
+    /// приложение само переезжает в привилегированный экземпляр.
+    pub fn run_task() -> bool {
+        std::process::Command::new("schtasks")
+            .args(["/Run", "/TN", TASK])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// `logon_enabled` — включён ли триггер входа в систему (то есть хочет ли
+    /// человек запуск вместе с Windows). Задача создаётся при включённом режиме
+    /// адаптера в любом случае — она нужна и для тихого авто-повышения по
+    /// требованию, — а вот сработает ли она сама при входе, решает этот флаг.
+    fn create_task(logon_enabled: bool) -> Result<(), String> {
         // Создаём задачу из XML, а не флагами schtasks: у CLI нет ключей для
         // условий питания и лимита времени, а их значения по умолчанию для
         // VPN-приложения на ноутбуке вредны:
@@ -104,7 +122,7 @@ mod win {
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
-      <Enabled>true</Enabled>
+      <Enabled>{logon}</Enabled>
       <UserId>{user}</UserId>
     </LogonTrigger>
   </Triggers>
@@ -137,12 +155,14 @@ mod win {
   <Actions Context="Author">
     <Exec>
       <Command>{exe}</Command>
+      <Arguments>--elevated-relaunch</Arguments>
     </Exec>
   </Actions>
 </Task>
 "#,
             user = xml_escape(&user),
             exe = xml_escape(&exe_path),
+            logon = if logon_enabled { "true" } else { "false" },
         );
 
         let xml_path = std::env::temp_dir().join("novpn-autostart.xml");
@@ -183,27 +203,33 @@ mod win {
     /// обычный (непривилегированный) запуск приложения молча сломал бы тихий
     /// автозапуск и вернул бесконечные запросы UAC.
     pub fn sync(autostart: bool, tunnel: bool, elevated: bool) -> Result<(), String> {
-        let task_wanted = autostart && tunnel;
-        if task_wanted {
+        // Задача нужна при ЛЮБОМ включённом режиме адаптера: она поднимает
+        // приложение с правами и при входе в систему (если включён автозапуск),
+        // и по требованию — для тихого авто-повышения при обычном запуске (без
+        // повторных запросов UAC). Триггер входа включаем ровно тогда, когда
+        // человек хочет запуск вместе с Windows.
+        if tunnel {
             if elevated {
                 // Есть права — создаём/обновляем задачу (путь к exe мог смениться
-                // при обновлении) и убираем Run-ключ, чтобы не запускаться дважды.
-                create_task()?;
+                // при обновлении, триггер входа — по настройке автозапуска) и
+                // убираем Run-ключ, чтобы не запускаться дважды.
+                create_task(autostart)?;
                 let _ = set_run_key(false);
             } else if task_exists() {
-                // Задача уже есть — она и поднимет нас с правами при следующем
-                // входе. Не трогаем её и снимаем Run-ключ.
+                // Задача уже есть — её состояние (в т.ч. триггер входа) выставил
+                // прошлый привилегированный сеанс. Без прав переписать её нельзя,
+                // и это не беда. Снимаем Run-ключ, чтобы не задваивать запуск.
                 let _ = set_run_key(false);
             } else {
-                // Задачу без прав не создать. Пока — обычный автозапуск (он
-                // попросит повышение), а задача появится после первого запуска
-                // с правами.
-                let _ = set_run_key(true);
+                // Задачи ещё нет, а прав на её создание нет. Обычный автозапуск
+                // хотя бы поднимет приложение при входе — дальше оно само
+                // повысится и создаст задачу, и следующие запуски будут тихими.
+                let _ = set_run_key(autostart);
             }
             Ok(())
         } else {
             let _ = delete_task();
-            set_run_key(autostart && !tunnel)
+            set_run_key(autostart)
         }
     }
 
@@ -214,7 +240,12 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{any_enabled, sync, task_exists};
+pub use win::{any_enabled, run_task, sync, task_exists};
+
+#[cfg(not(windows))]
+pub fn run_task() -> bool {
+    false
+}
 
 #[cfg(not(windows))]
 pub fn any_enabled() -> bool {
