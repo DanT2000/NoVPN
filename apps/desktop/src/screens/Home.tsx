@@ -7,6 +7,7 @@ import { Banner, STATE_INFO, StatusDot, Toggle } from '../components/ui';
 import { IconChevron } from '../components/icons';
 import { count } from '../lib/plural';
 import { FlagName } from '../components/Flag';
+import { HomeHero } from '../components/HomeHero';
 import { inTauri, isElevated, relaunchElevated, vpnConflicts } from '../lib/tauri';
 
 const BTN: Record<string, string> = {
@@ -83,10 +84,11 @@ export function Home() {
     <div className="viewport home">
       <Banner conn={s.conn} onAction={connect} detail={error} />
 
-      {/* Блок «Ваш трафик / Напрямую / Через VPN» убран по просьбе владельца: он
-          дублировал раздел «Умная маршрутизация», где то же самое настраивается. */}
+      {/* Круглая кнопка-логотип на глобусе — главный переключатель. Блок «Ваш
+          трафик» убран: то же самое настраивается в разделе «Маршрутизация». */}
+      <HomeHero />
 
-      <div style={{ textAlign: 'center', marginTop: 18 }}>
+      <div style={{ textAlign: 'center', marginTop: 4 }}>
         <div
           style={{
             display: 'inline-flex',

@@ -46,16 +46,15 @@ export function Flag({ name, height = 13 }: { name: string; height?: number }) {
 export function FlagName({ name, height = 13, gap = 7 }: { name: string; height?: number; gap?: number }) {
   const url = urlFor(isoOf(name));
   const bare = bareName(name);
-  const emoji = url ? '' : leadingEmoji(name);
-  if (!url && !emoji) return <>{bare}</>;
+  // Порядок: флаг страны (картинкой), затем значок-эмодзи сервера (🚀, 🏠 …),
+  // затем название. Значок показываем и вместе с флагом, и без него.
+  const icon = leadingEmoji(name);
+  if (!url && !icon) return <>{bare}</>;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap }}>
-      {url ? (
-        <Flag name={name} height={height} />
-      ) : (
-        <span style={{ fontSize: height + 2, lineHeight: 1, flex: 'none' }}>{emoji}</span>
-      )}
-      {bare}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: gap - 2 }}>
+      {url ? <Flag name={name} height={height} /> : null}
+      {icon ? <span style={{ fontSize: height + 2, lineHeight: 1, flex: 'none' }}>{icon}</span> : null}
+      <span style={{ marginLeft: url || icon ? 2 : 0 }}>{bare}</span>
     </span>
   );
 }
