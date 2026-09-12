@@ -62,22 +62,21 @@ fun HomeHero(
     }
 
     Box(
-        modifier = Modifier.fillMaxWidth().height(226.dp),
+        modifier = Modifier.fillMaxWidth().height(300.dp),
         contentAlignment = Alignment.Center,
     ) {
         Image(
             painter = painterResource(if (c.dark) R.drawable.globe_dark else R.drawable.globe_light),
             contentDescription = null,
-            modifier = Modifier.size(300.dp),
-            alpha = 0.92f,
+            modifier = Modifier.fillMaxWidth().height(360.dp),
         )
         // Мягкий ореол под кнопкой в цвет состояния — без зависимости от blur-API.
         Box(
             modifier = Modifier
-                .size(214.dp)
+                .size(230.dp)
                 .background(
                     Brush.radialGradient(
-                        colors = listOf(tone.a.copy(alpha = if (c.dark) 0.40f else 0.26f), Color.Transparent),
+                        colors = listOf(tone.a.copy(alpha = if (c.dark) 0.38f else 0.22f), Color.Transparent),
                     ),
                     CircleShape,
                 ),
