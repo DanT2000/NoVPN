@@ -4,7 +4,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
 import { Banner, STATE_INFO, StatusDot, Toggle } from '../components/ui';
-import { IconChevron } from '../components/icons';
 import { count } from '../lib/plural';
 import { FlagName } from '../components/Flag';
 import { HomeHero } from '../components/HomeHero';
@@ -27,7 +26,7 @@ function fmtTimeout(hours: number): string {
 }
 
 export function Home() {
-  const { s, go, goRouting, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, noInternet, fullAvailable, selectedNode } = useStore();
+  const { s, connect, disconnect, setSmartRouting, setSetting, error, reconnecting, noInternet, fullAvailable, selectedNode } = useStore();
   const [admin, setAdmin] = useState(true);
   useEffect(() => {
     if (inTauri) void isElevated().then(setAdmin);
@@ -35,11 +34,6 @@ export function Home() {
   const info = STATE_INFO[s.conn];
   const server = s.servers.find((x) => x.id === s.serverId) ?? null;
 
-  const vpnApps = s.apps.filter((a) => a.enabled && a.route === 'vpn');
-  // Число сайтов «через VPN»: берём размер включённых списков как основную
-  // массу и добавляем только РУЧНЫЕ сайты (source!=='list'), чтобы не считать
-  // одни и те же дважды.
-  const manualVpnSites = s.sites.filter((v) => v.route === 'vpn' && v.source !== 'list').length;
   // Чужой туннель, поднятый одновременно с нашим, забирает маршрут по умолчанию —
   // интернет пропадает целиком, и понять причину со стороны невозможно. Проверяем при
   // появлении окна и раз в 15 секунд: фоновому webview таймеры душат, одного мало.
@@ -70,8 +64,6 @@ export function Home() {
     };
   }, []);
 
-  const listRules = s.lists.filter((l) => l.id !== 'apps' && l.enabled).reduce((n, l) => n + l.rules, 0);
-  const totalSites = listRules + manualVpnSites;
 
   const live = s.conn === 'on' || s.conn === 'config-updating' || s.conn === 'config-updated';
 
@@ -204,35 +196,8 @@ export function Home() {
         ) : null}
       </div>
 
-      {s.smartRouting ? (
-        <button
-          className="card"
-          style={{
-            marginTop: 9,
-            padding: '15px 16px',
-            width: '100%',
-            textAlign: 'left',
-            cursor: 'default',
-            fontFamily: 'inherit',
-            color: 'inherit',
-          }}
-          onClick={() => {
-            goRouting('apps');
-            go('routing');
-          }}
-        >
-          <div className="row-between">
-            <div className="t-name">Через VPN</div>
-            <span style={{ color: 'var(--text-muted-2)', display: 'grid' }}>
-              <IconChevron size={17} />
-            </span>
-          </div>
-          <div className="t-body" style={{ marginTop: 9 }}>
-            {count(totalSites, 'сайт', 'сайта', 'сайтов')}
-            {vpnApps.length ? ` · ${vpnApps.map((a) => a.name).join(' · ')}` : ''}
-          </div>
-        </button>
-      ) : null}
+      {/* Строка «Через VPN» убрана по просьбе владельца: дублировала раздел
+          «Маршрутизация», где то же самое настраивается. */}
 
       {/* Отключение красное: это действие обрывает защиту. */}
       <div className="home-action">
