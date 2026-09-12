@@ -117,12 +117,13 @@ private fun AppIcon(pkg: String, label: String) {
 }
 
 /**
- * Три состояния одним касанием: «Напрямую» — приложение исключается из туннеля
- * средствами системы; «Авто» — правила нет, приложение в туннеле по умным
- * правилам; «Через VPN» — то же, что «Авто», но человек это выбрал явно и
- * приложение считается в «Через VPN» на главной. В хранилище: `direct` /
- * отсутствие правила / `vpn` — служба смотрит только на `direct`, так что
- * старые сохранённые правила читаются как прежде.
+ * Два состояния одним касанием. «Напрямую» — приложение всегда идёт мимо VPN
+ * (исключается из туннеля средствами системы, хоть с включённым VPN, хоть без).
+ * «Авто» — приложение в туннеле и идёт по умной маршрутизации, как весь остальной
+ * трафик. Форсировать «весь трафик приложения только через VPN» на Android нельзя
+ * (нет правил по процессам без root), поэтому третьего состояния нет. В хранилище:
+ * `direct` либо отсутствие правила; служба смотрит только на `direct`. Старое
+ * правило `vpn` читается как «Авто» (для движка оно и было тем же самым).
  */
 @Composable
 private fun RouteTri(value: String?, onChange: (String?) -> Unit) {
@@ -137,20 +138,19 @@ private fun RouteTri(value: String?, onChange: (String?) -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         @Composable
-        fun seg(id: String?, label: String, fg: Color, bg: Color) {
-            val active = id == value
+        fun seg(active: Boolean, label: String, fg: Color, bg: Color, onClick: () -> Unit) {
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(5.dp))
                     .background(if (active) bg else Color.Transparent)
-                    .clickable { if (!active) onChange(id) }
-                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                    .clickable { if (!active) onClick() }
+                    .padding(vertical = 9.dp, horizontal = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label,
-                    fontSize = 12.sp,
+                    fontSize = 12.5f.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (active) fg else c.textMuted,
                     maxLines = 1,
@@ -159,9 +159,9 @@ private fun RouteTri(value: String?, onChange: (String?) -> Unit) {
                 )
             }
         }
-        seg("direct", "Напрямую", c.redFg, c.redBg)
-        seg(null, "Авто", c.textPrimary, c.surfaceBtn2)
-        seg("vpn", "Через VPN", c.greenFg, c.greenBg)
+        // «Авто» активно для всего, что не «Напрямую» (в т. ч. старого `vpn`).
+        seg(value != "direct", "Авто", c.textPrimary, c.surfaceBtn2) { onChange(null) }
+        seg(value == "direct", "Напрямую", c.redFg, c.redBg) { onChange("direct") }
     }
 }
 
@@ -180,13 +180,9 @@ private fun AppsTab(repo: Repo, onRulesChanged: () -> Unit) {
 
     val rules = state.apps.associate { it.pkg to it.route }
     val needle = query.trim()
-    // Сначала выбранные приложения, потом остальные: через VPN → напрямую → авто.
-    // Внутри группы — по алфавиту. Так видно, что человек уже настроил.
-    fun rank(route: String?): Int = when (route) {
-        "vpn" -> 0
-        "direct" -> 1
-        else -> 2
-    }
+    // Сначала настроенные «Напрямую», потом «Авто» — по алфавиту внутри группы,
+    // чтобы сразу было видно, что человек уже вывел мимо VPN.
+    fun rank(route: String?): Int = if (route == "direct") 0 else 1
     val shown = (all ?: emptyList())
         .filter { showSystem || !it.system }
         .filter { needle.isEmpty() || it.label.contains(needle, true) || it.pkg.contains(needle, true) }

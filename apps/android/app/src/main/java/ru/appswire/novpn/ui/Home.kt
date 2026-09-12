@@ -87,7 +87,9 @@ fun HomeScreen(
     }
     val manualVpnSites = state.sites.count { it.enabled && it.route == "vpn" }
     val totalSites = listRules + manualVpnSites
-    val vpnApps = state.apps.count { it.route == "vpn" }
+    // Приложения, выведенные мимо VPN. «Через VPN» у приложения на Android не
+    // форсит трафик, поэтому показываем именно «напрямую» — то, что реально влияет.
+    val directApps = state.apps.count { it.route == "direct" }
 
     // В резервном режиме статус явно другой — янтарный «Резервное подключение»
     // вместо зелёного «Подключено»: человек должен видеть, что это подстраховка,
@@ -274,7 +276,8 @@ fun HomeScreen(
                         Chevron(size = 17)
                     }
                     TBody(
-                        "${count(totalSites, "сайт", "сайта", "сайтов")} · ${count(vpnApps, "приложение", "приложения", "приложений")}",
+                        count(totalSites, "сайт", "сайта", "сайтов") +
+                            if (directApps > 0) " · ${count(directApps, "приложение", "приложения", "приложений")} напрямую" else "",
                         modifier = Modifier.padding(top = 9.dp),
                     )
                 }
