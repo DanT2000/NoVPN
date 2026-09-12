@@ -49,6 +49,11 @@ export function HomeHero() {
     <div className="hero">
       <img className="hero-globe hero-globe-dark" src={globeDark} alt="" aria-hidden draggable={false} />
       <img className="hero-globe hero-globe-light" src={globeLight} alt="" aria-hidden draggable={false} />
+      <div
+        className="hero-glow"
+        style={{ background: `radial-gradient(circle, ${a}59 0%, transparent 66%)` }}
+        aria-hidden
+      />
       <button
         type="button"
         className={`hero-btn${connecting ? ' hero-btn-pulse' : ''}`}
