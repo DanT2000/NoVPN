@@ -567,16 +567,48 @@ fn strip_profile_suffix(name: &str) -> String {
 /// В конфиг и в список серверов должно попадать что-то читаемое.
 fn clean_name(raw: &str) -> String {
     let head = raw.split('|').next().unwrap_or(raw);
+    // Ведущие значки-эмодзи (флаг страны + значок сервера) СОХРАНЯЕМ: панель ставит
+    // их осмысленно («🇳🇱🚀 Нидерланды», «🏠 HomeVPN»). Раньше фильтр срезал все эмодзи,
+    // значок сервера терялся, а флаг приходилось угадывать по названию.
+    let prefix: String = head
+        .chars()
+        .take_while(|&c| {
+            let cp = c as u32;
+            cp >= 0x2600 || cp == 0xFE0F || cp == 0x200D || cp == 0x20E3
+        })
+        .collect();
     // «·» оставляем: панель так отделяет приписку второго профиля («Франция · Полный
     // VPN»), и без неё два профиля одного сервера читались бы одинаково.
-    let cleaned: String = head
+    let cleaned: String = head[prefix.len()..]
         .chars()
         .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '#' | '.' | '·'))
         .collect();
-    let t = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    if t.is_empty() {
+    let rest = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let prefix = prefix.trim();
+    let name = if prefix.is_empty() {
+        rest
+    } else if rest.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix} {rest}")
+    };
+    if name.is_empty() {
         "Сервер".into()
     } else {
-        t
+        name
+    }
+}
+
+#[cfg(test)]
+mod clean_name_tests {
+    use super::clean_name;
+    #[test]
+    fn keeps_leading_flag_and_icon() {
+        assert_eq!(clean_name("🇳🇱🚀 Нидерланды · Умная маршрутизация"), "🇳🇱🚀 Нидерланды · Умная маршрутизация");
+        assert_eq!(clean_name("🏠 HomeVPN"), "🏠 HomeVPN");
+        assert_eq!(clean_name("🇳🇱🚀 Нидерланды"), "🇳🇱🚀 Нидерланды");
+        // Хвост после | и мусорные эмодзи ВНУТРИ текста по-прежнему чистятся.
+        assert_eq!(clean_name("🏠 HomeVPN | Обход белых списков"), "🏠 HomeVPN");
+        assert_eq!(clean_name("Москва-1"), "Москва-1");
     }
 }
