@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
@@ -212,7 +213,16 @@ fun ConnectionScreen(
                 ) {
                     Radio(selected)
                     if (parts.flag.isNotEmpty()) {
-                        Text(parts.flag, fontSize = 20.sp, modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
+                        // Ширину не фиксируем: у флага может идти ещё значок сервера
+                        // (🇳🇱🚀, 🏠) — в узком боксе он обрезался. maxLines/softWrap
+                        // держат флаг и значок в одну строку.
+                        Text(
+                            parts.flag,
+                            fontSize = 19.sp,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.widthIn(min = 26.dp),
+                        )
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

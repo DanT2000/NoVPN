@@ -77,19 +77,6 @@ fun HomeScreen(
     // одни и те же не считаются дважды. Пока списки не скачались, работает
     // встроенный запас, его и показываем: цифра должна совпадать с тем, что
     // реально уйдёт в движок.
-    val lists = repo.lists
-    val listRules = remember(lists) {
-        if (lists != null && lists.vpnDomains.isNotEmpty()) {
-            lists.vpnDomains.size + lists.vpnFull.size + lists.vpnKeywords.size + lists.vpnRegex.size + lists.vpnIps.size
-        } else {
-            Preset.fallbackVpnDomains(context).size
-        }
-    }
-    val manualVpnSites = state.sites.count { it.enabled && it.route == "vpn" }
-    val totalSites = listRules + manualVpnSites
-    // Приложения, выведенные мимо VPN. «Через VPN» у приложения на Android не
-    // форсит трафик, поэтому показываем именно «напрямую» — то, что реально влияет.
-    val directApps = state.apps.count { it.route == "direct" }
 
     // В резервном режиме статус явно другой — янтарный «Резервное подключение»
     // вместо зелёного «Подключено»: человек должен видеть, что это подстраховка,
@@ -264,24 +251,8 @@ fun HomeScreen(
                 }
             }
 
-            // «Через VPN» — не перечень, а количество: перечень живёт в «Маршрутах».
-            if (smart) {
-                Card(
-                    modifier = Modifier.padding(top = 9.dp),
-                    padding = PaddingValues(horizontal = 16.dp, vertical = 15.dp),
-                    onClick = onOpenRoutingApps,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TName("Через VPN", modifier = Modifier.weight(1f))
-                        Chevron(size = 17)
-                    }
-                    TBody(
-                        count(totalSites, "сайт", "сайта", "сайтов") +
-                            if (directApps > 0) " · ${count(directApps, "приложение", "приложения", "приложений")} напрямую" else "",
-                        modifier = Modifier.padding(top = 9.dp),
-                    )
-                }
-            }
+            // Строка «Через VPN» убрана по просьбе владельца: то же самое живёт
+            // в разделе «Маршруты», дублировать на главной незачем.
 
             if (node == null) {
                 Card(modifier = Modifier.padding(top = 9.dp), padding = PaddingValues(horizontal = 16.dp, vertical = 15.dp), onClick = onOpenConnection) {
