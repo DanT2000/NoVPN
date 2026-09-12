@@ -59,22 +59,12 @@ function Shell() {
     };
   }, []);
 
-  // Клавиша Scroll Lock не используется в приложении, но скриншот-тулы (PostShot)
-  // висят на ней. Раньше мы её ГЛУШИЛИ (preventDefault + stopImmediatePropagation) —
-  // из-за этого при активном окне NoVPN Scroll Lock не доходил до таких программ.
-  // Клавишу больше НЕ перехватываем: только тихо снимаем фокус с кнопки, чтобы не
-  // появлялась случайная рамка выделения (это не потребляет событие и не мешает
-  // системе). Поля ввода не трогаем, чтобы не сбить набор.
-  useEffect(() => {
-    const defocus = (e: KeyboardEvent) => {
-      if (e.code !== 'ScrollLock' && e.key !== 'ScrollLock') return;
-      const el = document.activeElement as HTMLElement | null;
-      const tag = el?.tagName;
-      if (el && tag !== 'INPUT' && tag !== 'TEXTAREA' && typeof el.blur === 'function') el.blur();
-    };
-    window.addEventListener('keyup', defocus, true);
-    return () => window.removeEventListener('keyup', defocus, true);
-  }, []);
+  // Никаких обработчиков клавиш на уровне окна: любой глобальный keydown/keyup
+  // слушатель заставляет движок помечать клавишу «обработанной», и системная
+  // клавиша (Scroll Lock) при активном окне NoVPN не доходила до скриншот-тулов
+  // вроде PostShot — в обычном браузере такого нет именно потому, что там нет
+  // нашего слушателя. Случайную фокус-рамку от Scroll Lock убираем чисто через CSS
+  // (см. .no-focus-ring в app.css), не трогая события.
 
   // Глубокая ссылка «Добавить подписку» (novpn://): и холодный старт (забираем
   // отложенную), и тёплый (событие на живое приложение). Подписываемся один раз,
