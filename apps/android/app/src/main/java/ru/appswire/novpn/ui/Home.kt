@@ -126,12 +126,9 @@ fun HomeScreen(
                 Notice(error!!, tone = Tone.DANGER, modifier = Modifier.padding(bottom = 14.dp))
             }
 
-            RouteFork(
-                conn = conn,
-                smart = smart,
-                vpnLabel = if (smart) count(totalSites, "правило", "правила", "правил") else "весь трафик",
-                directLabel = "всё остальное",
-            )
+            // Блок «Ваш трафик / Напрямую / Через VPN» убран по просьбе владельца:
+            // то же самое настраивается в разделе «Маршрутизация», дублировать на
+            // главной незачем.
 
             // Статус: точка и крупный текст, под ним моно-строка про сервер.
             Column(
