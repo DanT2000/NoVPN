@@ -126,13 +126,20 @@ fun HomeScreen(
                 Notice(error!!, tone = Tone.DANGER, modifier = Modifier.padding(bottom = 14.dp))
             }
 
-            // Блок «Ваш трафик / Напрямую / Через VPN» убран по просьбе владельца:
-            // то же самое настраивается в разделе «Маршрутизация», дублировать на
-            // главной незачем.
+            // Круглая кнопка-логотип на глобусе — главный переключатель. Заменила
+            // блок «Ваш трафик»: то же самое настраивается в «Маршрутизации».
+            HomeHero(
+                conn = conn,
+                smart = smart,
+                diagnosis = diagnosis,
+                reserve = reserve,
+                onConnect = onConnect,
+                onDisconnect = onDisconnect,
+            )
 
             // Статус: точка и крупный текст, под ним моно-строка про сервер.
             Column(
-                modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
