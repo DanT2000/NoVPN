@@ -631,7 +631,9 @@ router.delete('/sub/:token/backup/personal', (req, res) => {
 router.post('/sub/:token/diag', (req, res) => {
   const u = repo.getUserBySubToken(String(req.params.token ?? ''));
   if (!u || !u.isActive) return res.status(404).json(err('not_found', 'Подписка не найдена.'));
-  const items = Array.isArray((req.body ?? {}).items) ? (req.body.items as unknown[]) : [];
+  // Режем до 100 СРАЗУ: addClientDiag хранит только последние 100, а тело (до 1 МБ JSON)
+  // могло нести десятки тысяч мелких объектов — незачем гонять их через map/filter.
+  const items = Array.isArray((req.body ?? {}).items) ? (req.body.items as unknown[]).slice(0, 100) : [];
   const entries = items
     .map((it) => it as { at?: unknown; kind?: unknown; text?: unknown })
     .filter((it) => it && typeof it.text === 'string')
@@ -2278,7 +2280,14 @@ router.patch('/api/admin/backup/:id', requireAdmin, (req, res) => {
 router.post('/api/admin/backup/:id/refresh', requireAdmin, async (req, res) => {
   const cur = backupRepo.getBackupSubscription(req.params.id!);
   if (!cur) return res.status(404).json(err('not_found', 'Резервная подписка не найдена.'));
-  await refreshBackup(cur.id);
+  // Express 4 не ловит reject из async-обработчика: без try/catch отказ внутри
+  // refreshBackup (обрыв чтения тела, throw в парсере) не отправил бы ответ вовсе —
+  // запрос админа висел бы до таймаута. Ошибка фетча и так пишется в last_error.
+  try {
+    await refreshBackup(cur.id);
+  } catch (e) {
+    return res.status(502).json(err('server', e instanceof Error ? e.message : 'Не удалось обновить резервную подписку.'));
+  }
   res.json(backupRepo.getBackupSubscription(cur.id));
 });
 
