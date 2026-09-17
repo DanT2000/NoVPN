@@ -20,6 +20,7 @@ import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeA
 import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
+import { normCount, normGb, normExpiry } from './lib/validate.js';
 import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser, revokeUserAccessOnServers, revokeDeviceOnServer } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
@@ -1071,9 +1072,16 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
   if (allowedProtocols.length === 0 && allowedProxies.length === 0)
     return res.status(400).json(err('validation', 'Выберите хотя бы один протокол или прокси.'));
 
+  const dl = normCount(b.deviceLimit);
+  if (!dl.ok) return res.status(400).json(err('validation', 'Лимит устройств должен быть целым числом ≥ 0.'));
+  const tl = normGb(b.trafficLimitGb);
+  if (!tl.ok) return res.status(400).json(err('validation', 'Лимит трафика должен быть числом ≥ 0.'));
+  const exp = normExpiry(b.expiresAt);
+  if (!exp.ok) return res.status(400).json(err('validation', 'Срок действия должен быть корректной датой.'));
+
   const u = repo.insertUser({
-    name, comment: String(b.comment ?? ''), category: b.category ?? 'Общие', tags: Array.isArray(b.tags) ? b.tags : [],
-    code, deviceLimit: b.deviceLimit ?? null, expiresAt: b.expiresAt ?? null, trafficLimitGb: b.trafficLimitGb ?? null,
+    name, comment: String(b.comment ?? ''), category: typeof b.category === 'string' ? b.category : 'Общие', tags: Array.isArray(b.tags) ? b.tags : [],
+    code, deviceLimit: dl.value, expiresAt: exp.value, trafficLimitGb: tl.value,
     resetPolicy: b.resetPolicy === 'monthly' ? 'monthly' : 'never', allowedServers,
     allowedProtocols, allowedProxies,
     codeLoginEnabled: b.codeLoginEnabled === true,
@@ -1102,14 +1110,31 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   const fields: Record<string, unknown> = {};
   if (b.name !== undefined) fields.name = String(b.name);
   if (b.comment !== undefined) fields.comment = String(b.comment);
-  if (b.category !== undefined) fields.category = b.category;
+  if (b.category !== undefined) fields.category = String(b.category);
   if (b.tags !== undefined) fields.tags = JSON.stringify(b.tags);
-  if (b.deviceLimit !== undefined) fields.device_limit = b.deviceLimit;
-  if (b.trafficLimitGb !== undefined) fields.traffic_limit_gb = b.trafficLimitGb;
-  if (b.expiresAt !== undefined) fields.expires_at = b.expiresAt; // null = снять срок
+  if (b.deviceLimit !== undefined) {
+    const r = normCount(b.deviceLimit);
+    if (!r.ok) return res.status(400).json(err('validation', 'Лимит устройств должен быть целым числом ≥ 0.'));
+    fields.device_limit = r.value;
+  }
+  if (b.trafficLimitGb !== undefined) {
+    const r = normGb(b.trafficLimitGb);
+    if (!r.ok) return res.status(400).json(err('validation', 'Лимит трафика должен быть числом ≥ 0.'));
+    fields.traffic_limit_gb = r.value;
+  }
+  if (b.expiresAt !== undefined) {
+    // null/пусто = снять срок; мусорную строку отвергаем, иначе NaN-сравнение тихо
+    // сделало бы пользователя бессрочным.
+    const r = normExpiry(b.expiresAt);
+    if (!r.ok) return res.status(400).json(err('validation', 'Срок действия должен быть корректной датой.'));
+    fields.expires_at = r.value;
+  }
   if (b.resetPolicy !== undefined) fields.reset_policy = b.resetPolicy === 'monthly' ? 'monthly' : 'never';
   if (b.priorityAccess !== undefined) fields.priority_access = b.priorityAccess ? 1 : 0;
-  if (b.allowedServers !== undefined) fields.allowed_servers = JSON.stringify(b.allowedServers);
+  if (b.allowedServers !== undefined) {
+    if (!Array.isArray(b.allowedServers)) return res.status(400).json(err('validation', 'Список серверов должен быть массивом.'));
+    fields.allowed_servers = JSON.stringify(b.allowedServers);
+  }
   if (b.allowedProtocols !== undefined)
     fields.allowed_protocols = JSON.stringify(
       (Array.isArray(b.allowedProtocols) ? (b.allowedProtocols as string[]) : []).filter((p) => p === 'xray' || p === 'amneziawg'),
@@ -1128,7 +1153,10 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
     let revoked = 0;
     for (const d of repo.listDevicesOfUser(u.id)) {
       if (!d.isActive) continue;
-      const outOfScope = (okServers.size > 0 && !okServers.has(d.serverId)) || !okProtos.has(d.protocol as (typeof updated.allowedProtocols)[number]);
+      // Пустой okServers = «ни одного сервера разрешено» → все конфиги вне области
+      // (симметрично issue.ts и subscriptionXrayEntries). Прежний `.size > 0` оставлял
+      // ключи живыми на серверах при снятии всех серверов у профиля.
+      const outOfScope = !okServers.has(d.serverId) || !okProtos.has(d.protocol as (typeof updated.allowedProtocols)[number]);
       if (outOfScope) {
         repo.updateDeviceFields(d.id, { is_active: 0, revoke_pending: 1, revoked_at: null });
         revoked += 1;

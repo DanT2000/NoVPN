@@ -8,6 +8,7 @@
 import * as repo from '../backupRepo.js';
 import { parseSubUserinfo, parseSubscription } from '../lib/subParse.js';
 import { addJobError } from '../repo.js';
+import { assertPublicUrl, readTextCapped } from '../lib/safeFetch.js';
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -30,6 +31,14 @@ async function fetchOne(row: any): Promise<void> {
   if (row.hwid) headers['X-HWID'] = String(row.hwid);
   if (row.etag) headers['If-None-Match'] = String(row.etag);
   if (row.last_modified) headers['If-Modified-Since'] = String(row.last_modified);
+
+  // URL задаёт пользователь → защита от SSRF: не пускаем на внутренние адреса.
+  try {
+    await assertPublicUrl(url);
+  } catch (e) {
+    repo.setBackupFetchResult(id, { servers: [], error: `небезопасный адрес: ${e instanceof Error ? e.message : 'запрещён'}` });
+    return;
+  }
 
   let res: Response;
   try {
@@ -66,7 +75,15 @@ async function fetchOne(row: any): Promise<void> {
   }
 
   const provider = parseSubUserinfo(res.headers.get('subscription-userinfo'));
-  const body = await res.text();
+  // Content-Length можно не прислать (chunked) — читаем с жёстким лимитом по факту,
+  // а не доверяем заголовку, иначе многогигабайтный ответ положил бы процесс по OOM.
+  let body: string;
+  try {
+    body = await readTextCapped(res, MAX_BYTES);
+  } catch {
+    repo.setBackupFetchResult(id, { servers: [], error: 'ответ слишком большой' });
+    return;
+  }
   const parsed = parseSubscription(body);
   if (parsed.nodes.length === 0) {
     repo.setBackupFetchResult(id, { servers: [], provider, error: 'не удалось разобрать ни одного сервера' });

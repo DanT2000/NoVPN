@@ -1565,8 +1565,14 @@ export function saveTelegramRaw(t: TelegramSettings): TelegramSettings {
 }
 
 // ── logs / history ──
+// admin_log — журнал аудита. Без ограничения он растёт вечно (в отличие от
+// job_errors, который режется до 100), а earliestDataIso() сканирует его целиком на
+// каждом bootstrap. Держим последние ADMIN_LOG_CAP записей — недавнего аудита с
+// запасом, а рост таблицы ограничен.
+const ADMIN_LOG_CAP = 2000;
 export function addLog(text: string): void {
   db.prepare('INSERT INTO admin_log(at, text) VALUES(?, ?)').run(nowIso(), text);
+  db.prepare('DELETE FROM admin_log WHERE id NOT IN (SELECT id FROM admin_log ORDER BY id DESC LIMIT ?)').run(ADMIN_LOG_CAP);
 }
 export function listLog(limit = 30): LogEntry[] {
   return db.prepare('SELECT at, text FROM admin_log ORDER BY id DESC LIMIT ?').all(limit) as LogEntry[];
@@ -1878,8 +1884,17 @@ export function serverUptime(serverId: string, windowMs: number, currentOnline: 
   return { uptimePct: total > 0 ? Math.max(0, Math.min(100, (onlineMs / total) * 100)) : (currentOnline ? 100 : 0), changes, lastChangeAt: evs[evs.length - 1]!.at };
 }
 
+// Без прунинга user_history растёт вечно, а allHistory() грузит её ЦЕЛИКОМ на
+// каждом bootstrap админки (горячий путь). Держим последние HISTORY_PER_USER
+// записей на пользователя — истории в карточке хватает, а размер таблицы ограничен
+// числом пользователей × N, и bootstrap перестаёт раздуваться.
+const HISTORY_PER_USER = 100;
 export function addHistory(userId: string, text: string): void {
   db.prepare('INSERT INTO user_history(user_id, at, text) VALUES(?, ?, ?)').run(userId, nowIso(), text);
+  db.prepare(
+    `DELETE FROM user_history WHERE user_id = ? AND id NOT IN
+       (SELECT id FROM user_history WHERE user_id = ? ORDER BY id DESC LIMIT ?)`,
+  ).run(userId, userId, HISTORY_PER_USER);
 }
 export function historyFor(userId: string): LogEntry[] {
   return db.prepare('SELECT at, text FROM user_history WHERE user_id = ? ORDER BY id DESC').all(userId) as LogEntry[];
@@ -1971,7 +1986,10 @@ export function subscriptionXrayEntries(userId: string, onlyServerId?: string): 
     if (!xrayAllowed) continue;
     // Пер-серверная подписка: только один заданный сервер (для /sub/:t/server/:id/full).
     if (onlyServerId && d.serverId !== onlyServerId) continue;
-    if (allowedServers && allowedServers.size > 0 && !allowedServers.has(d.serverId)) continue;
+    // Пустой allowedServers = «ни одного сервера» (как при выдаче в issue.ts и в
+    // buildPublicBootstrap). Прежний `.size > 0` инвертировал пустой список в «все»
+    // — снятие всех серверов у профиля не убирало уже выданные конфиги из подписки.
+    if (allowedServers && !allowedServers.has(d.serverId)) continue;
     if (seen.has(d.serverId)) continue;
     seen.add(d.serverId);
     // Endpoint в ссылке подменяем на ТЕКУЩИЙ host:port сервера: смена порта/домена
