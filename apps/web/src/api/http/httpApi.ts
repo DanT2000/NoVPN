@@ -52,14 +52,30 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  // Тело может оказаться НЕ JSON: 502/504 от шлюза (nginx/Cloudflare) отдают HTML,
+  // ответ мог обрезаться. Голый JSON.parse тогда бросил бы «Unexpected token <»
+  // ещё до обработки статуса — и понятная «Ошибка 5xx» с мягким разлогином на 401
+  // не сработали бы. Разбираем осторожно: не-JSON → data=null, дальше по статусу.
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+  }
+  const asObj = (data && typeof data === 'object' ? (data as Record<string, unknown>) : null);
   if (!res.ok) {
     // Протухла админ-сессия → не показываем «дохлую» ошибку, а мягко разлогиниваем
     // (AppStore ловит событие и показывает экран входа).
     if (res.status === 401 && typeof window !== 'undefined' && (path.startsWith('/api/admin') || path === '/api/bootstrap')) {
       window.dispatchEvent(new Event('novpn:auth-expired'));
     }
-    const message = (data && (data.error?.message || data.message)) || `Ошибка ${res.status}`;
+    const err = asObj?.error;
+    const nested = err && typeof err === 'object' ? (err as Record<string, unknown>).message : undefined;
+    const flat = asObj?.message;
+    const message =
+      (typeof nested === 'string' && nested) || (typeof flat === 'string' && flat) || `Ошибка ${res.status}`;
     throw new Error(message);
   }
   return data as T;

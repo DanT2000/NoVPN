@@ -19,11 +19,14 @@ import './styles/fork.css';
 
 import { applyCachedTheme } from './lib/theme';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 applyCachedTheme();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );
