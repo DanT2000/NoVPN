@@ -103,8 +103,9 @@ fn xray_json_like_novpn() {
     let p = parse(&json).expect("Xray-JSON должен разобраться");
     let Parsed::Nodes(nodes) = &p else { panic!() };
     assert_eq!(nodes.len(), 1);
-    // Эмодзи и хвост после «|» из имени убираются — оно идёт в конфиг и в UI.
-    assert_eq!(nodes[0].name, "Finland 1");
+    // Ведущий флаг СОХРАНЯЕТСЯ (нужен значку сервера в UI), а хвост после «|»
+    // убирается. Раньше срезали и флаг — из-за чего терялись значки (🚀/🏠).
+    assert_eq!(nodes[0].name, "🇫🇮 Finland 1");
     assert_eq!(nodes[0].map["reality-opts"]["public-key"].as_str(), Some("PK"));
 }
 
@@ -437,10 +438,11 @@ fn xray_json_carries_novpn_profile() {
     assert_eq!(full.profile_id, "s_1:full");
     assert_eq!(full.mode, "full");
     assert_eq!(smart.host, full.host, "host общий — поэтому ключ profileId, а не host");
-    // В десктопе режим виден по тумблеру, поэтому подпись профиля из имени убирается:
-    // в списке серверов остаётся просто «Франция», а второй профиль различается номером.
-    assert_eq!(nodes[0].name, "Франция");
-    assert_eq!(nodes[1].name, "Франция #2");
+    // В десктопе режим виден по тумблеру, поэтому подпись профиля («| …») из имени
+    // убирается, а ведущий флаг сохраняется (значок сервера в UI). Второй профиль
+    // различается номером.
+    assert_eq!(nodes[0].name, "🇫🇷 Франция");
+    assert_eq!(nodes[1].name, "🇫🇷 Франция #2");
 }
 
 #[test]
