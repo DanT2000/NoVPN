@@ -125,3 +125,23 @@ test('Subscription-Userinfo парсится в байты и срок', () => {
   assert.deepEqual(parseSubUserinfo(null), {});
   assert.deepEqual(parseSubUserinfo(''), {});
 });
+
+test('ss:// без порта (внутренний userinfo): host не теряет символ, порт 443', () => {
+  // Всё тело — base64(method:pass@host) без :port. Прежде host = hp.slice(0,-1)
+  // («ss.example.co»), порт = NaN. Регресс на splitHostPort.
+  const line = 'ss://' + Buffer.from('aes-256-gcm:pw@ss.example.com').toString('base64') + '#NoPort';
+  const r = parseSubscription(line);
+  const sh = r.nodes.find((n) => n.protocol === 'ss');
+  assert.ok(sh, 'узел ss должен разобраться');
+  assert.equal(sh!.host, 'ss.example.com');
+  assert.equal(sh!.port, 443);
+});
+
+test('ss:// без порта (внешний userinfo): host корректен, порт 443', () => {
+  const line = 'ss://' + Buffer.from('aes-256-gcm:password123').toString('base64') + '@ss.example.com#NoPort2';
+  const r = parseSubscription(line);
+  const sh = r.nodes.find((n) => n.protocol === 'ss');
+  assert.ok(sh);
+  assert.equal(sh!.host, 'ss.example.com');
+  assert.equal(sh!.port, 443);
+});

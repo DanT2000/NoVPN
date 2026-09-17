@@ -102,6 +102,21 @@ function parseVmess(line: string): BackupNode | null {
   }
 }
 
+/** Разбор authority `host:port`. Учитывает IPv6 в скобках и отсутствие порта:
+ *  прежде без ':' host терял последний символ (hp.slice(0,-1)), а порт становился NaN. */
+function splitHostPort(hp: string): { host: string; port: number } {
+  if (hp.startsWith('[')) {
+    const close = hp.indexOf(']');
+    if (close >= 0) {
+      const rest = hp.slice(close + 1);
+      return { host: hp.slice(1, close), port: rest.startsWith(':') ? clampPort(Number(rest.slice(1))) : 443 };
+    }
+  }
+  const c = hp.lastIndexOf(':');
+  if (c < 0) return { host: hp, port: 443 };
+  return { host: hp.slice(0, c), port: clampPort(Number(hp.slice(c + 1))) };
+}
+
 /** ss:// — либо base64(method:pass)@host:port, либо base64(method:pass@host:port). */
 function parseSs(line: string): BackupNode | null {
   try {
@@ -114,18 +129,12 @@ function parseSs(line: string): BackupNode | null {
     let port = 443;
     const at = body.lastIndexOf('@');
     if (at >= 0) {
-      const hp = body.slice(at + 1);
-      const c = hp.lastIndexOf(':');
-      host = hp.slice(0, c).replace(/^\[|\]$/g, '');
-      port = clampPort(Number(hp.slice(c + 1)));
+      ({ host, port } = splitHostPort(body.slice(at + 1)));
     } else {
       // Всё тело — base64(method:pass@host:port)
       const dec = b64decode(body);
       const a = dec.lastIndexOf('@');
-      const hp = a >= 0 ? dec.slice(a + 1) : dec;
-      const c = hp.lastIndexOf(':');
-      host = hp.slice(0, c).replace(/^\[|\]$/g, '');
-      port = clampPort(Number(hp.slice(c + 1)));
+      ({ host, port } = splitHostPort(a >= 0 ? dec.slice(a + 1) : dec));
     }
     if (!host) return null;
     return { name: nameOr(name, host, port), link: line, host, port, protocol: 'ss' };

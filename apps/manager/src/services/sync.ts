@@ -137,7 +137,14 @@ export async function syncAllServers(): Promise<void> {
     }
     for (const s of repo.listServers()) {
       if (s.detached) continue; // endpoint сохранён, физического сервера нет — sync пропускает
-      if (!(await sshHasSshAccess(s.id))) continue;
+      if (!(await sshHasSshAccess(s.id))) {
+        // Без SSH-кредов сервер не опросить. Молчаливый `continue` оставлял прежний
+        // статус — обычно «online», и упавший/потерявший креды сервер вечно горел
+        // зелёным (та же односторонняя защёлка, что чинил offline-путь ниже, но мимо
+        // него). Подтвердить живость нечем → честно помечаем offline.
+        if (s.agent === 'online' || s.endpointOk) repo.updateServerFields(s.id, { agent: 'offline', endpoint_ok: 0 });
+        continue;
+      }
 
       // Нагрузка сервера: CPU/ОЗУ/диск/сеть тем же заходом по SSH, раз в 5 минут.
       // Пишем ДО проверки порогов, чтобы свежий замер попал в оценку «держится ли CPU».
