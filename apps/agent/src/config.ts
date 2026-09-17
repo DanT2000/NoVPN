@@ -2,10 +2,14 @@
 // не в образе. Агент устанавливает ИСХОДЯЩЕЕ соединение с control plane.
 
 const env = (n: string, d = '') => process.env[n] ?? d;
-const int = (n: string, d: number) => {
-  const v = Number(process.env[n]);
-  return Number.isFinite(v) ? v : d;
-};
+// Пустая или нечисловая переменная давала Number('')===0 (isFinite→true) → значение 0
+// вместо дефолта: setInterval(fn, 0) — busy-loop и флуд control plane, порт 0 — случайный.
+// Требуем строго положительное конечное число, иначе дефолт.
+export function posInt(raw: string | undefined, d: number): number {
+  const v = Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : d;
+}
+const int = (n: string, d: number) => posInt(process.env[n], d);
 
 export const config = {
   controlPlaneUrl: env('CONTROL_PLANE_URL', 'http://localhost:3000'),

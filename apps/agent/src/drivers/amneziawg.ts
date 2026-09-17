@@ -65,13 +65,25 @@ function parseHandshake(text: string): string | null {
   const mult = /day/.test(t) ? 86400000 : /hour/.test(t) ? 3600000 : /minute/.test(t) ? 60000 : 1000;
   return new Date(now - num * mult).toISOString();
 }
-function bytesFrom(s: string): number | null {
-  const m = s.match(/([0-9.]+)\s*(\w+)/);
+// wg/awg show выводит трафик в ДВОИЧНЫХ единицах (KiB/MiB/GiB/TiB, 1024). Прежняя
+// таблица (а) не знала TiB/PiB → тера-объёмы читались как ~единицы байт (пир свыше
+// ~1 ТиБ учитывался почти нулём — недосчёт квоты), и (б) для двоичных единиц брала
+// ДЕСЯТИЧНЫЕ множители (1e9 вместо 2^30) → систематический недосчёт на каждом сэмпле.
+export function bytesFrom(s: string): number | null {
+  const m = s.match(/([0-9.]+)\s*([a-zA-Z]+)/);
   if (!m) return null;
   const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
   const u = (m[2] || '').toLowerCase();
-  const k = u.startsWith('gib') || u.startsWith('gb') ? 1e9 : u.startsWith('mib') || u.startsWith('mb') ? 1e6 : u.startsWith('kib') || u.startsWith('kb') ? 1e3 : 1;
-  return Math.round(n * k);
+  const K = 1024;
+  const mult =
+    u.startsWith('pib') || u.startsWith('pb') ? K ** 5 :
+    u.startsWith('tib') || u.startsWith('tb') ? K ** 4 :
+    u.startsWith('gib') || u.startsWith('gb') ? K ** 3 :
+    u.startsWith('mib') || u.startsWith('mb') ? K ** 2 :
+    u.startsWith('kib') || u.startsWith('kb') ? K :
+    1; // «B» (байты) и всё прочее — как есть
+  return Math.round(n * mult);
 }
 
 export const amneziawgDriver: ProtocolDriver = {

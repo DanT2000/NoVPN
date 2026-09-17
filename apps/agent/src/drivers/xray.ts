@@ -63,7 +63,11 @@ export const xrayDriver: ProtocolDriver = {
     await dockerRestart(C());
 
     const pubRaw = await dockerExec(C(), 'sh', '-c', `echo '${serverPriv}' | xray x25519 -i /dev/stdin`);
-    const publicKey = pubRaw.match(/Public key:\s*(.+)/)?.[1]?.trim() ?? serverPriv;
+    // НИКОГДА не подставляем serverPriv (приватный REALITY-ключ) как публичный: при
+    // смене формата вывода `xray x25519` прежний фоллбэк вшивал приватный ключ сервера
+    // в pbk= клиентской ссылки — утечка ключа. Не разобрали → падаем.
+    const publicKey = pubRaw.match(/Public key:\s*(.+)/)?.[1]?.trim();
+    if (!publicKey) throw new Error('не удалось извлечь публичный REALITY-ключ из вывода xray x25519');
 
     const host = config.xrayEndpointHost || '127.0.0.1';
     const link =

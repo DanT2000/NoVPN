@@ -30,7 +30,13 @@ export function loadIdentity(): Identity {
   fs.mkdirSync(config.dataDir, { recursive: true });
   const f = file();
   if (fs.existsSync(f)) {
-    return JSON.parse(fs.readFileSync(f, 'utf8')) as Identity;
+    try {
+      return JSON.parse(fs.readFileSync(f, 'utf8')) as Identity;
+    } catch {
+      // Файл повреждён (обрыв записи/питания, усечение) — прежде это бросало и агент
+      // уходил в вечный crash-loop, НЕ пересоздавая личность. Пересоздаём (агент заново
+      // пройдёт enrollment), как self-heal у readOutbox.
+    }
   }
   const id = generate();
   saveIdentity(id);
@@ -39,12 +45,17 @@ export function loadIdentity(): Identity {
 
 export function saveIdentity(id: Identity): void {
   fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(file(), JSON.stringify(id, null, 2), 'utf8');
+  const f = file();
+  // Атомарно: пишем во временный файл и переименовываем, иначе обрыв посреди записи
+  // оставил бы усечённый identity.json (см. loadIdentity выше).
+  const tmp = `${f}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(id, null, 2), 'utf8');
   try {
-    fs.chmodSync(file(), 0o600);
+    fs.chmodSync(tmp, 0o600);
   } catch {
     /* права могут не поддерживаться (Windows) */
   }
+  fs.renameSync(tmp, f);
 }
 
 /** Подпись тела запроса приватным ключом агента. Панель проверяет публичным. */
