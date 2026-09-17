@@ -518,7 +518,7 @@ pub fn vpn_connect(
         // Конфиг для фонового движка кладём туда, откуда он его читает.
         let dir = store::engine_dir();
         std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку движка: {e}"))?;
-        std::fs::write(dir.join("config.yaml"), &config)
+        store::atomic_write(&dir.join("config.yaml"), config.as_bytes())
             .map_err(|e| format!("Не удалось записать конфиг: {e}"))?;
         // Просим движок включиться и поднимаем сам хост (задача планировщика без
         // UAC; при самом первом включении — разовое согласие в UAC на установку).
@@ -634,7 +634,7 @@ pub fn vpn_reload(
     let config = make_config(selected.as_deref(), rules, ports)?;
     let dir = store::engine_dir();
     let path = dir.join("config.yaml");
-    std::fs::write(&path, &config).map_err(|e| format!("Не удалось записать конфиг: {e}"))?;
+    store::atomic_write(&path, config.as_bytes()).map_err(|e| format!("Не удалось записать конфиг: {e}"))?;
     core::reload(ports.controller, &path)?;
     // Переключение сервера на подключённом клиенте: reload сохраняет прежний выбор
     // группы select, поэтому явно указываем движку новый сервер — иначе смена

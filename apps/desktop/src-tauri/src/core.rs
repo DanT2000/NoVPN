@@ -745,7 +745,9 @@ impl Engine {
     /// «запустился» здесь опаснее любой ошибки.
     pub fn start(exe: &Path, dir: &Path, config: &str, port: u16, controller_port: u16) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("Не удалось создать папку движка: {e}"))?;
-        std::fs::write(dir.join("config.yaml"), config)
+        // Атомарно: mihomo открывает config.yaml сам, а хост движка читает его в
+        // другом процессе — обычная fs::write усекала бы файл на глазах у читателя.
+        crate::store::atomic_write(&dir.join("config.yaml"), config.as_bytes())
             .map_err(|e| format!("Не удалось записать конфиг: {e}"))?;
 
         // Журнал движка в файл: в собранном приложении консоли нет, и без

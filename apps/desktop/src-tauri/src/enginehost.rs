@@ -66,7 +66,9 @@ pub fn write_control(c: &Control) -> Result<(), String> {
     let dir = store::engine_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку движка: {e}"))?;
     let text = serde_json::to_string_pretty(c).map_err(|e| e.to_string())?;
-    std::fs::write(control_path(), text).map_err(|e| format!("Не удалось записать команду движку: {e}"))
+    // Атомарно: хост в другом процессе читает этот файл каждые 400мс, и порванное
+    // чтение прежде трактовалось как want=false → погашенный на ровном месте туннель.
+    store::atomic_write(&control_path(), text.as_bytes()).map_err(|e| format!("Не удалось записать команду движку: {e}"))
 }
 
 /// Прочитать текущий статус хоста (None — файла нет / мусор).
@@ -137,15 +139,26 @@ pub fn run() {
 
     let mut engine: Option<Engine> = None;
     let mut cur_epoch: u64 = u64::MAX; // заведомо «не совпадает» с первой командой
+    let mut failed_epoch: Option<u64> = None; // старт этого epoch провалился — не долбим повтором
+    let mut last_error = String::new();
+    let mut last_ctl = Control::default(); // держим при порванном чтении, чтобы не гасить туннель
     let mut off_since: Option<Instant> = None;
     let pid = std::process::id();
 
     loop {
-        let ctl = read_control().unwrap_or_default();
+        // Порванное чтение (окно как раз переписывает control.json) НЕ должно читаться
+        // как want=false — иначе хост погасил бы живой туннель. Держим прошлую команду.
+        let ctl = match read_control() {
+            Some(c) => {
+                last_ctl = c.clone();
+                c
+            }
+            None => last_ctl.clone(),
+        };
         if ctl.want {
             off_since = None;
             let alive = engine.as_mut().map(|e| e.alive()).unwrap_or(false);
-            if ctl.epoch != cur_epoch || !alive {
+            if needs_restart(ctl.epoch, cur_epoch, alive, failed_epoch) {
                 // Требуется свежий старт: гасим прежний и поднимаем новый.
                 if let Some(mut old) = engine.take() {
                     old.stop();
@@ -163,22 +176,34 @@ pub fn run() {
                 match Engine::start(&exe, &dir, &cfg, ports.mixed, ports.controller) {
                     Ok(e) => {
                         engine = Some(e);
-                        write_status(&HostStatus { pid, up: true, epoch: cur_epoch, beat: now_ms(), error: String::new() });
+                        failed_epoch = None;
+                        last_error = String::new();
                     }
                     Err(err) => {
-                        // Не удалось — не долбим повтором в цикле (иначе tight loop):
-                        // ждём новой команды (новый epoch). Причину кладём в статус.
-                        write_status(&HostStatus { pid, up: false, epoch: cur_epoch, beat: now_ms(), error: err });
+                        // Старт не удался: помечаем epoch, чтобы НЕ рестартовать повторно
+                        // в цикле (был бы tight loop ~12с/попытка). Ждём новой команды.
+                        failed_epoch = Some(cur_epoch);
+                        last_error = err;
                     }
                 }
-            } else {
-                write_status(&HostStatus { pid, up: true, epoch: cur_epoch, beat: now_ms(), error: String::new() });
             }
+            // Один пульс на итерацию: up отражает реальную живость, а ошибка держится,
+            // пока движок не поднимется. beat обновляется всегда → host_fresh точен.
+            let up = engine.as_mut().map(|e| e.alive()).unwrap_or(false);
+            write_status(&HostStatus {
+                pid,
+                up,
+                epoch: cur_epoch,
+                beat: now_ms(),
+                error: if up { String::new() } else { last_error.clone() },
+            });
         } else {
             if let Some(mut e) = engine.take() {
                 e.stop();
             }
             cur_epoch = u64::MAX;
+            failed_epoch = None;
+            last_error = String::new();
             write_status(&HostStatus { pid, up: false, epoch: 0, beat: now_ms(), error: String::new() });
             // Долго висеть без дела незачем — выходим после паузы простоя. Если
             // туннель снова понадобится, задача поднимет нас заново по требованию.
@@ -202,6 +227,45 @@ pub fn run() {}
 #[cfg(windows)]
 fn write_status(s: &HostStatus) {
     if let Ok(text) = serde_json::to_string_pretty(s) {
-        let _ = std::fs::write(status_path(), text);
+        let _ = store::atomic_write(&status_path(), text.as_bytes());
+    }
+}
+
+/// Нужен ли (пере)старт движка. Чистая функция — чтобы протестировать логику цикла:
+/// - новая команда (epoch сменился) → всегда стартуем;
+/// - движок умер, но НЕ из-за неудачного старта именно этого epoch → перезапуск;
+/// - старт этого epoch уже провалился → НЕ повторяем (ждём новой команды), иначе был
+///   бы бесконечный tight loop перезапусков (~12с на попытку) при стойкой ошибке.
+fn needs_restart(want_epoch: u64, cur_epoch: u64, alive: bool, failed_epoch: Option<u64>) -> bool {
+    if want_epoch != cur_epoch {
+        return true;
+    }
+    !alive && failed_epoch != Some(want_epoch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_restart;
+
+    #[test]
+    fn restart_on_new_epoch() {
+        assert!(needs_restart(2, 1, true, None));
+        assert!(needs_restart(2, 1, false, Some(1)));
+    }
+
+    #[test]
+    fn no_restart_when_alive_and_same_epoch() {
+        assert!(!needs_restart(1, 1, true, None));
+    }
+
+    #[test]
+    fn restart_when_engine_died_after_success() {
+        assert!(needs_restart(1, 1, false, None));
+    }
+
+    #[test]
+    fn no_infinite_retry_when_start_failed() {
+        // Регресс: старт этого epoch провалился → повторно НЕ рестартуем (иначе tight loop).
+        assert!(!needs_restart(1, 1, false, Some(1)));
     }
 }

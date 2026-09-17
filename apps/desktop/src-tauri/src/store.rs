@@ -28,9 +28,11 @@ pub fn engine_dir() -> PathBuf {
 /// Атомарная запись с fsync: временный файл сбрасывается на диск ДО
 /// переименования, иначе после обрыва питания rename мог бы «состояться», а
 /// содержимое файла — нет, и мы получили бы пустышку вместо конфига.
-fn atomic_write(target: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub fn atomic_write(target: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
-    let tmp = target.with_extension("tmp");
+    // Временное имя с pid: config.yaml пишут и окно, и привилегированный хост движка,
+    // и общий `.tmp` мог бы столкнуться между процессами.
+    let tmp = target.with_extension(format!("tmp{}", std::process::id()));
     {
         let mut f = fs::File::create(&tmp).map_err(|e| e.to_string())?;
         f.write_all(bytes).map_err(|e| e.to_string())?;
