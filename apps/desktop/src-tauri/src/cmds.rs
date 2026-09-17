@@ -665,6 +665,13 @@ fn restore_proxy() {
 
 #[tauri::command]
 pub fn vpn_disconnect(running: tauri::State<'_, Running>) -> Result<(), String> {
+    // Берём ТОТ ЖЕ замок сериализации (.1), что и vpn_connect: иначе disconnect мог
+    // вклиниться в середину подключения (connect держит .1, но отпускает .0 на время
+    // старта движка и установки системного прокси) — и человек, нажавший «отключить»,
+    // оставался бы подключённым, либо прокси указывал бы мимо туннеля. Порядок замков
+    // .1→.0 совпадает с connect (нет взаимной блокировки), реентрантности нет —
+    // vpn_connect не вызывает команду disconnect.
+    let _serial = running.1.lock().map_err(|_| "Внутренняя ошибка состояния")?;
     let mut guard = running.0.lock().map_err(|_| "Внутренняя ошибка состояния")?;
     if let Some(mut e) = guard.take() {
         e.stop();
