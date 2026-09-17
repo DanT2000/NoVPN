@@ -185,7 +185,13 @@ export function buildWhitelistXrayConfig(
   // (умная маршрутизация): список → в туннель, а туннель — это первый тир либо
   // балансировщик lb0 (несколько серверов/тиров); терминальное правило тогда → direct.
   // При disableWhitelist (полный туннель) доменных правил нет вовсе.
-  const listTarget = matchVpn ? (proxies.length || xray.length > 1 ? { balancerTag: 'lb0' } : { outboundTag: 'proxy-t0-0' }) : { outboundTag: 'direct' };
+  // Балансировщик lb0 существует ТОЛЬКО когда каналов больше одного (мульти-тир, либо
+  // один тир из нескольких Xray). Единственный канал (один прокси ИЛИ один vless)
+  // балансировщик не создаёт — список должен идти прямо на proxy-t0-0. Прежнее
+  // `proxies.length || xray.length > 1` при match-vpn с одним прокси и нулём валидных
+  // vless ссылалось на несуществующий lb0 → Xray отвергал весь конфиг.
+  const multiChannel = xray.length + proxies.length > 1;
+  const listTarget = matchVpn ? (multiChannel ? { balancerTag: 'lb0' } : { outboundTag: 'proxy-t0-0' }) : { outboundTag: 'direct' };
   // Исключения — только для match-vpn и только ПЕРЕД основным списком: в match-direct
   // база и так идёт напрямую, там такое правило было бы пустым звуком.
   const exDomains = matchVpn && !disableWhitelist ? normalizeWhitelistRoutes(opts.directRoutes?.domains ?? []) : [];
