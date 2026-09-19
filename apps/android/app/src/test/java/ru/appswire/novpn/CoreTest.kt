@@ -77,7 +77,9 @@ class CoreTest {
         """.trimIndent()
         val nodes = (Sub.parse(json) as Sub.Parsed.Nodes).nodes
         assertEquals(1, nodes.size)
-        assertEquals("Франция", nodes[0].name)
+        // Ведущий флаг сохраняется (нужен значку сервера в UI), убирается только приписка
+        // режима « · Умная маршрутизация».
+        assertEquals("🇫🇷 Франция", nodes[0].name)
         assertEquals("p1", nodes[0].profile?.profileId)
         assertEquals("smart", nodes[0].profile?.mode)
     }
@@ -119,6 +121,24 @@ class CoreTest {
         val user = out.indexOfFirst { it == "DOMAIN-SUFFIX,myhost.corp,${Config.GROUP}" }
         val bypass = out.indexOfFirst { it == "DOMAIN-SUFFIX,corp,DIRECT" }
         assertTrue("правило человека должно стоять раньше обхода", user in 0 until bypass)
+    }
+
+    @Test
+    fun `у прямого домена QUIC не режется — DIRECT раньше блока QUIC`() {
+        // Ozon-подобный прямой сайт с QUIC-API: его DOMAIN-SUFFIX,DIRECT должен стоять
+        // РАНЬШЕ правила REJECT udp/443, иначе QUIC у прямого трафика ломается.
+        val out = rulesOf(Rules(listDirectDomains = listOf("ozon.ru")))
+        val direct = out.indexOfFirst { it == "DOMAIN-SUFFIX,ozon.ru,DIRECT" }
+        val quic = out.indexOfFirst { it.contains("REJECT") }
+        assertTrue("direct-домен должен стоять раньше блока QUIC", direct in 0 until quic)
+    }
+
+    @Test
+    fun `у VPN-домена QUIC режется — блок QUIC раньше VPN-правила`() {
+        val out = rulesOf(Rules(listVpnDomains = listOf("youtube.com")))
+        val quic = out.indexOfFirst { it.contains("REJECT") }
+        val vpn = out.indexOfFirst { it == "DOMAIN-SUFFIX,youtube.com,${Config.GROUP}" }
+        assertTrue("блок QUIC должен стоять раньше VPN-правила", quic in 0 until vpn)
     }
 
     @Test

@@ -345,28 +345,28 @@ object Config {
         }
 
         // ── Умный режим ──
-        // Сначала ВСЁ, что идёт НАПРЯМУЮ (для него QUIC не режем):
-        // приватные подсети,
+        // Приватные подсети — по политике lanAccess (для них QUIC не режем).
         if (!r.lanAccess) pushSubnets(out)
-        // 1. решение человека «напрямую» — перед широкими суффиксами обхода локалки,
-        for (d in r.userDomains) if (!d.vpn) {
-            cleanDomain(d.domain)?.let { out += "DOMAIN-SUFFIX,$it,DIRECT" }
+
+        // 1. Решение человека — раньше обхода локалки и списков, чтобы явный выбор был
+        //    сильнее (в т.ч. для «через VPN»: myhost.corp должен победить широкий обход
+        //    .corp). Направление и определяет, режется ли у него QUIC (см. блок ниже).
+        for (d in r.userDomains) {
+            val dom = cleanDomain(d.domain) ?: continue
+            out += "DOMAIN-SUFFIX,$dom,${if (d.vpn) GROUP else "DIRECT"}"
         }
-        // 2. обход локальной сети,
+
+        // 2. Обход локальной сети — после явного выбора.
         pushLocalBypass(out, r)
-        // 3. российские сервисы из списка «напрямую».
+
+        // 3. Списки «напрямую»: российские сервисы.
         for (d in r.listDirectDomains) cleanDomain(d)?.let { out += "DOMAIN-SUFFIX,$it,DIRECT" }
 
-        // Теперь режем QUIC: прямые домены уже ушли DIRECT выше, а весь остальной QUIC
-        // (в туннель и неназванное) блокируем.
+        // Блок QUIC — ПОСЛЕ прямых правил: прямые домены (Ozon и т.п.) уже ушли DIRECT,
+        // остальной QUIC (VPN-списки и всё неназванное) блокируем — по туннелю он виснет.
         out += quicBlock
 
-        // 4. Решение человека «через VPN».
-        for (d in r.userDomains) if (d.vpn) {
-            cleanDomain(d.domain)?.let { out += "DOMAIN-SUFFIX,$it,$GROUP" }
-        }
-
-        // 5. Списки «через VPN» — по грамматике upstream (контракт, раздел 7).
+        // 4. Списки «через VPN» — по грамматике upstream (контракт, раздел 7).
         for (d in r.listVpnDomains) cleanDomain(d)?.let { out += "DOMAIN-SUFFIX,$it,$GROUP" }
         for (d in r.listVpnFull) cleanDomain(d)?.let { out += "DOMAIN,$it,$GROUP" }
         for (k in r.listVpnKeywords) {
