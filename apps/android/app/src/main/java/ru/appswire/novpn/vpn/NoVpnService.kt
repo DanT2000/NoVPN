@@ -71,6 +71,11 @@ class NoVpnService : VpnService() {
     @Volatile
     private var netCallback: ConnectivityManager.NetworkCallback? = null
 
+    /** Сеть, к которой сейчас привязан туннель — чтобы отличить реальную смену сети
+        (закрыть висящие соединения движка) от повторных событий про ту же сеть. */
+    @Volatile
+    private var boundNetwork: Network? = null
+
     @Volatile
     private var watchdog: Job? = null
 
@@ -646,12 +651,27 @@ class NoVpnService : VpnService() {
                 }
                 // Текущий резерв ещё жив — остаёмся на нём.
                 if (current != null && worksThrough(eng, current)) return
-            } else if (current != null && worksThrough(eng, current)) {
-                // Обычный сервер работает — всё хорошо.
-                VpnBus.setReserve(null)
-                markNormal()
-                VpnBus.setOfferReserve(false)
-                return
+            } else if (current != null) {
+                if (worksThrough(eng, current)) {
+                    // Обычный сервер работает — всё хорошо.
+                    VpnBus.setReserve(null)
+                    markNormal()
+                    VpnBus.setOfferReserve(false)
+                    return
+                }
+                // Не ответил через себя. Прежде чем гонять весь подбор/резерв — частая
+                // причина в том, что соединения движка зависли на сменившейся сети
+                // (переход Wi-Fi ↔ мобильный): сервер при этом доступен НАПРЯМУЮ
+                // (диагностика novpn=+), а трафик через прокси не идёт. Закрываем
+                // висящие соединения (лёгкий аналог «перезапустить VPN») и пробуем ещё
+                // раз — так уходит ложный подбор/резерв и «Wi-Fi без интернета».
+                runCatching { eng.control.closeConnections() }
+                if (worksThrough(eng, current)) {
+                    VpnBus.setReserve(null)
+                    markNormal()
+                    VpnBus.setOfferReserve(false)
+                    return
+                }
             }
 
             // Текущий не отвечает через себя. Автоматика выключена — только
@@ -789,6 +809,16 @@ class NoVpnService : VpnService() {
                 // Wi-Fi ↔ мобильный интернет движок продолжит слать пакеты в
                 // исчезнувший интерфейс, и соединение «висит».
                 runCatching { setUnderlyingNetworks(arrayOf(network)) }
+                val prev = boundNetwork
+                boundNetwork = network
+                if (prev != null && prev != network) {
+                    // Сеть РЕАЛЬНО сменилась. Соединения движка (в т.ч. к серверу)
+                    // остались на прежнем интерфейсе и висят — закрываем их, чтобы движок
+                    // переустановил поверх новой сети. Без этого туннель «зависал» до
+                    // ручного «перезапустить VPN» / выключения мобильной связи (тот самый
+                    // Wi-Fi с восклицательным знаком после переключения с мобильного).
+                    engine?.let { e -> scope.launch { runCatching { e.control.closeConnections() } } }
+                }
                 rebuild.trySend(Unit)
                 // Существенная смена сети (Wi-Fi ↔ мобильный, смена оператора) —
                 // повод перепроверить доступ: где было плохо, могло стать хорошо,
@@ -798,13 +828,25 @@ class NoVpnService : VpnService() {
             }
 
             override fun onLost(network: Network) {
-                runCatching { setUnderlyingNetworks(null) }
-                // Если заменяющей сети нет (выключили и Wi-Fi, и мобильный) —
-                // интернета сейчас нет вовсе. Показываем это сразу, чтобы на главной
-                // не висело «Подключено» при мёртвой сети. При переходе Wi-Fi ↔ LTE
-                // activeNetwork уже указывает на новую сеть, и мы сюда не заходим.
-                if (runCatching { cm.activeNetwork }.getOrNull() == null) {
+                val active = runCatching { cm.activeNetwork }.getOrNull()
+                if (active == null) {
+                    // Заменяющей сети нет (выключили и Wi-Fi, и мобильный) — интернета
+                    // сейчас нет вовсе. Обнуляем underlying и показываем сразу, чтобы на
+                    // главной не висело «Подключено» при мёртвой сети.
+                    runCatching { setUnderlyingNetworks(null) }
+                    boundNetwork = null
                     VpnBus.setDiagnosis(NetDiagnosis.NO_INTERNET)
+                } else {
+                    // Идёт переход: есть новая активная сеть. НЕ обнуляем underlying —
+                    // прежний безусловный setUnderlyingNetworks(null) мог перебить только
+                    // что выставленную новую сеть (гонка колбэков) и оставить туннель на
+                    // «мёртвом» интерфейсе. Привязываем к активной и закрываем висящие
+                    // соединения, если это новая для нас сеть.
+                    runCatching { setUnderlyingNetworks(arrayOf(active)) }
+                    if (boundNetwork != active) {
+                        boundNetwork = active
+                        engine?.let { e -> scope.launch { runCatching { e.control.closeConnections() } } }
+                    }
                 }
             }
 
@@ -850,6 +892,7 @@ class NoVpnService : VpnService() {
         watchdog?.cancel()
         watchdog = null
         unregisterNetworkCallback()
+        boundNetwork = null
         engine?.stop()
         engine = null
         runCatching { tun?.close() }
