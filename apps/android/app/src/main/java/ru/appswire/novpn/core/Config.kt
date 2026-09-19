@@ -328,37 +328,45 @@ object Config {
             }
         }
 
-        // QUIC (udp/443) — REJECT в обоих режимах: браузер открывает QUIC, UDP по
-        // туннелю теряется, отката на TCP нет — видео «зависает».
-        out += "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"
-
-        // Локальные подсети — до всего остального, по серверной политике lanAccess.
-        if (!r.lanAccess) pushSubnets(out)
+        // QUIC (udp/443) по туннелю теряется, отката на TCP нет — видео «зависает»,
+        // поэтому его режем. НО только для того, что идёт ЧЕРЕЗ VPN: у ПРЯМОГО трафика
+        // QUIC работает нативно, и блокировать его нельзя — иначе ломаются прямые сайты
+        // с QUIC-API (например Ozon). Поэтому ставим это правило ПОСЛЕ direct-правил.
+        val quicBlock = "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"
 
         if (!r.smart) {
-            // «Полный VPN»: весь трафик в туннель, без доменных исключений. Но
-            // локальную сеть не рвём: приватные подсети уже ушли DIRECT выше, а
-            // здесь применяем обход локальных ДОМЕНОВ — доступ к NAS по имени
-            // должен работать и в полном режиме.
+            // «Полный VPN»: весь трафик в туннель — QUIC режем целиком. Локальную сеть
+            // не рвём: приватные подсети DIRECT, обход локальных ДОМЕНОВ (NAS по имени).
+            if (!r.lanAccess) pushSubnets(out)
+            out += quicBlock
             pushLocalBypass(out, r)
             out += "MATCH,$GROUP"
             return out
         }
 
-        // 1. Решение человека — перед широкими суффиксами обхода локальной сети.
-        for (d in r.userDomains) {
-            val dom = cleanDomain(d.domain) ?: continue
-            out += "DOMAIN-SUFFIX,$dom,${if (d.vpn) GROUP else "DIRECT"}"
+        // ── Умный режим ──
+        // Сначала ВСЁ, что идёт НАПРЯМУЮ (для него QUIC не режем):
+        // приватные подсети,
+        if (!r.lanAccess) pushSubnets(out)
+        // 1. решение человека «напрямую» — перед широкими суффиксами обхода локалки,
+        for (d in r.userDomains) if (!d.vpn) {
+            cleanDomain(d.domain)?.let { out += "DOMAIN-SUFFIX,$it,DIRECT" }
         }
-
-        // 2. Обход локальной сети — после явного выбора.
+        // 2. обход локальной сети,
         pushLocalBypass(out, r)
-
-        // 3. Списки «напрямую»: российские сервисы, которые с зарубежного адреса
-        //    просто не открываются.
+        // 3. российские сервисы из списка «напрямую».
         for (d in r.listDirectDomains) cleanDomain(d)?.let { out += "DOMAIN-SUFFIX,$it,DIRECT" }
 
-        // 4. Списки «через VPN» — по грамматике upstream (контракт, раздел 7).
+        // Теперь режем QUIC: прямые домены уже ушли DIRECT выше, а весь остальной QUIC
+        // (в туннель и неназванное) блокируем.
+        out += quicBlock
+
+        // 4. Решение человека «через VPN».
+        for (d in r.userDomains) if (d.vpn) {
+            cleanDomain(d.domain)?.let { out += "DOMAIN-SUFFIX,$it,$GROUP" }
+        }
+
+        // 5. Списки «через VPN» — по грамматике upstream (контракт, раздел 7).
         for (d in r.listVpnDomains) cleanDomain(d)?.let { out += "DOMAIN-SUFFIX,$it,$GROUP" }
         for (d in r.listVpnFull) cleanDomain(d)?.let { out += "DOMAIN,$it,$GROUP" }
         for (k in r.listVpnKeywords) {
@@ -377,7 +385,7 @@ object Config {
             if (a.isNotEmpty() && a.none { it == ',' || it == ' ' }) out += "IP-CIDR,$a,$GROUP"
         }
 
-        // 5. Всё неназванное идёт напрямую. Это и есть модель NoVPN.
+        // 6. Всё неназванное идёт напрямую. Это и есть модель NoVPN.
         out += "MATCH,DIRECT"
         return out
     }
