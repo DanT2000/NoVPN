@@ -34,15 +34,6 @@ class Control(private val port: Int, private val secret: String) {
         .url("$base$path")
         .header("Authorization", "Bearer $secret")
 
-    /**
-     * Кодирование имени прокси/группы для СЕГМЕНТА ПУТИ. URLEncoder предназначен для
-     * query/form и кодирует пробел как `+`, а в пути `+` — это литеральный плюс, не
-     * пробел. Имена серверов теперь с пробелом и эмодзи («🇳🇱🚀 Нидерланды»), поэтому
-     * `/proxies/🇳🇱🚀+Нидерланды/delay` не находил прокси → delay всегда null → сторож
-     * считал сервер мёртвым и гонял бесконечный ложный подбор/резерв. Меняем `+` на `%20`.
-     */
-    private fun seg(name: String): String = java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20")
-
     /** Отвечает ли на порту именно наш движок: у mihomo в /version есть поле meta. */
     fun isOurEngine(): Boolean = runCatching {
         client.newCall(request("/version").build()).execute().use { r ->
@@ -61,18 +52,6 @@ class Control(private val port: Int, private val secret: String) {
     }.getOrDefault(false)
 
     /**
-     * Закрывает ВСЕ живые соединения движка (`DELETE /connections`). Нужно при смене
-     * сети (Wi-Fi ↔ мобильный, смена оператора): старые соединения — в том числе к
-     * VPN-серверу — остались привязаны к исчезнувшему интерфейсу и «висят», а новые
-     * движок откроет уже поверх текущей сети по умолчанию. Это лёгкая автоматическая
-     * замена ручного «перезапустить VPN» / выключить мобильную связь, которым
-     * приходилось лечить зависший после переключения туннель.
-     */
-    fun closeConnections(): Boolean = runCatching {
-        client.newCall(request("/connections").delete().build()).execute().use { it.isSuccessful }
-    }.getOrDefault(false)
-
-    /**
      * Выбирает точку в своей группе. Нужно ПОСЛЕ каждого reload: группа типа
      * `select` помнит прошлый выбор, и без явного указания движок останется на
      * старом сервере, хотя в интерфейсе выбран новый.
@@ -82,14 +61,14 @@ class Control(private val port: Int, private val secret: String) {
             JsonObject.serializer(),
             JsonObject(mapOf("name" to JsonPrimitive(name))),
         ).toRequestBody(jsonType)
-        val path = "/proxies/" + seg(group)
+        val path = "/proxies/" + java.net.URLEncoder.encode(group, "UTF-8")
         client.newCall(request(path).put(body).build()).execute().use { it.isSuccessful }
     }.getOrDefault(false)
 
     /** Задержка до точки, мс; null — не ответила. */
     fun delay(name: String, url: String = "http://cp.cloudflare.com/generate_204", timeoutMs: Int = 3000): Int? =
         runCatching {
-            val path = "/proxies/" + seg(name) +
+            val path = "/proxies/" + java.net.URLEncoder.encode(name, "UTF-8") +
                 "/delay?timeout=$timeoutMs&url=" + java.net.URLEncoder.encode(url, "UTF-8")
             client.newCall(request(path).build()).execute().use { r ->
                 if (!r.isSuccessful) return null
