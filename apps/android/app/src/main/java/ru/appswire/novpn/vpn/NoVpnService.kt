@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -75,6 +76,18 @@ class NoVpnService : VpnService() {
         (закрыть висящие соединения движка) от повторных событий про ту же сеть. */
     @Volatile
     private var boundNetwork: Network? = null
+
+    /** Была ли уже первая привязка сети после подключения. На самой первой соединения
+        только-только установлены — закрывать их незачем; на всех последующих смена
+        сети означает, что старые соединения повисли на прежнем интерфейсе. */
+    @Volatile
+    private var initialBindDone = false
+
+    /** Был ли у текущей сети подтверждённый интернет (NET_CAPABILITY_VALIDATED) в прошлом
+        событии. Переход false→true = «интернет ВЕРНУЛСЯ» на той же сети (4G моргнул,
+        Wi-Fi снова поймался) — повод сразу переустановить соединения. */
+    @Volatile
+    private var lastValidated: Boolean? = null
 
     @Volatile
     private var watchdog: Job? = null
@@ -460,9 +473,17 @@ class NoVpnService : VpnService() {
                             // интернета», выставленный при пропаже сети). Иначе метка
                             // висела бы и после того, как интернет вернулся.
                             if (VpnBus.diagnosis.value != NetDiagnosis.OK) markNormal()
-                        } else if (++healthMisses >= 2) {
-                            healthMisses = 0
-                            triggerFailover()
+                        } else {
+                            // Первый промах в серии — вдруг соединения зависли на
+                            // сменившейся сети (событие onAvailable могло не прийти чисто).
+                            // Закрываем их ОДИН раз — движок переустановит поверх текущей
+                            // сети. Только один раз за серию промахов, чтобы не рвать
+                            // трафик в цикле (и это безопасно: worksThrough теперь надёжен).
+                            if (healthMisses == 0) runCatching { eng.control.closeConnections() }
+                            if (++healthMisses >= 2) {
+                                healthMisses = 0
+                                triggerFailover()
+                            }
                         }
                     }
                 }
@@ -794,16 +815,18 @@ class NoVpnService : VpnService() {
                 // Wi-Fi ↔ мобильный интернет движок продолжит слать пакеты в
                 // исчезнувший интерфейс, и соединение «висит».
                 runCatching { setUnderlyingNetworks(arrayOf(network)) }
-                val prev = boundNetwork
+                val changed = boundNetwork != network
                 boundNetwork = network
-                if (prev != null && prev != network) {
-                    // Сеть РЕАЛЬНО сменилась. Соединения движка (в т.ч. к серверу)
-                    // остались на прежнем интерфейсе и висят — закрываем их, чтобы движок
-                    // переустановил поверх новой сети. Без этого туннель «зависал» до
-                    // ручного «перезапустить VPN» / выключения мобильной связи (тот самый
-                    // Wi-Fi с восклицательным знаком после переключения с мобильного).
+                // Закрываем висящие соединения при ЛЮБОЙ реальной смене сети, кроме самой
+                // первой привязки после подключения. Прежнее условие `prev != null`
+                // пропускало ГЛАВНЫЙ случай: 4G выкл → пауза «нет сети» (onLost обнулил
+                // boundNetwork) → Wi-Fi вкл: соединения оставались на мёртвом 4G, и туннель
+                // оживал сам лишь через таймаут TCP (те самые «начинается… а вот заработало»).
+                // Закрытие заставляет движок переустановить их поверх Wi-Fi сразу.
+                if (initialBindDone && changed) {
                     engine?.let { e -> scope.launch { runCatching { e.control.closeConnections() } } }
                 }
+                initialBindDone = true
                 rebuild.trySend(Unit)
                 // Существенная смена сети (Wi-Fi ↔ мобильный, смена оператора) —
                 // повод перепроверить доступ: где было плохо, могло стать хорошо,
@@ -845,6 +868,23 @@ class NoVpnService : VpnService() {
                     rebuild.trySend(Unit)
                 }
             }
+
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                // Смена сети (Wi-Fi ↔ мобильный) даёт onAvailable, но есть случаи БЕЗ
+                // смены netId: 4G моргнул (пропал/появился интернет), Wi-Fi отошёл-вернулся
+                // в зоне приёма. Тогда onAvailable не приходит, а соединения к серверу
+                // висят на «подвисшем» канале. Ловим переход «нет подтверждённого
+                // интернета → есть» и сразу закрываем соединения — движок переустановит
+                // их, не дожидаясь TCP-таймаута и сторожа.
+                val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                val was = lastValidated
+                lastValidated = validated
+                if (validated && was == false && initialBindDone) {
+                    engine?.let { e -> scope.launch { runCatching { e.control.closeConnections() } } }
+                    lastReturnCheck = 0
+                    triggerFailover()
+                }
+            }
         }
         // Именно СЕТЬ ПО УМОЛЧАНИЮ: подписка на «любую сеть с интернетом» ловила бы
         // и посторонние сети (оператор поднял мобильную на секунду при живом Wi-Fi),
@@ -878,6 +918,8 @@ class NoVpnService : VpnService() {
         watchdog = null
         unregisterNetworkCallback()
         boundNetwork = null
+        initialBindDone = false
+        lastValidated = null
         engine?.stop()
         engine = null
         runCatching { tun?.close() }
