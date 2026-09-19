@@ -328,29 +328,27 @@ object Config {
             }
         }
 
-        // QUIC (udp/443) по туннелю теряется, отката на TCP нет — видео «зависает»,
-        // поэтому его режем. НО только для того, что идёт ЧЕРЕЗ VPN: у ПРЯМОГО трафика
-        // QUIC работает нативно, и блокировать его нельзя — иначе ломаются прямые сайты
-        // с QUIC-API (например Ozon). Поэтому ставим это правило ПОСЛЕ direct-правил.
-        val quicBlock = "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"
+        // QUIC (udp/443) режем в ОБОИХ режимах. Причина именно на Android: прямой UDP
+        // движок набрать не может — без root нет доступа к таблице маршрутов
+        // («route ip+net: netlinkrib: permission denied»), а через туннель QUIC теряется.
+        // Поэтому UDP/443 блокируем, и приложение/браузер откатывается на TCP, который
+        // работает и напрямую, и через туннель. Пропускать «прямой» QUIC смысла нет — он
+        // на Android всё равно не поднимется, а без REJECT app зря долбит QUIC вместо отката.
+        out += "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"
+
+        // Локальные подсети — по политике lanAccess.
+        if (!r.lanAccess) pushSubnets(out)
 
         if (!r.smart) {
-            // «Полный VPN»: весь трафик в туннель — QUIC режем целиком. Локальную сеть
-            // не рвём: приватные подсети DIRECT, обход локальных ДОМЕНОВ (NAS по имени).
-            if (!r.lanAccess) pushSubnets(out)
-            out += quicBlock
+            // «Полный VPN»: весь трафик в туннель. Локальную сеть не рвём (обход доменов).
             pushLocalBypass(out, r)
             out += "MATCH,$GROUP"
             return out
         }
 
         // ── Умный режим ──
-        // Приватные подсети — по политике lanAccess (для них QUIC не режем).
-        if (!r.lanAccess) pushSubnets(out)
-
-        // 1. Решение человека — раньше обхода локалки и списков, чтобы явный выбор был
-        //    сильнее (в т.ч. для «через VPN»: myhost.corp должен победить широкий обход
-        //    .corp). Направление и определяет, режется ли у него QUIC (см. блок ниже).
+        // 1. Решение человека — раньше обхода локалки и списков (явный выбор сильнее:
+        //    myhost.corp через VPN должен победить широкий обход .corp).
         for (d in r.userDomains) {
             val dom = cleanDomain(d.domain) ?: continue
             out += "DOMAIN-SUFFIX,$dom,${if (d.vpn) GROUP else "DIRECT"}"
@@ -361,10 +359,6 @@ object Config {
 
         // 3. Списки «напрямую»: российские сервисы.
         for (d in r.listDirectDomains) cleanDomain(d)?.let { out += "DOMAIN-SUFFIX,$it,DIRECT" }
-
-        // Блок QUIC — ПОСЛЕ прямых правил: прямые домены (Ozon и т.п.) уже ушли DIRECT,
-        // остальной QUIC (VPN-списки и всё неназванное) блокируем — по туннелю он виснет.
-        out += quicBlock
 
         // 4. Списки «через VPN» — по грамматике upstream (контракт, раздел 7).
         for (d in r.listVpnDomains) cleanDomain(d)?.let { out += "DOMAIN-SUFFIX,$it,$GROUP" }

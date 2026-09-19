@@ -124,24 +124,6 @@ class CoreTest {
     }
 
     @Test
-    fun `у прямого домена QUIC не режется — DIRECT раньше блока QUIC`() {
-        // Ozon-подобный прямой сайт с QUIC-API: его DOMAIN-SUFFIX,DIRECT должен стоять
-        // РАНЬШЕ правила REJECT udp/443, иначе QUIC у прямого трафика ломается.
-        val out = rulesOf(Rules(listDirectDomains = listOf("ozon.ru")))
-        val direct = out.indexOfFirst { it == "DOMAIN-SUFFIX,ozon.ru,DIRECT" }
-        val quic = out.indexOfFirst { it.contains("REJECT") }
-        assertTrue("direct-домен должен стоять раньше блока QUIC", direct in 0 until quic)
-    }
-
-    @Test
-    fun `у VPN-домена QUIC режется — блок QUIC раньше VPN-правила`() {
-        val out = rulesOf(Rules(listVpnDomains = listOf("youtube.com")))
-        val quic = out.indexOfFirst { it.contains("REJECT") }
-        val vpn = out.indexOfFirst { it == "DOMAIN-SUFFIX,youtube.com,${Config.GROUP}" }
-        assertTrue("блок QUIC должен стоять раньше VPN-правила", quic in 0 until vpn)
-    }
-
-    @Test
     fun `полный VPN не содержит исключений из списков и заканчивается группой`() {
         val out = rulesOf(
             Rules(
