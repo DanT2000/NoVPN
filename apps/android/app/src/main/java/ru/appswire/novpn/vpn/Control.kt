@@ -34,6 +34,15 @@ class Control(private val port: Int, private val secret: String) {
         .url("$base$path")
         .header("Authorization", "Bearer $secret")
 
+    /**
+     * Кодирование имени прокси/группы для СЕГМЕНТА ПУТИ. URLEncoder предназначен для
+     * query/form и кодирует пробел как `+`, а в пути `+` — это литеральный плюс, не
+     * пробел. Имена серверов теперь с пробелом и эмодзи («🇳🇱🚀 Нидерланды»), поэтому
+     * `/proxies/🇳🇱🚀+Нидерланды/delay` не находил прокси → delay всегда null → сторож
+     * считал сервер мёртвым и гонял бесконечный ложный подбор/резерв. Меняем `+` на `%20`.
+     */
+    private fun seg(name: String): String = java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20")
+
     /** Отвечает ли на порту именно наш движок: у mihomo в /version есть поле meta. */
     fun isOurEngine(): Boolean = runCatching {
         client.newCall(request("/version").build()).execute().use { r ->
@@ -73,14 +82,14 @@ class Control(private val port: Int, private val secret: String) {
             JsonObject.serializer(),
             JsonObject(mapOf("name" to JsonPrimitive(name))),
         ).toRequestBody(jsonType)
-        val path = "/proxies/" + java.net.URLEncoder.encode(group, "UTF-8")
+        val path = "/proxies/" + seg(group)
         client.newCall(request(path).put(body).build()).execute().use { it.isSuccessful }
     }.getOrDefault(false)
 
     /** Задержка до точки, мс; null — не ответила. */
     fun delay(name: String, url: String = "http://cp.cloudflare.com/generate_204", timeoutMs: Int = 3000): Int? =
         runCatching {
-            val path = "/proxies/" + java.net.URLEncoder.encode(name, "UTF-8") +
+            val path = "/proxies/" + seg(name) +
                 "/delay?timeout=$timeoutMs&url=" + java.net.URLEncoder.encode(url, "UTF-8")
             client.newCall(request(path).build()).execute().use { r ->
                 if (!r.isSuccessful) return null

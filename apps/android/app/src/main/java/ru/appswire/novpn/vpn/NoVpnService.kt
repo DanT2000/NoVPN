@@ -651,27 +651,12 @@ class NoVpnService : VpnService() {
                 }
                 // Текущий резерв ещё жив — остаёмся на нём.
                 if (current != null && worksThrough(eng, current)) return
-            } else if (current != null) {
-                if (worksThrough(eng, current)) {
-                    // Обычный сервер работает — всё хорошо.
-                    VpnBus.setReserve(null)
-                    markNormal()
-                    VpnBus.setOfferReserve(false)
-                    return
-                }
-                // Не ответил через себя. Прежде чем гонять весь подбор/резерв — частая
-                // причина в том, что соединения движка зависли на сменившейся сети
-                // (переход Wi-Fi ↔ мобильный): сервер при этом доступен НАПРЯМУЮ
-                // (диагностика novpn=+), а трафик через прокси не идёт. Закрываем
-                // висящие соединения (лёгкий аналог «перезапустить VPN») и пробуем ещё
-                // раз — так уходит ложный подбор/резерв и «Wi-Fi без интернета».
-                runCatching { eng.control.closeConnections() }
-                if (worksThrough(eng, current)) {
-                    VpnBus.setReserve(null)
-                    markNormal()
-                    VpnBus.setOfferReserve(false)
-                    return
-                }
+            } else if (current != null && worksThrough(eng, current)) {
+                // Обычный сервер работает — всё хорошо.
+                VpnBus.setReserve(null)
+                markNormal()
+                VpnBus.setOfferReserve(false)
+                return
             }
 
             // Текущий не отвечает через себя. Автоматика выключена — только
