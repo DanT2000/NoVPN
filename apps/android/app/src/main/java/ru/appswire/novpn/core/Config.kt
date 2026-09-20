@@ -104,7 +104,12 @@ object Config {
         // /etc/resolv.conf — движок не должен даже пытаться.
         root["find-process-mode"] = "off"
 
-        root["dns"] = buildDns(rules)
+        // В DNS передаём и адреса серверов (обычных + резервных): их доменные имена
+        // обязаны резолвиться через СИСТЕМНЫЙ DNS, а не зарубежный DoH. В сети с
+        // белыми списками DoH к 1.1.1.1:443 закрыт, и тогда движок не может разрешить
+        // даже адрес собственного сервера — ни обычного, ни резервного — и обход не
+        // запускается. Системный (провайдерский) резолвер в такой сети доступен.
+        root["dns"] = buildDns(rules, Sub.hostsOf(parsed) + reserveHosts)
         if (tunFd != null) root["tun"] = buildTun(tunFd)
 
         // Своя группа поверх чужих: приложение переключает сервер именно ею.
@@ -161,13 +166,20 @@ object Config {
         "dns-hijack" to listOf("any:53", "tcp://any:53"),
     )
 
-    private fun buildDns(rules: Rules): Map<String, Any?> {
+    private fun buildDns(rules: Rules, serverHosts: List<String> = emptyList()): Map<String, Any?> {
         val dns = linkedMapOf<String, Any?>(
             "enable" to true,
             "ipv6" to false,
             "enhanced-mode" to "fake-ip",
             "fake-ip-range" to "198.18.0.1/16",
         )
+        // Доменные адреса самих серверов (обычных и резервных). IP-литералы резолвить
+        // не надо. Их резолвим системным DNS — см. ниже, в nameserver-policy.
+        val serverDomains = serverHosts
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !isIpLiteral(it) }
+            .mapNotNull(::cleanDomain)
+            .distinct()
         // Фейковый IP не выдаём тому, что и так резолвится локально.
         val fakeFilter = mutableListOf("localhost", "+.localhost")
         if (rules.bypassLocal) {
@@ -186,6 +198,9 @@ object Config {
                 .distinct()
         } else emptyList()
         directDomains.forEach { fakeFilter += "+.$it" }
+        // Адреса серверов резолвим по-настоящему (не фейковым IP): движок дозванивается
+        // к ним сам, ему нужен реальный адрес.
+        serverDomains.forEach { fakeFilter += "+.$it" }
         dns["fake-ip-filter"] = fakeFilter
 
         dns["nameserver"] = nameservers(rules.dnsProvider)
@@ -201,6 +216,10 @@ object Config {
                 if (d.isNotEmpty()) policy["+.$d"] = local
             }
             directDomains.forEach { policy["+.$it"] = local }
+            // Адреса серверов (обычных и резервных) — через системный DNS. Иначе в сети
+            // с белыми списками, где DoH закрыт, движок не разрешит имя сервера и не
+            // подключится ни к обычному, ни к резервному: обход просто не стартует.
+            serverDomains.forEach { policy["+.$it"] = local }
             if (policy.isNotEmpty()) dns["nameserver-policy"] = policy
             // Резолвер для самих DoH-серверов: сюда годятся ТОЛЬКО адреса. Имя в
             // «tls://dns.example» пришлось бы сначала разрешить, то есть замкнуть на себя.

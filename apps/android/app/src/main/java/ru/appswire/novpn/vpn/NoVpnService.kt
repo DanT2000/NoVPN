@@ -36,6 +36,7 @@ import ru.appswire.novpn.R
 import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.core.Sub
 import ru.appswire.novpn.data.Repo
+import ru.appswire.novpn.ui.Flags
 
 /**
  * Служба VPN: поднимает туннель системы, запускает движок и следит, чтобы он жил.
@@ -384,7 +385,9 @@ class NoVpnService : VpnService() {
             return
         }
         val node = repo.nodeFor() ?: return
-        val config = repo.buildConfig(Config.TUN_FD, eng.secret) ?: return
+        // В резервном режиме собираем конфиг полным туннелем: белые списки ломают и
+        // прямой доступ к российским сайтам, поэтому весь трафик уводим через резерв.
+        val config = repo.buildConfig(Config.TUN_FD, eng.secret, VpnBus.reserve.value != null) ?: return
         repo.store.writeConfig(config)?.let {
             Log.e(TAG, "конфиг не записан: $it")
             return
@@ -473,7 +476,7 @@ class NoVpnService : VpnService() {
 
     private fun restartEngine(eng: Engine): Boolean {
         val fd = tun?.fd ?: return false
-        val config = repo.buildConfig(Config.TUN_FD, eng.newSecret()) ?: return false
+        val config = repo.buildConfig(Config.TUN_FD, eng.newSecret(), VpnBus.reserve.value != null) ?: return false
         if (eng.start(config, fd) != null) return false
         if (eng.waitReady(10_000) !is Engine.Started.Ok) return false
         // После перезапуска движка удерживаем активный сервер: в резервном режиме —
@@ -575,16 +578,43 @@ class NoVpnService : VpnService() {
     }
 
     /**
+     * Реальный ОБХОД ограничений через прокси — строже, чем worksThrough. Грузим
+     * несколько внешних сайтов, которые в белых списках напрямую недоступны (в т.ч.
+     * YouTube), и требуем, чтобы БЫСТРО ответило НЕ МЕНЬШЕ двух. Так резерв
+     * подтверждает, что реально пробивает ограничение, а не просто «жив»: через
+     * российский или мёртвый сервер YouTube и Google не загрузятся — он и отсеется,
+     * даже если по флагу его не распознали. Для выбора аварийного сервера (§4).
+     */
+    private fun bypassesWell(eng: Engine, name: String): Boolean {
+        var ok = 0
+        for (url in BYPASS_URLS) {
+            if (stopping || !eng.isAlive()) return false
+            if (eng.control.delay(name, url, BYPASS_TIMEOUT_MS) != null) {
+                ok++
+                if (ok >= BYPASS_MIN_OK) return true
+            }
+        }
+        return false
+    }
+
+    /**
      * Первый реально рабочий сервер из списка. Проверяем пачками параллельно:
      * резервных серверов может быть под сотню (у каждого оператора свой рабочий),
      * и перебирать их по очереди по 3 секунды — это минуты ожидания. Внутри пачки
      * берём кандидата с наименьшим номером среди ответивших — порядок сохраняется.
+     *
+     * `check` — критерий годности: обычным серверам достаточно worksThrough
+     * («жив»), аварийным даём bypassesWell («реально обходит»).
      */
-    private suspend fun firstWorking(eng: Engine, candidates: List<Candidate>): Candidate? {
+    private suspend fun firstWorking(
+        eng: Engine,
+        candidates: List<Candidate>,
+        check: (Engine, String) -> Boolean = { e, n -> worksThrough(e, n) },
+    ): Candidate? {
         for (chunk in candidates.chunked(HEALTH_CONCURRENCY)) {
             if (stopping || !eng.isAlive()) return null
             val checked = coroutineScope {
-                chunk.map { c -> async(Dispatchers.IO) { c to worksThrough(eng, c.name) } }.map { it.await() }
+                chunk.map { c -> async(Dispatchers.IO) { c to check(eng, c.name) } }.map { it.await() }
             }
             checked.firstOrNull { it.second }?.let { return it.first }
         }
@@ -594,24 +624,37 @@ class NoVpnService : VpnService() {
     private fun normalCandidates(): List<Candidate> =
         repo.representatives().map { Candidate(it.name, it.host, false) }
 
+    /**
+     * Кандидаты аварийного пула. Российские серверы исключаем: в подписках-резервах
+     * попадаются чисто российские точки («YouTube без рекламы» и т. п.), а из России
+     * российское ограничение не обойти — для входа по белым спискам они бесполезны.
+     */
     private fun reserveCandidates(): List<Candidate> =
-        repo.reserveNodes().map { Candidate(it.name, it.map["server"]?.toString().orEmpty(), true) }
+        repo.reserveNodes()
+            .filterNot { Flags.isRussian(it.name) }
+            .map { Candidate(it.name, it.map["server"]?.toString().orEmpty(), true) }
 
     private fun serverAddrs(): List<Pair<String, Int>> =
         repo.parsedSub()?.let { Sub.hostsOf(it) }.orEmpty().map { it to 443 }
 
     private fun applySelection(eng: Engine, c: Candidate) {
+        val wasReserve = VpnBus.reserve.value != null
         eng.control.selectProxy(c.name)
         VpnBus.setServer(c.name)
         if (c.reserve) {
             VpnBus.setReserve(ReserveInfo(c.name, c.host))
             notify(notification("Резервное подключение", c.name))
             repo.recordDiag("reserve", "Ушли на резервный сервер: ${c.name}")
+            // Первый уход на резерв: пересобираем конфиг полным туннелем (белые
+            // списки — умная маршрутизация уже не спасает). Смена одного резерва на
+            // другой полного пересбора не требует — режим уже полный.
+            if (!wasReserve) rebuild.trySend(Unit)
         } else {
-            val wasReserve = VpnBus.reserve.value != null
             VpnBus.setReserve(null)
             notify(notification("Подключено", c.name))
             repo.recordDiag("switch", if (wasReserve) "Вернулись на обычный сервер: ${c.name}" else "Переключение на сервер: ${c.name}")
+            // Вернулись на обычный сервер — возвращаем и умную маршрутизацию.
+            if (wasReserve) rebuild.trySend(Unit)
         }
     }
 
@@ -688,9 +731,10 @@ class NoVpnService : VpnService() {
                 return
             }
 
-            // Пробуем резерв с РЕАЛЬНОЙ проверкой интернета через него (§4). Из сотни
-            // серверов реально работают единицы — параллельная проверка находит их быстро.
-            firstWorking(eng, reserveCandidates())?.let { c ->
+            // Пробуем резерв с РЕАЛЬНОЙ проверкой ОБХОДА через него (§4): не «жив ли»,
+            // а грузятся ли внешние сайты (YouTube и др.). Из сотни серверов реально
+            // обходят единицы — параллельная проверка находит их быстро.
+            firstWorking(eng, reserveCandidates()) { e, n -> bypassesWell(e, n) }?.let { c ->
                 Log.i(TAG, "уход на рабочий резервный сервер ${c.name}")
                 applySelection(eng, c)
                 return
@@ -731,7 +775,7 @@ class NoVpnService : VpnService() {
         val start = list.indexOfFirst { it.name == current }
         val ordered = (if (start >= 0) list.drop(start + 1) + list.take(start + 1) else list)
             .filter { it.name != current }
-        firstWorking(eng, ordered)?.let {
+        firstWorking(eng, ordered) { e, n -> bypassesWell(e, n) }?.let {
             applySelection(eng, it)
             return
         }
@@ -743,7 +787,7 @@ class NoVpnService : VpnService() {
         val eng = engine ?: return
         if (!eng.isAlive() || !repo.reserveAvailable()) return
         VpnBus.setOfferReserve(false)
-        firstWorking(eng, reserveCandidates())?.let {
+        firstWorking(eng, reserveCandidates()) { e, n -> bypassesWell(e, n) }?.let {
             applySelection(eng, it)
             return
         }
@@ -1070,6 +1114,22 @@ class NoVpnService : VpnService() {
             "http://www.google.com/generate_204",
         )
         private const val HEALTH_TIMEOUT_MS = 3_000
+
+        /**
+         * Проверка реального ОБХОДА для аварийного пула: внешние сайты, которые в
+         * белых списках недоступны напрямую. YouTube — главный маркер (в РФ режется),
+         * плюс запасные. Все отдают 204 и отвечают быстро; российский или мёртвый
+         * сервер их не пропустит — такой резерв не выберем.
+         */
+        private val BYPASS_URLS = listOf(
+            "https://www.youtube.com/generate_204",
+            "https://www.google.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+            "https://www.gstatic.com/generate_204",
+        )
+        private const val BYPASS_TIMEOUT_MS = 3_500
+        /** Сколько внешних сайтов должно реально загрузиться, чтобы счесть обход рабочим. */
+        private const val BYPASS_MIN_OK = 2
         /** Сколько серверов проверять параллельно (перебор сотни резервных). */
         private const val HEALTH_CONCURRENCY = 8
         /** Как часто сторож проверяет доступ выбранного сервера. */

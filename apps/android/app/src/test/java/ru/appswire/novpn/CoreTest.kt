@@ -13,6 +13,7 @@ import ru.appswire.novpn.core.Meta
 import ru.appswire.novpn.core.Rules
 import ru.appswire.novpn.core.Sub
 import ru.appswire.novpn.core.deniedHuman
+import ru.appswire.novpn.ui.Flags
 
 /**
  * Контрактные тесты клиента. Повторяют тесты десктопа (`core.rs`, `sub.rs`,
@@ -311,6 +312,17 @@ class CoreTest {
     }
 
     @Test
+    fun `флаг-эмодзи в имени не рассыпается на суррогаты`() {
+        // Сырой (без percent-encoding) флаг в #фрагменте: суррогатная пара не должна
+        // превратиться в «????». Так резерв узнаётся по флагу — как на десктопе.
+        val raw = (Sub.parse("vless://u1@a.example:443#🇷🇺 YouTube") as Sub.Parsed.Nodes).nodes
+        assertEquals("🇷🇺 YouTube", raw[0].name)
+        // Percent-encoded вариант того же имени даёт тот же результат.
+        val enc = (Sub.parse("vless://u1@a.example:443#%F0%9F%87%B7%F0%9F%87%BA%20YouTube") as Sub.Parsed.Nodes).nodes
+        assertEquals("🇷🇺 YouTube", enc[0].name)
+    }
+
+    @Test
     fun `негодный порт откатывается на 443`() {
         val nodes = (Sub.parse("vless://u1@a.example:99999#Х") as Sub.Parsed.Nodes).nodes
         assertEquals(443, nodes[0].map["port"])
@@ -443,5 +455,31 @@ class CoreTest {
         }
         assertFalse(out.any { it.contains("a,b.example") })
         assertFalse(out.any { it.contains("пло хое") })
+    }
+
+    // ── аварийный пул: российские серверы не годятся для обхода белых списков ──
+
+    @Test
+    fun `российский сервер узнаётся по флагу и по названию`() {
+        // Флаг РФ в начале имени — как в чужих подписках («YouTube без рекламы»).
+        assertTrue(Flags.isRussian("🇷🇺 YouTube без рекламы"))
+        assertTrue(Flags.isRussian("🇷🇺🎬 Кино"))
+        // Флаг РФ, затем личный значок сервера.
+        assertTrue(Flags.isRussian("🇷🇺 Москва · Умная маршрутизация"))
+        // Без эмодзи — по слову-названию.
+        assertTrue(Flags.isRussian("Russia Premium"))
+        assertTrue(Flags.isRussian("Сервер Москва 2"))
+        // Значок-домик впереди, страна — словом.
+        assertTrue(Flags.isRussian("🏠 Санкт-Петербург"))
+    }
+
+    @Test
+    fun `иностранные серверы не считаются российскими`() {
+        assertFalse(Flags.isRussian("🇳🇱🚀 Нидерланды"))
+        assertFalse(Flags.isRussian("🇫🇷 Франция · Умная маршрутизация"))
+        assertFalse(Flags.isRussian("Finland 1"))
+        assertFalse(Flags.isRussian("Germany Frankfurt"))
+        // «Прага» (Чехия) не должна попасть под РФ из-за похожих букв.
+        assertFalse(Flags.isRussian("🇨🇿 Прага"))
     }
 }

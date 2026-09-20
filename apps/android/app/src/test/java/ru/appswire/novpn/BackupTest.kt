@@ -9,6 +9,7 @@ import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.core.Meta
 import ru.appswire.novpn.core.Rules
 import ru.appswire.novpn.core.Sub
+import ru.appswire.novpn.ui.Flags
 import ru.appswire.novpn.vpn.Diag
 import ru.appswire.novpn.vpn.NetDiagnosis
 
@@ -116,5 +117,50 @@ class BackupTest {
         assertEquals(NetDiagnosis.SERVER_DOWN, Diag.classify(russiaUp = true, externalUp = true, novpnUp = false))
         // Российские есть, внешних нет — похоже на ограниченный режим (белые списки).
         assertEquals(NetDiagnosis.RESTRICTED, Diag.classify(russiaUp = true, externalUp = false, novpnUp = false))
+    }
+
+    @Test
+    fun `российские серверы отсеиваются из аварийного пула`() {
+        // В аварийных подписках попадаются чисто российские точки («YouTube без
+        // рекламы», узнаются по флагу 🇷🇺). Для обхода белых списков они бесполезны:
+        // из России российское ограничение не обойти — их надо выкинуть из перебора.
+        val ruYoutube =
+            "vless://aaaaaaaa-bbbb-cccc-dddd-000000000001@ru1.reserve.example:443?type=tcp&security=reality&sni=cdn.example#🇷🇺 YouTube без рекламы"
+        val ruMoscow =
+            "vless://aaaaaaaa-bbbb-cccc-dddd-000000000002@ru2.reserve.example:443?type=tcp&security=reality&sni=cdn.example#Москва-2"
+        val reserve = parse(vlessReserve1, ruYoutube, vlessReserve2, ruMoscow) as Sub.Parsed.Nodes
+
+        // Ровно то же условие, что в NoVpnService.reserveCandidates().
+        val eligible = reserve.nodes.filterNot { Flags.isRussian(it.name) }.map { it.name }
+
+        assertEquals(listOf("Reserve-1", "Reserve-2"), eligible)
+        assertFalse("российский резерв не должен попасть в обход", eligible.any { it.contains("YouTube") || it.contains("Москва") })
+    }
+
+    @Test
+    fun `адреса серверов резолвятся системным DNS, а не заблокированным DoH`() {
+        // В сети с белыми списками DoH к 1.1.1.1:443 закрыт. Если имя сервера
+        // (обычного или резервного) резолвить через DoH — движок не подключится
+        // ни к одному и обход не стартует. Поэтому их адреса должны идти в
+        // nameserver-policy на системный (провайдерский) DNS.
+        val main = parse(vlessMain) as Sub.Parsed.Nodes // host nl.main.example
+        val reserve = parse(vlessReserve1) as Sub.Parsed.Nodes // host r1.reserve.example
+        val yaml = Config.build(
+            parsed = main,
+            rules = Rules(systemDns = listOf("10.0.0.1")),
+            selected = "Main",
+            tunFd = 3,
+            reserveProxies = reserve.nodes.map { it.map },
+            reserveHosts = reserve.nodes.mapNotNull { it.map["server"]?.toString() },
+        )
+        val root = Yaml().load<Map<String, Any?>>(yaml)
+        val dns = root["dns"] as Map<*, *>
+        val policy = dns["nameserver-policy"] as Map<*, *>
+        assertEquals("обычный сервер — через системный DNS", listOf("10.0.0.1"), policy["+.nl.main.example"])
+        assertEquals("резервный сервер — через системный DNS", listOf("10.0.0.1"), policy["+.r1.reserve.example"])
+        // И они не должны получать фейковый IP — движок дозванивается к ним по-настоящему.
+        val fakeFilter = dns["fake-ip-filter"] as List<*>
+        assertTrue(fakeFilter.contains("+.nl.main.example"))
+        assertTrue(fakeFilter.contains("+.r1.reserve.example"))
     }
 }

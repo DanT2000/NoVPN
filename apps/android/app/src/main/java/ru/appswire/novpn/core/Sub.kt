@@ -166,8 +166,7 @@ object Sub {
         val out = java.io.ByteArrayOutputStream()
         var i = 0
         while (i < s.length) {
-            val c = s[i]
-            if (c == '%' && i + 2 < s.length) {
+            if (s[i] == '%' && i + 2 < s.length) {
                 val hex = s.substring(i + 1, i + 3).toIntOrNull(16)
                 if (hex != null) {
                     out.write(hex)
@@ -175,8 +174,15 @@ object Sub {
                     continue
                 }
             }
-            out.write(c.toString().toByteArray(Charsets.UTF_8))
+            // Обычный текст до следующего «%» пишем ЦЕЛИКОМ, а не по одному char:
+            // иначе суррогатная пара эмодзи (флаг 🇷🇺 и др.) распадётся на два
+            // непарных char и превратится в «????» — имя резерва искажалось, и
+            // отсев российских серверов по флагу переставал работать. Как на
+            // десктопе (urlencoding::decode сохраняет литеральный UTF-8).
+            val start = i
             i++
+            while (i < s.length && s[i] != '%') i++
+            out.write(s.substring(start, i).toByteArray(Charsets.UTF_8))
         }
         String(out.toByteArray(), Charsets.UTF_8)
     }.getOrDefault(s)

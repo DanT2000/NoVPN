@@ -124,6 +124,20 @@ object Flags {
         return Split(iso?.let { emoji(it) } ?: "", name)
     }
 
+    /**
+     * Похоже ли, что сервер российский. Для аварийного пула (обход белых списков)
+     * такие серверы бесполезны и даже вредны: из России российское ограничение не
+     * обойти, а перебор мёртвых кандидатов лишь тянет время. Узнаём по флагу 🇷🇺 в
+     * начале имени (панель и чужие подписки ставят его первым) либо по слову-названию
+     * РФ в тексте («россия», «москва»…). Не угадали — сервер просто остаётся в пуле:
+     * его отсеет поведенческая проверка (через РФ YouTube и Google не грузятся).
+     */
+    fun isRussian(rawName: String): Boolean {
+        if (split(rawName).flag.startsWith(emoji("RU"))) return true
+        val lower = rawName.lowercase()
+        return COUNTRIES.any { (word, iso) -> iso == "RU" && lower.contains(word) }
+    }
+
     /** Имя без служебного хвоста панели («· Умная маршрутизация»). */
     fun shortName(rawName: String): String = split(rawName).name.substringBefore(" · ").trim()
 

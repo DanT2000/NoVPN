@@ -341,11 +341,18 @@ class Repo(private val app: Context) {
         fallback
     }.getOrDefault(emptyList())
 
-    fun rules(st: State = _state.value): Rules {
+    /**
+     * @param forceFull увести ВЕСЬ трафик в туннель, игнорируя умную маршрутизацию.
+     *   Нужно в аварийном режиме (белые списки): там даже российские сайты напрямую
+     *   не открываются, поэтому «умное» деление теряет смысл — всё идёт через рабочий
+     *   резервный сервер. На пер-приложенческие исключения (addDisallowedApplication)
+     *   это НЕ влияет: они задаются при поднятии туннеля и остаются как выбрал человек.
+     */
+    fun rules(st: State = _state.value, forceFull: Boolean = false): Rules {
         val node = nodeFor(st)
         val l = lists
         val useLists = st.settings.autoUpdateLists || l != null
-        val smart = effectiveSmart(st)
+        val smart = effectiveSmart(st) && !forceFull
         val userDomains = st.sites
             .filter { it.enabled }
             .map { DomainRule(it.domain, it.route == "vpn") }
@@ -379,14 +386,17 @@ class Repo(private val app: Context) {
         )
     }
 
-    /** Готовый конфиг движка для текущего состояния. */
-    fun buildConfig(tunFd: Int, secret: String): String? {
+    /**
+     * Готовый конфиг движка для текущего состояния.
+     * @param forceFull аварийный полный туннель (белые списки) — см. [rules].
+     */
+    fun buildConfig(tunFd: Int, secret: String, forceFull: Boolean = false): String? {
         val parsed = parsedSub() ?: return null
         val node = nodeFor()
         val reserve = reserveNodes()
         return Config.build(
             parsed = parsed,
-            rules = rules(),
+            rules = rules(forceFull = forceFull),
             selected = node?.name,
             tunFd = tunFd,
             secret = secret,
