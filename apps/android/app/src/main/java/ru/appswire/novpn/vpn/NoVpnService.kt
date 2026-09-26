@@ -359,6 +359,46 @@ class NoVpnService : VpnService() {
     @Volatile
     private var lastTunApps: String = ""
 
+    /** Тип сети (TRANSPORT_WIFI/CELLULAR/…), на которой сейчас работает туннель. -1 —
+     *  ещё не знаем. Ведётся и в onAvailable, и опросом в стороже: на MIUI система душит
+     *  сетевые колбэки VPN-службе в фоне (onAvailable приходит только первый раз), поэтому
+     *  на колбэк полагаться нельзя — сторож опрашивает cm.activeNetwork сам. По смене типа
+     *  туннель переустанавливается (чинит значок сети). */
+    @Volatile
+    private var establishedTransport: Int = -1
+
+    /** Физическая сеть под туннелем: служба исключает себя из VPN, поэтому её «сеть по
+     *  умолчанию» — это реальная Wi-Fi/мобильная сеть, а не туннель. */
+    private fun currentUnderlyingNetwork(): Network? {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return runCatching { cm.activeNetwork }.getOrNull()
+    }
+
+    /** Основной тип сети (transport). Только Wi-Fi/мобильный/Ethernet различаем —
+     *  именно их смена ломает значок сети на MIUI. Прочее и «нет сети» → -1. */
+    private fun transportOf(network: Network?): Int {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val caps = network?.let { runCatching { cm.getNetworkCapabilities(it) }.getOrNull() } ?: return -1
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkCapabilities.TRANSPORT_WIFI
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkCapabilities.TRANSPORT_CELLULAR
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> NetworkCapabilities.TRANSPORT_ETHERNET
+            else -> -1
+        }
+    }
+
+    /** Переустановка туннеля (как Amnezia): закрываем и поднимаем заново — так система
+     *  перепроверяет сеть и перерисовывает значок в шторке. Сериализуем общим мьютексом. */
+    private suspend fun reestablishTunnel(reason: String) {
+        lock.withLock {
+            if (stopping || engine?.isAlive() != true) return
+            repo.recordDiag("network", "$reason → переустановка туннеля")
+            Log.i(TAG, "reestablishTunnel: $reason")
+            closeTunnelAndEngine()
+            connect()
+        }
+    }
+
     /**
      * Отпечаток того, что влияет на СОСТАВ туннеля (addDisallowedApplication):
      * список «прямых» приложений в умном режиме. В полном VPN исключений нет.
@@ -468,6 +508,22 @@ class NoVpnService : VpnService() {
                         delay(WATCHDOG_MS * failures)
                     }
                     continue
+                }
+
+                // СМЕНА ТИПА СЕТИ опросом (Wi-Fi↔мобильный). На MIUI/HyperOS система душит
+                // сетевые колбэки VPN-службе (onAvailable приходит только первый раз),
+                // поэтому переустановку по колбэку ждать нельзя — опрашиваем текущую сеть
+                // сами. Если тип сменился — переустанавливаем туннель, иначе значок сети в
+                // шторке остаётся неверным (Wi-Fi с «!», пропадает «4G»). Опрос дешёвый.
+                val curTransport = transportOf(currentUnderlyingNetwork())
+                if (curTransport != -1) {
+                    if (establishedTransport == -1) {
+                        establishedTransport = curTransport
+                    } else if (curTransport != establishedTransport) {
+                        establishedTransport = curTransport
+                        reestablishTunnel("Смена типа сети (опрос)")
+                        continue
+                    }
                 }
 
                 // Возврат с полного VPN на умный по таймеру сервера (контракт, 7).
@@ -873,6 +929,30 @@ class NoVpnService : VpnService() {
                 // Wi-Fi ↔ мобильный интернет движок продолжит слать пакеты в
                 // исчезнувший интерфейс, и соединение «висит».
                 runCatching { setUnderlyingNetworks(arrayOf(network)) }
+
+                // СМЕНА ТИПА СЕТИ (Wi-Fi ↔ мобильный) — переустанавливаем туннель, как
+                // это делает Amnezia. Почему не мягкой заменой underlying: на MIUI/HyperOS
+                // сеть, на которую перешли ПОСЛЕ поднятия туннеля, система не
+                // перепроверяет — в шторке остаётся Wi-Fi с «!» или пропадает «4G», хотя
+                // интернет есть. Полная переустановка туннеля заставляет систему
+                // перепровалидировать сеть и перерисовать значок. Тип-фильтр не даёт
+                // дёргать переустановку на мелких событиях (та же сеть, смена адреса).
+                val newTransport = transportOf(network)
+                val prev = establishedTransport
+                // Запоминаем текущий тип ДО решения: первое событие после подключения
+                // задаёт базовую линию (prev было -1) и переустановку не вызывает; в
+                // переустановленном туннеле первый onAvailable снова придёт с тем же
+                // типом и совпадёт — цикла нет.
+                if (newTransport != -1) establishedTransport = newTransport
+                if (prev != -1 && newTransport != -1 && newTransport != prev &&
+                    !stopping && engine?.isAlive() == true
+                ) {
+                    val label = netLabel(network)
+                    scope.launch { reestablishTunnel("Сеть → $label (смена типа, колбэк)") }
+                    return
+                }
+
+                // Тот же тип сети (или первое событие после подключения): мягкий переезд.
                 // Старые соединения движка (в т.ч. к VPN-серверу) остались на
                 // исчезнувшей сети. Сбрасываем их РАЗ, чтобы движок сразу
                 // передознился на новой, а не ждал таймаутов — из-за этого после
