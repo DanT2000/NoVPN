@@ -105,6 +105,12 @@ class Engine(private val context: Context, private val store: Store) {
      * там домены и адреса серверов, то же самое видно в экране журнала.
      */
     private fun mirrorLog() {
+        // В release НЕ зеркалим журнал движка в системный logcat: на уровне info там
+        // домены назначения (фактически история посещений пользователя) и адреса
+        // серверов — приватные данные, которые из logcat утекают в bugreport/adb.
+        // Экранный «Журнал движка» читает файл движка напрямую (Store.logTail), поэтому
+        // диагностика для пользователя не страдает. В debug — оставляем для отладки.
+        if (!ru.appswire.novpn.BuildConfig.DEBUG) return
         val file = store.logFile()
         val startedFor = pid
         Thread {

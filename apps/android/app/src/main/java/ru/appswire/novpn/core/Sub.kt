@@ -266,7 +266,11 @@ object Sub {
                 m["tls"] = true
                 if (sni.isNotEmpty()) m["servername"] = sni
                 if (u.q("fp").isNotEmpty()) m["client-fingerprint"] = u.q("fp")
-                if (u.q("allowInsecure") == "1") m["skip-cert-verify"] = true
+                // allowInsecure из ссылки НЕ переносим в skip-cert-verify: отключать
+                // проверку сертификата по данным из недоверенной подписки нельзя — это
+                // открывает MITM внешнего TLS туннеля, и авто-ревью Google флагует
+                // отключение проверки сертификата из внешнего входа. Для REALITY (свой
+                // pbk-пиннинг) поле и не нужно, а для обычного TLS оно опасно.
             }
         }
     }

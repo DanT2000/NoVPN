@@ -128,7 +128,17 @@ object Config {
         )
         val groups = mutableListOf<Any?>(group)
         (root["proxy-groups"] as? List<*>)?.forEach { g ->
-            if ((g as? Map<*, *>)?.get("name")?.toString() != GROUP) groups += g
+            val gm = g as? Map<*, *> ?: return@forEach
+            if (gm["name"]?.toString() == GROUP) return@forEach
+            // Чужие группы из импортированной Clash-подписки переносим ТОЛЬКО безопасными
+            // полями. url/interval/use и прочее из недоверенного входа заставили бы движок
+            // слать health-check на адрес из подписки — примитив исходящего маяка. Наши
+            // правила ссылаются лишь на группу NoVPN, так что вырезание ничего не ломает.
+            val safe = linkedMapOf<String, Any?>()
+            gm["name"]?.let { safe["name"] = it }
+            gm["type"]?.let { safe["type"] = it }
+            gm["proxies"]?.let { safe["proxies"] = it }
+            if (safe.containsKey("name")) groups += safe
         }
         root["proxy-groups"] = groups
 
