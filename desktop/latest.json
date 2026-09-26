@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.33",
+  "version": "0.3.34",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "15be33a7b4947802d0e6fa11ebec45f3160afd933e12f5acc8ad37bc0f98c16c",
-  "signature": "qeCx1Q6r16lH38CRTEhyga2c2olhMdPahe0BPbU+ihprVlNSX0wDz3KLN569bQnJAGP3ts3RoJrMvMOK8tcADg==",
-  "sizeBytes": 19788241,
-  "notes": "0.3.33: правила из браузерного расширения теперь применяются на горячую даже когда окно NoVPN свёрнуто (отключено фоновое торможение таймеров движка, опрос ускорен). Плагин: выбор «через VPN/напрямую» на сайте подхватывается за ~секунду без открытия приложения."
+  "sha256": "654fe2ac972feee193c2717b9902c5b15280ec118b21d4ff570de9c9351831fb",
+  "signature": "Pzv9qUQmmn8LiDc1sOZOhkGU5hXh/hXASH61p9HDVs9w7rVc2xOEGUW6r8rHoyMh2M1mGs9Zms2QB1oxgCU/DQ==",
+  "sizeBytes": 19800485,
+  "notes": "0.3.34: тихий запуск — при автозапуске с Windows приложение открывается свёрнутым в трее, не мозолит экран и быстрее грузится. Открыть окно — клик по значку NoVPN у часов."
 }
