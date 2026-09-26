@@ -208,25 +208,64 @@ object Config {
         // «system» тут не годится: на Android нет /etc/resolv.conf, движок просто
         // не найдёт резолвер. Подставляем реальные адреса, полученные у системы.
         val local = rules.systemDns.filter { it.isNotBlank() }
+        // Строгий Private DNS (DoT): системный DNS приходит как «tls://…». Тогда добавлять
+        // ОТКРЫТЫЙ (plain UDP) резолвер нельзя — это тихо понизит шифрованный DNS
+        // пользователя до открытого. В этом режиме российский фоллбэк не подставляем.
+        val strictPrivateDns = local.any { it.startsWith("tls://") }
+        // ПРЯМЫЕ (российские) домены резолвим устойчиво к реальной сети РФ. Локальный DNS
+        // сети бывает вялым или отдаёт не по всем доменам (домашний AdGuard/роутер), а
+        // зарубежный публичный (1.1.1.1/8.8.8.8) на DPI режется/подменяется — и подмена
+        // (быстрый спуфнутый NXDOMAIN) может выиграть гонку у настоящего ответа. Поэтому
+        // для прямого резолва: берём ЛОКАЛЬНЫЕ адреса сети, выкидываем зарубежные публичные
+        // и добавляем надёжный российский резолвер (Яндекс). Это лечит и «Сбер/Озон не
+        // открываются, помогает перезагрузка»: список резолверов больше не пустеет и не
+        // состоит из одних заблокированных. Работает и когда системный DNS ПУСТ (смена соты):
+        // прямые домены всё равно резолвятся через Яндекс, а не уходят на закрытый DoH.
+        val ruDirect = if (strictPrivateDns) {
+            local
+        } else {
+            (local.filterNot { isForeignPublicDns(it) } + RU_FALLBACK_DNS).distinct()
+        }
+        val policy = linkedMapOf<String, Any?>()
         if (local.isNotEmpty()) {
-            val policy = linkedMapOf<String, Any?>()
+            // Местные (LAN) имена знает ТОЛЬКО домашний резолвер — Яндекс их не разрешит,
+            // поэтому им отдаём именно локальный DNS, без российского фоллбэка.
             if (rules.bypassLocal) LOCAL_DOMAINS.forEach { policy["+.${it.trimStart('.')}"] = local }
             rules.customLocal.forEach { raw ->
                 val d = raw.trim().trimStart('.')
                 if (d.isNotEmpty()) policy["+.$d"] = local
             }
-            directDomains.forEach { policy["+.$it"] = local }
-            // Адреса серверов (обычных и резервных) — через системный DNS. Иначе в сети
-            // с белыми списками, где DoH закрыт, движок не разрешит имя сервера и не
-            // подключится ни к обычному, ни к резервному: обход просто не стартует.
-            serverDomains.forEach { policy["+.$it"] = local }
-            if (policy.isNotEmpty()) dns["nameserver-policy"] = policy
-            // Резолвер для самих DoH-серверов: сюда годятся ТОЛЬКО адреса. Имя в
-            // «tls://dns.example» пришлось бы сначала разрешить, то есть замкнуть на себя.
-            val plain = local.filter { isIpv4Literal(it) || isIpv6Literal(it) }
-            if (plain.isNotEmpty()) dns["default-nameserver"] = plain
         }
+        directDomains.forEach { policy["+.$it"] = ruDirect }
+        // Адреса серверов (обычных и резервных) — через устойчивый прямой резолвер. Иначе в
+        // сети с белыми списками, где DoH закрыт, движок не разрешит имя сервера и не
+        // подключится ни к обычному, ни к резервному: обход просто не стартует.
+        serverDomains.forEach { policy["+.$it"] = ruDirect }
+        if (policy.isNotEmpty()) dns["nameserver-policy"] = policy
+        // Резолвер для самих DoH-серверов: сюда годятся ТОЛЬКО адреса. Имя в
+        // «tls://dns.example» пришлось бы сначала разрешить, то есть замкнуть на себя.
+        // Российский фоллбэк держим и здесь — чтобы бутстрап DoH не завис на вялом/пустом
+        // системном DNS. В строгом Private DNS открытый фоллбэк НЕ добавляем.
+        val plainBase = local.filter { isIpv4Literal(it) || isIpv6Literal(it) }
+        val plain = if (strictPrivateDns) plainBase else (plainBase + RU_FALLBACK_DNS).distinct()
+        if (plain.isNotEmpty()) dns["default-nameserver"] = plain
         return dns
+    }
+
+    /** Надёжные российские резолверы (Яндекс DNS). Не блокируются в РФ и корректно
+     *  разрешают российские домены — фоллбэк для ПРЯМОГО трафика, когда локальный DNS
+     *  сети вялый/пустой, а зарубежный закрыт. Простой UDP: DoH к ним не нужен. */
+    private val RU_FALLBACK_DNS = listOf("77.88.8.8", "77.88.8.1")
+
+    /** Зарубежные публичные резолверы, которые в РФ режут/подменяют по DPI. Для прямого
+     *  (российского) резолва их не используем: спуфнутый ответ может выиграть гонку. */
+    private val FOREIGN_PUBLIC_DNS = setOf(
+        "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112",
+    )
+
+    private fun isForeignPublicDns(server: String): Boolean {
+        val host = server.substringAfter("://").substringBefore("/").substringBefore(":").trim()
+        return host in FOREIGN_PUBLIC_DNS
     }
 
     private fun nameservers(provider: String): List<String> {

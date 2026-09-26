@@ -201,10 +201,49 @@ class CoreTest {
         val root = Yaml().load<Map<String, Any?>>(yaml)
         val dns = root["dns"] as Map<*, *>
         val policy = dns["nameserver-policy"] as Map<*, *>
-        assertEquals(listOf("192.168.1.1"), policy["+.gosuslugi.ru"])
-        assertEquals(listOf("192.168.1.1"), dns["default-nameserver"])
+        // Прямые (российские) домены: локальный DNS сети + надёжный российский фоллбэк
+        // (Яндекс). Так они резолвятся, даже когда домашний резолвер вялый.
+        assertEquals(listOf("192.168.1.1", "77.88.8.8", "77.88.8.1"), policy["+.gosuslugi.ru"])
+        assertEquals(listOf("192.168.1.1", "77.88.8.8", "77.88.8.1"), dns["default-nameserver"])
         // Значение system на Android не работает: движку там читать нечего.
         assertFalse(policy.values.any { it == "system" })
+    }
+
+    @Test
+    fun `зарубежный публичный dns не попадает в прямой резолв, но остаётся Яндекс`() {
+        val parsed = Sub.parse("vless://u1@1.vpn.example:443#Ф")
+        val yaml = Config.build(
+            parsed,
+            // Сеть отдала Cloudflare (в РФ его режут на DPI). Для прямого резолва его
+            // выкидываем — остаётся только надёжный российский фоллбэк.
+            Rules(systemDns = listOf("1.1.1.1"), listDirectDomains = listOf("gosuslugi.ru")),
+            selected = null,
+            tunFd = 3,
+        )
+        @Suppress("UNCHECKED_CAST")
+        val root = Yaml().load<Map<String, Any?>>(yaml)
+        val dns = root["dns"] as Map<*, *>
+        val policy = dns["nameserver-policy"] as Map<*, *>
+        assertEquals(listOf("77.88.8.8", "77.88.8.1"), policy["+.gosuslugi.ru"])
+    }
+
+    @Test
+    fun `пустой системный dns не оставляет прямые домены без резолвера`() {
+        val parsed = Sub.parse("vless://u1@1.vpn.example:443#Ф")
+        val yaml = Config.build(
+            parsed,
+            // Переходное окно смены сети: системного DNS нет. Прямые домены всё равно
+            // должны резолвиться (через Яндекс), а не уходить на закрытый DoH.
+            Rules(systemDns = emptyList(), listDirectDomains = listOf("gosuslugi.ru")),
+            selected = null,
+            tunFd = 3,
+        )
+        @Suppress("UNCHECKED_CAST")
+        val root = Yaml().load<Map<String, Any?>>(yaml)
+        val dns = root["dns"] as Map<*, *>
+        val policy = dns["nameserver-policy"] as Map<*, *>
+        assertEquals(listOf("77.88.8.8", "77.88.8.1"), policy["+.gosuslugi.ru"])
+        assertEquals(listOf("77.88.8.8", "77.88.8.1"), dns["default-nameserver"])
     }
 
     // ── списки ──
