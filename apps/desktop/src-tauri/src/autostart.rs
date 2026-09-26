@@ -46,7 +46,9 @@ mod win {
             .open_subkey_with_flags(RUN_PATH, KEY_WRITE)
             .map_err(|e| format!("Не удалось открыть автозапуск: {e}"))?;
         if on {
-            key.set_value(NAME, &format!("\"{}\"", exe()?))
+            // `--minimized`: при автозапуске с Windows окно не показываем — приложение
+            // тихо садится в трей. Обычный (ручной) запуск этого флага не несёт.
+            key.set_value(NAME, &format!("\"{}\" --minimized", exe()?))
                 .map_err(|e| format!("Не удалось включить автозапуск: {e}"))
         } else {
             match key.delete_value(NAME) {

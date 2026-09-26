@@ -45,6 +45,13 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
+/// Тихий старт: приложение подняли из автозапуска (ключ Run с флагом `--minimized`).
+/// Тогда окно не показываем — сидим в трее, как просил владелец, и не мозолим экран
+/// на загрузке системы. Обычный запуск (двойной клик) флага не несёт — окно откроется.
+fn started_minimized() -> bool {
+    std::env::args().any(|a| a == "--minimized")
+}
+
 /// Интерфейс сообщает сюда своё состояние: трей красится синим или серым,
 /// а пункт меню становится «Подключить» либо «Отключить».
 #[tauri::command]
@@ -210,7 +217,16 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Видимость окна НЕ восстанавливаем из сохранённого состояния: ей управляем сами
+        // (тихий автозапуск должен оставаться в трее, а не «вспоминать» прошлый показ).
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Второй запуск (клик по ярлыку при живом трее) не поднимает новый
@@ -335,6 +351,13 @@ fn main() {
 
             // Держим значок у часов, а не в скрытом переполнении.
             promote_tray_icon();
+
+            // Окно создаётся скрытым (visible:false) — чтобы тихий автозапуск не мигал
+            // окном на загрузке. При обычном запуске показываем его сразу; при
+            // `--minimized` (автозапуск) оставляем в трее, откроется по клику на значок.
+            if !started_minimized() {
+                show_main(&app.handle().clone());
+            }
 
             Ok(())
         })
