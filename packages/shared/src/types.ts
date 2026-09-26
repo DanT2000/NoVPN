@@ -194,6 +194,14 @@ export interface BackupSubscription {
   /** HWID, если провайдер его требует. */
   hwid: string | null;
   enabled: boolean;
+  /** Корзина: 'whitelist' — обход белых списков; 'outage' — аварийный (наш сервер лёг). */
+  kind: 'whitelist' | 'outage';
+  /** Порядок перебора (меньше — раньше). Безлимитные/дешёвые выше, лимитные — в конец. */
+  sort: number;
+  /** Кому доступна: 'all' — всем с доступом к резерву; 'priority' — только приоритетным. */
+  availableFor: 'all' | 'priority';
+  /** Собственный месячный лимит ПОДПИСКИ, ГБ (лимит провайдера; null = без лимита). */
+  limitGb: number | null;
   /** Статистика самой внешней подписки (из заголовка Subscription-Userinfo). */
   provider: {
     upload: number | null;
@@ -361,7 +369,38 @@ export interface AppSettings {
   updateHookUrl?: string;
   /** Токен для хука (уходит как Bearer), если CI его требует. */
   updateHookToken?: string;
+  /** Настраиваемые лимиты РЕЗЕРВНОЙ маршрутизации. Две отдельные КОРЗИНЫ — обход
+   *  «белых списков» (whitelist) и аварийные серверы, когда наш сервер лёг (outage) —
+   *  с РАЗДЕЛЬНЫМИ МЕСЯЧНЫМИ лимитами, отдельно для приоритетных и обычных. У лимита
+   *  null = безлимит. Пусто/отсутствует → дефолты (RESERVE_DEFAULTS): приоритетным обе
+   *  корзины безлимитно; обычным обход вкл (5 ГБ/мес) и аварийный вкл (10 ГБ/мес).
+   *  Всё меняется вручную в «Дополнительных настройках» — ничего не захардкожено. */
+  reserve?: ReserveLimits;
 }
+
+/** Лимиты резерва по корзинам и уровням доступа. Месяц — календарный (сброс 1-го числа). */
+export interface ReserveLimits {
+  /** Доступен ли обычным пользователям обход белых списков. */
+  whitelistForRegular: boolean;
+  /** Доступны ли обычным пользователям аварийные серверы. */
+  outageForRegular: boolean;
+  /** Месячный лимит корзины, ГБ. null = безлимит. */
+  whitelistRegularGb: number | null;
+  outageRegularGb: number | null;
+  whitelistPriorityGb: number | null;
+  outagePriorityGb: number | null;
+}
+
+/** Дефолты лимитов резерва (когда settings.reserve не задан). Приоритетным — обе корзины
+ *  безлимитно; обычным обе включены с месячными лимитами. Владелец меняет всё в админке. */
+export const RESERVE_DEFAULTS: ReserveLimits = {
+  whitelistForRegular: true,
+  outageForRegular: true,
+  whitelistRegularGb: 5,
+  outageRegularGb: 10,
+  whitelistPriorityGb: null,
+  outagePriorityGb: null,
+};
 
 // ── Умная маршрутизация (Smart Routing) — управляемые JSON-файлы для NoVPN Desktop ──
 // Каждый файл может управляться локально ИЛИ зеркалить внешний URL.

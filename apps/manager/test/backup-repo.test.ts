@@ -42,18 +42,44 @@ const nodesOf = (n: number) =>
     protocol: 'vless',
   }));
 
-test('общий пул виден только при priorityAccess', () => {
+test('общий пул: available_for=priority — только приоритетным; all — всем', () => {
   const priv = mkUser('Привилегированный');
   const plain = mkUser('Обычный');
-  const shared = backup.insertBackupSubscription({ ownerUserId: null, title: 'Общий', url: 'https://prov.example/sub' });
-  backup.setBackupFetchResult(shared.id, { format: 'plain', servers: nodesOf(3) });
-
-  assert.equal(backup.backupServerLinksForUser(plain.id).length, 0, 'без привилегии — пусто');
-  assert.equal(backup.userHasBackup(plain.id), false);
-
   repo.updateUserFields(priv.id, { priority_access: 1 });
-  assert.equal(backup.backupServerLinksForUser(priv.id).length, 3, 'с привилегией — 3 сервера');
-  assert.equal(backup.userHasBackup(priv.id), true);
+
+  // priority-only: обычный не видит, приоритетный видит.
+  const sp = backup.insertBackupSubscription({ ownerUserId: null, title: 'Общий-приор', url: 'https://prov.example/sp', availableFor: 'priority' });
+  backup.setBackupFetchResult(sp.id, { format: 'plain', servers: nodesOf(3) });
+  assert.equal(backup.backupServerLinksForUser(plain.id).length, 0, 'priority-only — обычному пусто');
+  assert.equal(backup.backupServerLinksForUser(priv.id).length, 3, 'priority-only — приоритетному 3');
+  backup.deleteBackupSubscription(sp.id); // убираем, чтобы не протекал в другие тесты
+
+  // available_for=all: доступен И обычному (замысел: обычные получают резерв по умолчанию).
+  const sa = backup.insertBackupSubscription({ ownerUserId: null, title: 'Общий-все', url: 'https://prov.example/sa', availableFor: 'all' });
+  backup.setBackupFetchResult(sa.id, { format: 'plain', servers: nodesOf(2) });
+  assert.equal(backup.backupServerLinksForUser(plain.id).length, 2, 'all — обычному тоже видно');
+  assert.equal(backup.backupServerLinksForUser(priv.id).length, 2, 'all — приоритетному видно');
+  backup.deleteBackupSubscription(sa.id);
+});
+
+test('reservePoolForUser: настроечный гейт корзины и мягкий месячный лимит', () => {
+  const u = mkUser('Резерв');
+  // whitelist-корзина, общий пул, доступен всем.
+  const s = backup.insertBackupSubscription({ ownerUserId: null, title: 'WL', url: 'https://prov.example/wl', kind: 'whitelist', availableFor: 'all' });
+  backup.setBackupFetchResult(s.id, { format: 'plain', servers: nodesOf(2) });
+
+  // По умолчанию (RESERVE_DEFAULTS: whitelistForRegular=true, лимит 5 ГБ) — доступно.
+  let pool = backup.reservePoolForUser(u.id, 'whitelist');
+  assert.equal(pool.whitelist, 'ok');
+  assert.equal(pool.links.length, 2);
+
+  // Исчерпали месячный лимит (5 ГБ) — корзина 'exhausted', ссылки не выдаём.
+  backup.addMonthlyUsage(u.id, 'whitelist', 6e9);
+  pool = backup.reservePoolForUser(u.id, 'whitelist');
+  assert.equal(pool.whitelist, 'exhausted', 'сверх лимита — исчерпана');
+  assert.equal(pool.links.length, 0);
+
+  backup.deleteBackupSubscription(s.id);
 });
 
 test('личная подписка видна только владельцу и не требует привилегии', () => {

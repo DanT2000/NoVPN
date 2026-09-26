@@ -1,9 +1,10 @@
 // Хранилище резервной маршрутизации: внешние подписки, разобранные из них
 // серверы и наш внутренний учёт резервного расхода. Вынесено из repo.ts, чтобы
 // не раздувать его; опирается на общий db и хелперы newId/nowIso/getUser.
-import type { BackupServer, BackupSubscription } from '@novpn/shared';
+import type { BackupServer, BackupSubscription, ReserveLimits } from '@novpn/shared';
+import { RESERVE_DEFAULTS } from '@novpn/shared';
 import { db } from './db.js';
-import { getUser, newId, nowIso } from './repo.js';
+import { getSettings, getUser, newId, nowIso } from './repo.js';
 
 function rowToBackupSub(r: any): BackupSubscription {
   const serverCount = (
@@ -20,6 +21,10 @@ function rowToBackupSub(r: any): BackupSubscription {
     userAgent: r.user_agent ?? null,
     hwid: r.hwid ?? null,
     enabled: !!r.enabled,
+    kind: r.kind === 'outage' ? 'outage' : 'whitelist',
+    sort: r.sort ?? 0,
+    availableFor: r.available_for === 'priority' ? 'priority' : 'all',
+    limitGb: r.limit_gb ?? null,
     provider: {
       upload: r.sub_upload ?? null,
       download: r.sub_download ?? null,
@@ -70,12 +75,16 @@ export function insertBackupSubscription(p: {
   userAgent?: string | null;
   hwid?: string | null;
   enabled?: boolean;
+  kind?: 'whitelist' | 'outage';
+  sort?: number;
+  availableFor?: 'all' | 'priority';
+  limitGb?: number | null;
 }): BackupSubscription {
   const id = newId('bk');
   const now = nowIso();
   db.prepare(
-    `INSERT INTO backup_subscriptions(id, owner_user_id, title, url, user_agent, hwid, enabled, created_at, updated_at)
-     VALUES(@id, @owner, @title, @url, @ua, @hwid, @enabled, @now, @now)`,
+    `INSERT INTO backup_subscriptions(id, owner_user_id, title, url, user_agent, hwid, enabled, kind, sort, limit_gb, available_for, created_at, updated_at)
+     VALUES(@id, @owner, @title, @url, @ua, @hwid, @enabled, @kind, @sort, @limit_gb, @available_for, @now, @now)`,
   ).run({
     id,
     owner: p.ownerUserId ?? null,
@@ -84,6 +93,10 @@ export function insertBackupSubscription(p: {
     ua: p.userAgent ?? null,
     hwid: p.hwid ?? null,
     enabled: p.enabled === false ? 0 : 1,
+    kind: p.kind === 'outage' ? 'outage' : 'whitelist',
+    sort: p.sort ?? 0,
+    limit_gb: p.limitGb ?? null,
+    available_for: p.availableFor === 'priority' ? 'priority' : 'all',
     now,
   });
   return getBackupSubscription(id)!;
@@ -111,7 +124,8 @@ export function setBackupFetchResult(
   id: string,
   r: {
     format?: string;
-    servers: Array<{ name: string; link: string; host: string; port: number; protocol: string }>;
+    /** Пропущено (undefined) → список серверов НЕ трогаем (напр. на HTTP 304). */
+    servers?: Array<{ name: string; link: string; host: string; port: number; protocol: string }>;
     provider?: { upload?: number; download?: number; total?: number; expire?: number };
     etag?: string | null;
     lastModified?: string | null;
@@ -121,9 +135,14 @@ export function setBackupFetchResult(
   const now = nowIso();
   const tx = db.transaction(() => {
     const p = r.provider ?? {};
+    // COALESCE(@x, col): если метаданные не переданы (undefined→null) — СОХРАНЯЕМ прежние,
+    // а не затираем. На HTTP 304 provider/format не приходят, и раньше они обнулялись —
+    // ровно та статистика, которую путь 304 должен беречь.
     db.prepare(
       `UPDATE backup_subscriptions SET
-         format = @format, sub_upload = @up, sub_download = @down, sub_total = @total, sub_expire = @expire,
+         format = COALESCE(@format, format),
+         sub_upload = COALESCE(@up, sub_upload), sub_download = COALESCE(@down, sub_download),
+         sub_total = COALESCE(@total, sub_total), sub_expire = COALESCE(@expire, sub_expire),
          etag = @etag, last_modified = @lm, last_fetched_at = @now, last_error = @error, updated_at = @now
        WHERE id = @id`,
     ).run({
@@ -138,8 +157,10 @@ export function setBackupFetchResult(
       error: r.error ?? null,
       now,
     });
-    // Список серверов при успешном фетче перезаписываем целиком.
-    if (!r.error) {
+    // Список серверов перезаписываем целиком ТОЛЬКО когда он реально передан и фетч
+    // успешен. Если servers не передан (304 — ничего не изменилось) — не трогаем,
+    // иначе затёрли бы пул. Пустой массив на ошибке отсекается проверкой !r.error.
+    if (!r.error && r.servers) {
       db.prepare('DELETE FROM backup_servers WHERE subscription_id = ?').run(id);
       let sort = 0;
       const ins = db.prepare(
@@ -178,32 +199,50 @@ export function listBackupServers(subscriptionId: string): BackupServer[] {
   );
 }
 
-/** Резервный пул пользователя: общий пул (если есть привилегия) + его личные подписки. */
-export function backupServerLinksForUser(
-  userId: string,
-): Array<{ subscriptionId: string; name: string; link: string; host: string; port: number }> {
+export interface ReserveLink {
+  subscriptionId: string;
+  name: string;
+  link: string;
+  host: string;
+  port: number;
+  kind: 'whitelist' | 'outage';
+  /** true — личная подписка пользователя (owner=uid); false — общий пул админа. Личные
+   *  доступны всегда, общий пул подчиняется настройкам уровня и лимитам. */
+  personal: boolean;
+}
+
+/** ЭЛИГИБЕЛЬНЫЙ резервный пул по ВЛАДЕНИЮ и доступности: личные подписки пользователя +
+ *  общие подписки админа, доступные всем ('all') или, для 'priority', только приоритетным.
+ *  Опциональный `kind` сужает до одной корзины. Порядок: общие раньше личных, затем по sort.
+ *  ВНИМАНИЕ: это СЫРАЯ элигибельность (без настроечного гейта корзин и без лимитов) —
+ *  для выдачи используйте reservePoolForUser, который их применяет. */
+export function backupServerLinksForUser(userId: string, kind?: 'whitelist' | 'outage'): ReserveLink[] {
   const user = getUser(userId);
   if (!user) return [];
   const subs = db
     .prepare(
-      `SELECT id FROM backup_subscriptions
-       WHERE enabled = 1 AND (owner_user_id = @uid OR (owner_user_id IS NULL AND @priority = 1))
-       ORDER BY owner_user_id IS NULL DESC, created_at`,
+      `SELECT id, kind, owner_user_id FROM backup_subscriptions
+       WHERE enabled = 1
+         AND (owner_user_id = @uid OR (owner_user_id IS NULL AND (available_for = 'all' OR @priority = 1)))
+         AND (@kind IS NULL OR kind = @kind)
+       ORDER BY owner_user_id IS NULL DESC, sort, created_at`,
     )
-    .all({ uid: userId, priority: user.priorityAccess ? 1 : 0 }) as Array<{ id: string }>;
-  const out: Array<{ subscriptionId: string; name: string; link: string; host: string; port: number }> = [];
+    .all({ uid: userId, priority: user.priorityAccess ? 1 : 0, kind: kind ?? null }) as Array<{ id: string; kind: string; owner_user_id: string | null }>;
+  const out: ReserveLink[] = [];
   for (const s of subs) {
+    const k: 'whitelist' | 'outage' = s.kind === 'outage' ? 'outage' : 'whitelist';
+    const personal = s.owner_user_id != null;
     const rows = db
       .prepare("SELECT * FROM backup_servers WHERE subscription_id = ? AND enabled = 1 AND link != '' ORDER BY sort")
       .all(s.id) as any[];
-    for (const r of rows) out.push({ subscriptionId: s.id, name: r.name, link: r.link, host: r.host, port: r.port });
+    for (const r of rows) out.push({ subscriptionId: s.id, name: r.name, link: r.link, host: r.host, port: r.port, kind: k, personal });
   }
   return out;
 }
 
-/** Есть ли у пользователя хоть один доступный резервный сервер. */
+/** Есть ли у пользователя хоть один ДОСТУПНЫЙ (с учётом настроек/лимитов) резервный сервер. */
 export function userHasBackup(userId: string): boolean {
-  return backupServerLinksForUser(userId).length > 0;
+  return reservePoolForUser(userId).links.length > 0;
 }
 
 /** Прибавить наш внутренний резервный расход (цифры шлёт клиент). */
@@ -224,17 +263,95 @@ export function attributeBackupTraffic(userId: string, host: string, bytes: numb
   if (!user) return false;
   const row = db
     .prepare(
-      `SELECT s.id AS sub_id
+      `SELECT s.id AS sub_id, s.kind AS kind
        FROM backup_subscriptions s JOIN backup_servers bs ON bs.subscription_id = s.id
        WHERE s.enabled = 1 AND bs.host = @host
-         AND (s.owner_user_id = @uid OR (s.owner_user_id IS NULL AND @priority = 1))
-       ORDER BY s.owner_user_id IS NULL DESC, s.created_at
+         AND (s.owner_user_id = @uid OR (s.owner_user_id IS NULL AND (s.available_for = 'all' OR @priority = 1)))
+       ORDER BY s.owner_user_id IS NULL DESC, s.sort, s.created_at
        LIMIT 1`,
     )
-    .get({ host, uid: userId, priority: user.priorityAccess ? 1 : 0 }) as { sub_id: string } | undefined;
+    .get({ host, uid: userId, priority: user.priorityAccess ? 1 : 0 }) as { sub_id: string; kind?: string } | undefined;
   if (!row) return false;
   addBackupTraffic(userId, row.sub_id, bytes);
+  // Помесячный учёт по КОРЗИНЕ — для мягких лимитов (см. reservePoolForUser).
+  addMonthlyUsage(userId, row.kind === 'outage' ? 'outage' : 'whitelist', bytes);
   return true;
+}
+
+// ── помесячный учёт и мягкие лимиты по корзинам ──
+
+function monthKey(iso: string): string {
+  // YYYY-MM. nowIso() в UTC → сброс лимитов происходит в UTC-полночь 1-го числа (не в
+  // локальную). Для мягкого месячного лимита это приемлемо; если понадобится локальный
+  // месяц — сдвигать на TZ-оффсет до слайса.
+  return iso.slice(0, 7);
+}
+
+/** Прибавить помесячный резервный расход по корзине (для лимитов). */
+export function addMonthlyUsage(userId: string, kind: 'whitelist' | 'outage', bytes: number): void {
+  if (!(bytes > 0)) return;
+  db.prepare(
+    `INSERT INTO backup_usage_monthly(user_id, kind, month, bytes) VALUES(@u,@k,@m,@b)
+     ON CONFLICT(user_id, kind, month) DO UPDATE SET bytes = bytes + @b`,
+  ).run({ u: userId, k: kind, m: monthKey(nowIso()), b: Math.trunc(bytes) });
+}
+
+/** Расход по корзине за ТЕКУЩИЙ календарный месяц, ГБ. */
+export function monthlyUsageGb(userId: string, kind: 'whitelist' | 'outage'): number {
+  const r = db
+    .prepare('SELECT bytes FROM backup_usage_monthly WHERE user_id=? AND kind=? AND month=?')
+    .get(userId, kind, monthKey(nowIso())) as { bytes: number } | undefined;
+  return (r?.bytes ?? 0) / 1e9;
+}
+
+export type BucketState = 'ok' | 'off' | 'exhausted';
+export interface ReservePool {
+  links: ReserveLink[];
+  whitelist: BucketState;
+  outage: BucketState;
+}
+
+function resolveReserveLimits(): ReserveLimits {
+  return { ...RESERVE_DEFAULTS, ...(getSettings().reserve ?? {}) };
+}
+
+/** Итоговый резервный пул для пользователя С УЧЁТОМ настроек (доступность корзины по
+ *  уровню доступа) и МЯГКИХ месячных лимитов. Приоритетным доступны обе корзины (лимиты
+ *  из настроек, по умолчанию безлимит); обычным — по тумблерам и лимитам. Состояние
+ *  корзины: 'ok' — выдаём; 'off' — не положена уровню; 'exhausted' — лимит исчерпан
+ *  (клиент покажет «лимит исчерпан», обычный VPN продолжает работать). */
+export function reservePoolForUser(userId: string, kind?: 'whitelist' | 'outage'): ReservePool {
+  const user = getUser(userId);
+  if (!user) return { links: [], whitelist: 'off', outage: 'off' };
+  const lim = resolveReserveLimits();
+  const priority = !!user.priorityAccess;
+  const stateOf = (k: 'whitelist' | 'outage'): BucketState => {
+    if (!priority) {
+      if (k === 'whitelist' && !lim.whitelistForRegular) return 'off';
+      if (k === 'outage' && !lim.outageForRegular) return 'off';
+    }
+    const capGb = priority
+      ? k === 'whitelist'
+        ? lim.whitelistPriorityGb
+        : lim.outagePriorityGb
+      : k === 'whitelist'
+        ? lim.whitelistRegularGb
+        : lim.outageRegularGb;
+    if (capGb != null && monthlyUsageGb(userId, k) >= capGb) return 'exhausted';
+    return 'ok';
+  };
+  const whitelist = stateOf('whitelist');
+  const outage = stateOf('outage');
+  const links: ReserveLink[] = [];
+  for (const k of kind ? [kind] : (['whitelist', 'outage'] as const)) {
+    const sharedOk = (k === 'whitelist' ? whitelist : outage) === 'ok';
+    for (const l of backupServerLinksForUser(userId, k)) {
+      // Личные подписки пользователя доступны ВСЕГДА (он сам их добавил) — их не режут
+      // тумблеры уровня и лимиты общего пула. Общий пул — только когда корзина 'ok'.
+      if (l.personal || sharedOk) links.push(l);
+    }
+  }
+  return { links, whitelist, outage };
 }
 
 // ── журнал диагностики от клиента (§13) ──

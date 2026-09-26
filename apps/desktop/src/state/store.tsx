@@ -796,11 +796,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           .then(async (r) => {
             const servers = r.servers.map(toServer);
             const reps = representatives(servers);
+            // Для личной ссылки /k/<token> бэкенд вернул уже РАЗРЕШЁННЫЙ /sub/… — сохраняем
+            // именно его, чтобы резерв/meta шли на правильный адрес, а не на /k/.
+            const effUrl = r.url && r.url.length ? r.url : url;
             setS((x) => ({
               ...x,
               servers,
               serverId: x.serverId && reps.some((v) => v.id === x.serverId) ? x.serverId : reps[0]?.id ?? null,
-              subscription: { url, status: 'active', servers: reps.length },
+              subscription: { url: effUrl, status: 'active', servers: reps.length },
             }));
             // Профили и режимы — тем же токеном, что и подписка.
             const m = await metaFetch(url).catch(() => null);

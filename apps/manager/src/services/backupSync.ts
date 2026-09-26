@@ -8,7 +8,7 @@
 import * as repo from '../backupRepo.js';
 import { parseSubUserinfo, parseSubscription } from '../lib/subParse.js';
 import { addJobError } from '../repo.js';
-import { assertPublicUrl, readTextCapped } from '../lib/safeFetch.js';
+import { safeFetch, readTextCapped } from '../lib/safeFetch.js';
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -32,26 +32,20 @@ async function fetchOne(row: any): Promise<void> {
   if (row.etag) headers['If-None-Match'] = String(row.etag);
   if (row.last_modified) headers['If-Modified-Since'] = String(row.last_modified);
 
-  // URL задаёт пользователь → защита от SSRF: не пускаем на внутренние адреса.
-  try {
-    await assertPublicUrl(url);
-  } catch (e) {
-    repo.setBackupFetchResult(id, { servers: [], error: `небезопасный адрес: ${e instanceof Error ? e.message : 'запрещён'}` });
-    return;
-  }
-
+  // URL задаёт пользователь → SSRF-защита + РУЧНЫЕ редиректы с ре-валидацией каждого
+  // перехода (redirect:'follow' повторно не проверял Location — обход через 302).
   let res: Response;
   try {
-    res = await fetch(url, { method: 'GET', headers, redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    res = await safeFetch(url, { headers, timeoutMs: FETCH_TIMEOUT_MS });
   } catch (e) {
-    repo.setBackupFetchResult(id, { servers: [], error: `сеть: ${e instanceof Error ? e.message : 'ошибка'}` });
+    repo.setBackupFetchResult(id, { servers: [], error: `небезопасный адрес или сеть: ${e instanceof Error ? e.message : 'ошибка'}` });
     return;
   }
 
-  // 304 — у провайдера ничего не поменялось: список оставляем, только помечаем время.
+  // 304 — у провайдера ничего не поменялось: серверы НЕ трогаем (раньше их
+  // перезаписывали пустыми ссылками и весь пул умирал), обновляем только метаданные.
   if (res.status === 304) {
     repo.setBackupFetchResult(id, {
-      servers: repo.listBackupServers(id).map((s) => ({ name: s.name, link: '', host: s.host, port: s.port, protocol: s.protocol })),
       etag: row.etag ?? null,
       lastModified: row.last_modified ?? null,
       error: null,

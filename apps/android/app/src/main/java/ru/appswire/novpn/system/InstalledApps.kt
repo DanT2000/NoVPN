@@ -33,27 +33,53 @@ object InstalledApps {
     fun list(context: Context, refresh: Boolean = false): List<Entry> {
         cache?.let { if (!refresh) return it }
         val pm = context.packageManager
-        val out = runCatching {
-            pm.getInstalledPackages(PackageManager.GET_PERMISSIONS)
-                .asSequence()
-                .filter { pkg ->
-                    pkg.requestedPermissions?.contains(android.Manifest.permission.INTERNET) == true
-                }
-                .filter { it.packageName != context.packageName }
-                .map { pkg ->
-                    val info = pkg.applicationInfo
-                    Entry(
-                        pkg = pkg.packageName,
-                        label = info?.let { pm.getApplicationLabel(it).toString() } ?: pkg.packageName,
-                        system = info != null && (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
-                    )
-                }
-                .sortedWith(compareBy({ it.system }, { it.label.lowercase() }))
-                .toList()
-        }.getOrDefault(emptyList())
+        // На устройствах с большим числа пакетов (типично для Samsung с их огромным
+        // предустановом) один bulk-вызов getInstalledPackages(GET_PERMISSIONS) может
+        // кинуть TransactionTooLargeException — тогда список молча становился пустым, и
+        // «раздельный туннель» переставал видеть приложения. Если bulk не дал результата,
+        // перечисляем по одному пакету (много маленьких транзакций вместо одной гигантской).
+        val out = runCatching { bulkList(pm, context) }.getOrNull()?.takeIf { it.isNotEmpty() }
+            ?: perPackageList(pm, context)
         cache = out
         return out
     }
+
+    private fun bulkList(pm: PackageManager, context: Context): List<Entry> =
+        pm.getInstalledPackages(PackageManager.GET_PERMISSIONS)
+            .asSequence()
+            .filter { pkg -> pkg.requestedPermissions?.contains(android.Manifest.permission.INTERNET) == true }
+            .filter { it.packageName != context.packageName }
+            .map { pkg ->
+                val info = pkg.applicationInfo
+                Entry(
+                    pkg = pkg.packageName,
+                    label = info?.let { pm.getApplicationLabel(it).toString() } ?: pkg.packageName,
+                    system = info != null && (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                )
+            }
+            .sortedWith(compareBy({ it.system }, { it.label.lowercase() }))
+            .toList()
+
+    private fun perPackageList(pm: PackageManager, context: Context): List<Entry> = runCatching {
+        pm.getInstalledApplications(0)
+            .asSequence()
+            .filter { it.packageName != context.packageName }
+            .filter { info ->
+                runCatching {
+                    pm.getPackageInfo(info.packageName, PackageManager.GET_PERMISSIONS)
+                        .requestedPermissions?.contains(android.Manifest.permission.INTERNET) == true
+                }.getOrDefault(false)
+            }
+            .map { info ->
+                Entry(
+                    pkg = info.packageName,
+                    label = pm.getApplicationLabel(info).toString(),
+                    system = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                )
+            }
+            .sortedWith(compareBy({ it.system }, { it.label.lowercase() }))
+            .toList()
+    }.getOrDefault(emptyList())
 
     fun icon(context: Context, pkg: String): Drawable? = runCatching {
         context.packageManager.getApplicationIcon(pkg)

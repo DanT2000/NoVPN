@@ -74,6 +74,16 @@ function nameOr(name: string | undefined, host: string, port: number): string {
   return n || `${host}:${port}`;
 }
 
+/** Терпимый decodeURIComponent: кривая escape-последовательность (одиночный «%» в
+ *  имени) НЕ должна ронять весь узел — деградируем к сырой строке имени. */
+function tryDecodeComponent(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 /** vless:// и trojan:// — WHATWG URL разбирает authority у любой схемы. */
 function parseUrlLike(line: string, proto: BackupProto): BackupNode | null {
   try {
@@ -81,7 +91,7 @@ function parseUrlLike(line: string, proto: BackupProto): BackupNode | null {
     const host = u.hostname.replace(/^\[|\]$/g, ''); // IPv6 без скобок
     if (!host) return null;
     const port = clampPort(Number(u.port || 443));
-    const name = u.hash ? decodeURIComponent(u.hash.slice(1)) : '';
+    const name = u.hash ? tryDecodeComponent(u.hash.slice(1)) : '';
     return { name: nameOr(name, host, port), link: line, host, port, protocol: proto };
   } catch {
     return null;
@@ -109,12 +119,15 @@ function splitHostPort(hp: string): { host: string; port: number } {
     const close = hp.indexOf(']');
     if (close >= 0) {
       const rest = hp.slice(close + 1);
-      return { host: hp.slice(1, close), port: rest.startsWith(':') ? clampPort(Number(rest.slice(1))) : 443 };
+      const p = rest.startsWith(':') ? rest.slice(1).split('/')[0] : '';
+      return { host: hp.slice(1, close), port: rest.startsWith(':') ? clampPort(Number(p)) : 443 };
     }
   }
   const c = hp.lastIndexOf(':');
   if (c < 0) return { host: hp, port: 443 };
-  return { host: hp.slice(0, c), port: clampPort(Number(hp.slice(c + 1))) };
+  // Срезаем путь `port/...` (SIP002 ss с плагином) — иначе порт становился 443. Как в sub.rs.
+  const portStr = hp.slice(c + 1).split('/')[0];
+  return { host: hp.slice(0, c), port: clampPort(Number(portStr)) };
 }
 
 /** ss:// — либо base64(method:pass)@host:port, либо base64(method:pass@host:port). */

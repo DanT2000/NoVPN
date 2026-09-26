@@ -189,11 +189,14 @@ class Engine(private val context: Context, private val store: Store) {
      * знает только он. Иначе чужой clash на том же порту приняли бы за свой и
      * объявили «Подключено», уведя трафик через постороннее приложение.
      */
-    fun waitReady(timeoutMs: Long = 15_000): Started {
+    fun waitReady(timeoutMs: Long = 15_000, abort: () -> Boolean = { false }): Started {
         val deadline = System.currentTimeMillis() + timeoutMs
         val ctl = control
         var checks = 0
         while (System.currentTimeMillis() < deadline) {
+            // Служба останавливается/переподключается — не держим мьютекс подключения
+            // все 15 c ожидания: сразу выходим, чтобы teardown/reconnect не висели.
+            if (abort()) return Started.Aborted
             if (!isAlive()) return Started.Died(diedReason())
             if (ctl.isOurEngine()) return Started.Ok
             // Журнал читаем не на каждой итерации: это файл на диске.
@@ -230,6 +233,8 @@ class Engine(private val context: Context, private val store: Store) {
         data class PortBusy(val message: String) : Started()
         data class Died(val message: String) : Started()
         data class Timeout(val message: String) : Started()
+        /** Ожидание прервано остановкой/переподключением службы. */
+        object Aborted : Started()
     }
 
     /**

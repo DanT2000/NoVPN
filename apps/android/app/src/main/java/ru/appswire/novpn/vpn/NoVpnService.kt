@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -96,6 +97,12 @@ class NoVpnService : VpnService() {
     /** Один мьютекс на весь жизненный цикл туннеля. */
     private val lock = Mutex()
 
+    /** Сериализует ВЫБОР сервера/резерва: сторож (evaluate) и ручные changeReserve/
+     *  forceReserve не должны одновременно менять активный прокси движка и VpnBus —
+     *  иначе в шине повисает несогласованное состояние (сервер от одного, флаг резерва
+     *  от другого). Отдельный от `lock`: подключение/остановку не блокирует. */
+    private val selection = Mutex()
+
     /** Заявки на перестройку правил. CONFLATED: важна последняя, а не каждая. */
     private val rebuild = Channel<Unit>(Channel.CONFLATED)
 
@@ -128,8 +135,11 @@ class NoVpnService : VpnService() {
             ACTION_STOP -> {
                 stopping = true
                 scope.launch {
-                    lock.withLock { teardown() }
-                    stopSelf()
+                    // Пока ждали замок, мог прийти новый START (он ставит stopping=false и
+                    // поднимает свежую сессию). Тогда НЕ рвём её и не глушим службу — иначе
+                    // остались бы с работающим VPN у «остановленной» службы вне foreground.
+                    lock.withLock { if (stopping) teardown() }
+                    if (stopping) stopSelf()
                 }
                 return START_NOT_STICKY
             }
@@ -193,6 +203,19 @@ class NoVpnService : VpnService() {
 
     private fun connectInner() {
         if (stopping) return
+        // Уже подключены (повторный ACTION_START / sticky-рестарт поверх живого туннеля):
+        // поднять второй движок поверх старого — значит осиротить прежний (его поток
+        // mirrorLog крутится вечно) и утечь дескриптор туннеля. Ничего не поднимаем.
+        engine?.let { old ->
+            if (old.isAlive() && tun != null) {
+                VpnBus.setState(ConnState.ON)
+                notify(notification("Подключено", repo.nodeFor()?.name))
+                return
+            }
+        }
+        // Недобитые остатки прежней сессии (движок мёртв, но ссылка/туннель остались) —
+        // прибираем, чтобы не текли, перед новым подключением.
+        if (engine != null || tun != null) closeTunnelAndEngine()
         VpnBus.setState(ConnState.CONNECTING)
         repo.denied?.let {
             fail(it.message)
@@ -229,8 +252,9 @@ class NoVpnService : VpnService() {
             fail(it)
             return
         }
-        when (val started = eng.waitReady()) {
+        when (val started = eng.waitReady(abort = { stopping })) {
             is Engine.Started.Ok -> Unit
+            is Engine.Started.Aborted -> return
             is Engine.Started.PortBusy -> {
                 fail(started.message)
                 return
@@ -264,6 +288,7 @@ class NoVpnService : VpnService() {
         startWatchdog()
 
         repo.recordDiag("info", "Подключено к серверу: ${node.name}")
+        repo.recordDiag("dns", repo.networksDiag())
 
         // Резервный пул обновляем в фоне, а затем сразу проверяем, что выбранный
         // сервер реально работает — если нет, подбор запускается без ожидания.
@@ -363,9 +388,13 @@ class NoVpnService : VpnService() {
         }
     }
 
-    private fun applyRules() {
+    private suspend fun applyRules() {
         val eng = engine ?: return
         if (!eng.isAlive() || stopping) return
+        // Диагностика перемежающегося сбоя прямого доступа: фиксируем, с каким DNS
+        // для прямых доменов пересобирается конфиг (пусто/чужой = причина «Сбер не
+        // открывается»). Только логирование, на маршрутизацию не влияет.
+        repo.recordDiag("dns", repo.networksDiag())
         // Если поменялся СОСТАВ туннеля (человек перевёл приложение из «Напрямую» во
         // «Через VPN» или обратно, либо сменился режим Умный/Полный), одним reload
         // конфига не обойтись: список исключений задаётся только в establish().
@@ -385,22 +414,30 @@ class NoVpnService : VpnService() {
             return
         }
         val node = repo.nodeFor() ?: return
-        // В резервном режиме собираем конфиг полным туннелем: белые списки ломают и
-        // прямой доступ к российским сайтам, поэтому весь трафик уводим через резерв.
-        val config = repo.buildConfig(Config.TUN_FD, eng.secret, VpnBus.reserve.value != null) ?: return
+        // Режим резерва читаем ОДИН раз: и для флага полного туннеля, и для выбора активного
+        // сервера (устраняем TOCTOU между двумя чтениями VpnBus.reserve).
+        val reserveAtBuild = VpnBus.reserve.value
+        // В резервном режиме собираем конфиг полным туннелем: белые списки ломают и прямой
+        // доступ к российским сайтам, поэтому весь трафик уводим через резерв.
+        val config = repo.buildConfig(Config.TUN_FD, eng.secret, reserveAtBuild != null) ?: return
         repo.store.writeConfig(config)?.let {
             Log.e(TAG, "конфиг не записан: $it")
             return
         }
-        if (eng.control.reload(repo.store.configFile().absolutePath)) {
-            // Группа типа select помнит прошлый выбор: без явного указания движок
-            // остался бы на старом сервере, хотя в окне выбран новый. В резервном
-            // режиме удерживаем резервный сервер, а не сбрасываемся на обычный.
-            val reserve = VpnBus.reserve.value
-            val active = reserve?.server ?: node.name
-            eng.control.selectProxy(active)
-            VpnBus.setServer(active)
-            notify(notification(if (reserve != null) "Резервное подключение" else "Подключено", active))
+        // Мутацию активного прокси движка и VpnBus сериализуем ТЕМ ЖЕ мьютексом, что и
+        // applySelection: иначе гонка со сторожем (evaluate) оставляла конфиг умным, пока
+        // шина показывает резерв, и наоборот. Если режим резерва сменился, пока собирался
+        // конфиг, — не применяем устаревший (следующий rebuild соберёт правильный).
+        selection.withLock {
+            if (stopping || engine !== eng || !eng.isAlive()) return@withLock
+            if (VpnBus.reserve.value != reserveAtBuild) return@withLock
+            if (eng.control.reload(repo.store.configFile().absolutePath)) {
+                // Группа select помнит прошлый выбор — указываем сервер явно.
+                val active = reserveAtBuild?.server ?: node.name
+                eng.control.selectProxy(active)
+                VpnBus.setServer(active)
+                notify(notification(if (reserveAtBuild != null) "Резервное подключение" else "Подключено", active))
+            }
         }
     }
 
@@ -478,7 +515,7 @@ class NoVpnService : VpnService() {
         val fd = tun?.fd ?: return false
         val config = repo.buildConfig(Config.TUN_FD, eng.newSecret(), VpnBus.reserve.value != null) ?: return false
         if (eng.start(config, fd) != null) return false
-        if (eng.waitReady(10_000) !is Engine.Started.Ok) return false
+        if (eng.waitReady(10_000, abort = { stopping }) !is Engine.Started.Ok) return false
         // После перезапуска движка удерживаем активный сервер: в резервном режиме —
         // резервный (он тоже в новом конфиге), иначе выбранный обычный.
         val reserve = VpnBus.reserve.value
@@ -637,7 +674,10 @@ class NoVpnService : VpnService() {
     private fun serverAddrs(): List<Pair<String, Int>> =
         repo.parsedSub()?.let { Sub.hostsOf(it) }.orEmpty().map { it to 443 }
 
-    private fun applySelection(eng: Engine, c: Candidate) {
+    private suspend fun applySelection(eng: Engine, c: Candidate) = selection.withLock {
+        // Не коммитим выбор, если сессия уже сменилась (teardown/reconnect подняли новый
+        // движок или всё снесли) — иначе в VpnBus повис бы сервер уже мёртвого движка.
+        if (stopping || engine !== eng || !eng.isAlive()) return@withLock
         val wasReserve = VpnBus.reserve.value != null
         eng.control.selectProxy(c.name)
         VpnBus.setServer(c.name)
@@ -833,12 +873,27 @@ class NoVpnService : VpnService() {
                 // Wi-Fi ↔ мобильный интернет движок продолжит слать пакеты в
                 // исчезнувший интерфейс, и соединение «висит».
                 runCatching { setUnderlyingNetworks(arrayOf(network)) }
+                // Старые соединения движка (в т.ч. к VPN-серверу) остались на
+                // исчезнувшей сети. Сбрасываем их РАЗ, чтобы движок сразу
+                // передознился на новой, а не ждал таймаутов — из-за этого после
+                // Wi-Fi↔LTE трафик иногда «висел» до перезапуска. Событие — одно на
+                // смену сети (registerDefaultNetworkCallback), не цикл, поэтому
+                // рабочий трафик это не рвёт (при смене сети рвать и так нечего).
                 rebuild.trySend(Unit)
-                // Существенная смена сети (Wi-Fi ↔ мобильный, смена оператора) —
-                // повод перепроверить доступ: где было плохо, могло стать хорошо,
-                // и наоборот. Возврат с резерва тоже случается здесь (§2).
-                lastReturnCheck = 0
-                triggerFailover()
+                val label = netLabel(network)
+                scope.launch(Dispatchers.IO) {
+                    val dropped = engine?.takeIf { it.isAlive() }?.control?.closeConnections() ?: false
+                    repo.recordDiag("network", "Сеть → $label: переезд туннеля" + if (dropped) ", соединения сброшены" else "")
+                    // ВАЖНО: даём серверу ПЕРЕПОДНЯТЬСЯ на новой сети, прежде чем
+                    // судить «жив/мёртв». Иначе первая же проверка (сеть ещё
+                    // настраивается) ошибочно сочтёт сервер недоступным и уведёт на
+                    // резерв — а потом висим на нём. Пауза = grace-период.
+                    delay(NET_SETTLE_MS)
+                    // Существенная смена сети — повод перепроверить доступ и вернуться
+                    // с резерва, если сеть нормализовалась (§2).
+                    lastReturnCheck = 0
+                    triggerFailover()
+                }
             }
 
             override fun onLost(network: Network) {
@@ -849,6 +904,7 @@ class NoVpnService : VpnService() {
                 // activeNetwork уже указывает на новую сеть, и мы сюда не заходим.
                 if (runCatching { cm.activeNetwork }.getOrNull() == null) {
                     VpnBus.setDiagnosis(NetDiagnosis.NO_INTERNET)
+                    repo.recordDiag("network", "Сеть пропала — интернета нет")
                 }
             }
 
@@ -859,6 +915,10 @@ class NoVpnService : VpnService() {
                 val dns = repo.systemDns()
                 if (dns != lastDns) {
                     lastDns = dns
+                    // Момент смены DNS — самое узкое место: если тут «ПУСТО», прямые
+                    // домены на зарубежном DoH. Снимок пишем именно здесь, чтобы
+                    // поймать переходное окно, а не уже устаканившееся состояние.
+                    repo.recordDiag("dns", "смена DNS: " + repo.networksDiag())
                     rebuild.trySend(Unit)
                 }
             }
@@ -876,6 +936,18 @@ class NoVpnService : VpnService() {
             }
         } else {
             Log.e(TAG, "не удалось подписаться на смену сети: после переключения Wi-Fi/LTE потребуется переподключение")
+        }
+    }
+
+    /** Человекочитаемый тип сети — для журнала диагностики (Wi-Fi / мобильный / …). */
+    private fun netLabel(network: Network): String {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val caps = runCatching { cm.getNetworkCapabilities(network) }.getOrNull() ?: return "новая сеть"
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "мобильный интернет"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            else -> "новая сеть"
         }
     }
 
@@ -1136,6 +1208,9 @@ class NoVpnService : VpnService() {
         private const val HEALTH_TICK_MS = 12_000L
         /** Как часто из резервного режима пробуем вернуться на обычный. */
         private const val RETURN_CHECK_MS = 45_000L
+        /** Пауза после смены сети перед вердиктом о доступности сервера: даём ему
+         *  переподняться на новой сети, иначе уходим на резерв по ложной тревоге. */
+        private const val NET_SETTLE_MS = 4_000L
         /** Как часто докладываем резервный расход на панель. */
         private const val RESERVE_REPORT_MS = 60_000L
 
@@ -1149,6 +1224,7 @@ class NoVpnService : VpnService() {
         fun start(context: Context) {
             val i = Intent(context, NoVpnService::class.java).setAction(ACTION_START)
             runCatching { context.startForegroundService(i) }
+                .onFailure { Log.w(TAG, "не удалось запустить службу (запуск из фона на Android 12+?): ${it.message}") }
         }
 
         fun stop(context: Context) {

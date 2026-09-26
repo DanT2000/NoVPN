@@ -25,6 +25,16 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Пакеты фирменных настроек (Samsung/Xiaomi/Huawei/OPPO/vivo): без явного
+             объявления на Android 11+ resolveActivity() их не видит, и deep-link в экран
+             автозапуска/сна (Oem.kt) молча не срабатывает — особенно новый Samsung-хинт. -->
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.vivo.permissionmanager" />
     </queries>
 
     <application

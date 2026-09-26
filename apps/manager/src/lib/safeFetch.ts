@@ -8,7 +8,10 @@
 // многогигабайтный ответ (или chunked без Content-Length) кладёт процесс по OOM.
 
 import dns from 'node:dns/promises';
+import { lookup as dnsLookupCb } from 'node:dns';
+import type { LookupAddress, LookupAllOptions, LookupOptions } from 'node:dns';
 import net from 'node:net';
+import { Agent } from 'undici';
 
 /** IP из внутренних/служебных диапазонов, на которые панели ходить нельзя. Неизвестное
  *  или некорректное значение трактуем как небезопасное (fail-closed). */
@@ -32,11 +35,26 @@ export function isPrivateIp(ip: string): boolean {
   if (kind === 6) {
     const low = ip.toLowerCase();
     if (low === '::1' || low === '::') return true; // loopback / unspecified
-    if (low.startsWith('fe80') || low.startsWith('fe9') || low.startsWith('fea') || low.startsWith('feb')) return true; // link-local fe80::/10
+    // link-local fe80::/10 — весь первый хекстет fe80..febf (раньше 'fe80' ловил лишь fe80::,
+    // а fe81..fe8f проскакивали).
+    if (low.startsWith('fe8') || low.startsWith('fe9') || low.startsWith('fea') || low.startsWith('feb')) return true;
     if (low.startsWith('fc') || low.startsWith('fd')) return true; // ULA fc00::/7
     if (low.startsWith('ff')) return true; // multicast
-    const mapped = low.match(/::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/); // IPv4-mapped
-    if (mapped && mapped[1]) return isPrivateIp(mapped[1]);
+    if (low.startsWith('64:ff9b:')) return true; // NAT64 64:ff9b::/96 — тоже мост во внутрянку
+    // IPv4-mapped ::ffff:0:0/96 в ЛЮБОЙ записи: точечной (::ffff:127.0.0.1) И hex (::ffff:7f00:1).
+    // Раньше ловилась только точечная — hex-форма обходила фильтр (SSRF на 127.0.0.1/metadata).
+    const m = low.match(/^::ffff:(.+)$/);
+    if (m) {
+      const tail = m[1] as string;
+      if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(tail)) return isPrivateIp(tail);
+      const hx = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+      if (hx) {
+        const hi = parseInt(hx[1] as string, 16);
+        const lo = parseInt(hx[2] as string, 16);
+        return isPrivateIp(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+      }
+      return true; // ::ffff: с неожиданным хвостом — fail-closed
+    }
     return false;
   }
   return true; // не распознано как IP — небезопасно
@@ -66,6 +84,90 @@ export async function assertPublicUrl(url: string): Promise<void> {
   }
   if (addrs.length === 0) throw new Error('имя хоста не разрешается');
   for (const a of addrs) if (isPrivateIp(a.address)) throw new Error('имя хоста указывает на внутреннюю сеть');
+}
+
+/** Безопасный GET с РУЧНЫМИ перенаправлениями: каждый переход (и исходный URL, и
+ *  каждый Location) заново проходит assertPublicUrl. Иначе публичный хост мог бы
+ *  302-редиректом увести панель на внутренний/метаданный адрес, который при
+ *  redirect:'follow' повторно НЕ проверяется (SSRF через редирект). Возвращает
+ *  финальный ответ (в т.ч. 304 — он не редирект). Остаточный риск DNS-rebinding
+ *  между проверкой и коннектом задокументирован в assertPublicUrl. */
+/** Выбор формы результата кастомного lookup по контракту Node + fail-closed фильтр
+ *  приватных адресов. Node ждёт массив при Happy-Eyeballs (options.all=true) и одиночный
+ *  (address, family) иначе — форму легко сломать назад, поэтому выносим и покрываем тестом. */
+export function resolveLookupForm(
+  addresses: LookupAddress[],
+  all: boolean | undefined,
+):
+  | { error: string }
+  | { single: true; address: string; family: number }
+  | { single: false; addresses: LookupAddress[] } {
+  if (addresses.length === 0) return { error: 'имя хоста не разрешается' };
+  for (const a of addresses) if (isPrivateIp(a.address)) return { error: 'адрес указывает на внутреннюю сеть' };
+  if (all) return { single: false, addresses };
+  const first = addresses[0]!;
+  return { single: true, address: first.address, family: first.family };
+}
+
+// Диспетчер с ПРИВЯЗКОЙ адреса: DNS резолвится в самом коннекторе и КАЖДЫЙ полученный
+// адрес заново проверяется на «внутренний». assertPublicUrl проверяет имя ДО запроса, но
+// fetch затем резолвит имя повторно — атакующий с низким TTL мог бы вернуть публичный IP
+// на проверке и внутренний (127.0.0.1 / 169.254.169.254 / 192.168.x) на коннекте
+// (DNS-rebinding / TOCTOU). Здесь проверка идёт на ТОМ ЖЕ резолве, что и коннект, — окно
+// закрыто. Ошибка резолва/приватный адрес → соединение не устанавливается (fail-closed).
+const pinnedAgent = new Agent({
+  connect: {
+    lookup(
+      hostname: string,
+      options: LookupOptions,
+      callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void,
+    ) {
+      dnsLookupCb(hostname, { ...options, all: true } as LookupAllOptions, (err, addresses) => {
+        if (err) return callback(err, []);
+        const r = resolveLookupForm(addresses, options.all);
+        if ('error' in r) return callback(new Error(r.error), []);
+        // Форма по контракту Node (см. resolveLookupForm): массив при all=true, иначе
+        // одиночный (address, family) — иначе Node падает с ERR_INVALID_IP_ADDRESS.
+        if (r.single) return callback(null, r.address, r.family);
+        return callback(null, r.addresses);
+      });
+    },
+  },
+});
+
+const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
+export async function safeFetch(
+  url: string,
+  init: { headers?: Record<string, string>; timeoutMs?: number; maxRedirects?: number } = {},
+): Promise<Response> {
+  const maxRedirects = init.maxRedirects ?? 5;
+  // ОДИН дедлайн на ВСЮ цепочку редиректов. Раньше таймаут создавался на каждый hop —
+  // и медленная/враждебная цепочка тянулась до (N+1)×timeout (~120с вместо 20с), держа
+  // последовательный фоновый sync-цикл backupSync куда дольше задуманного.
+  const signal = init.timeoutMs ? AbortSignal.timeout(init.timeoutMs) : undefined;
+  let current = url;
+  for (let hop = 0; ; hop++) {
+    await assertPublicUrl(current); // проверяем КАЖДЫЙ адрес в цепочке, не только первый
+    const res = await fetch(current, {
+      method: 'GET',
+      headers: init.headers,
+      redirect: 'manual',
+      signal,
+      // Привязка адреса против DNS-rebinding (см. pinnedAgent). dispatcher — расширение
+      // Node/undici поверх стандартного RequestInit, поэтому расширяем тип точечно.
+      dispatcher: pinnedAgent,
+    } as RequestInit & { dispatcher: unknown });
+    if (!REDIRECT_CODES.has(res.status)) return res; // не редирект (в т.ч. 304) — отдаём как есть
+    const loc = res.headers.get('location');
+    if (!loc) return res;
+    try {
+      await res.body?.cancel();
+    } catch {
+      /* тело уже закрыто */
+    }
+    if (hop >= maxRedirects) throw new Error('слишком много перенаправлений');
+    current = new URL(loc, current).toString();
+  }
 }
 
 /** Читает тело ответа с жёстким лимитом в байтах, прерывая поток при превышении —

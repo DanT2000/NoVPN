@@ -18,6 +18,20 @@ const send = (msg) => chrome.runtime.sendMessage(msg);
 let domain = null;
 let tabId = null;
 
+/* Перезагрузка активной вкладки после смены маршрута. Как в SwitchyOmega/Omega Proxy:
+   уже открытая страница держит соединения по СТАРОМУ маршруту, и правило начинает
+   действовать только на новых запросах — поэтому сразу перезагружаем, чтобы «нажал →
+   через VPN → страница мгновенно переоткрылась уже по новому пути». Право tabs в манифесте. */
+function reloadTab() {
+  if (tabId != null) {
+    try {
+      chrome.tabs.reload(tabId, { bypassCache: false });
+    } catch {
+      /* вкладку могли закрыть — не критично */
+    }
+  }
+}
+
 /* Попутные домены. После выбора маршрута спрашиваем фон, какие сторонние домены
    подгружала вкладка, и предлагаем отправить их тем же путём. Молча ничего не
    добавляем: человек видит список, снимает лишнее и подтверждает. */
@@ -66,6 +80,7 @@ async function suggestRelated(route) {
     apply.disabled = false;
     hideRelated();
     note(ok ? `Готово: ещё ${ok} ${ok === 1 ? 'домен' : 'домена'} ${ROUTE_WORD[route]}.` : 'Ничего не добавлено.', !ok);
+    if (ok) reloadTab(); // попутные домены применены — перезагружаем, чтобы подхватились
   };
   $('related').hidden = false;
 }
@@ -129,7 +144,8 @@ document.querySelectorAll('.choice').forEach((btn) => {
       note(r && r.error ? r.error : 'Не удалось сохранить правило', true);
       return;
     }
-    note('Готово. Правило уже действует.');
+    note('Готово — страница перезагружается по новому маршруту.');
+    reloadTab(); // мгновенный эффект, как в SwitchyOmega
     void suggestRelated(route);
   });
 });
@@ -145,7 +161,8 @@ $('clear').addEventListener('click', async () => {
     note(r && r.error ? r.error : 'Не удалось убрать правило', true);
     return;
   }
-  note('Правило убрано.');
+  note('Правило убрано — страница перезагружается.');
+  reloadTab(); // вернулись к прямому маршруту — тоже переоткрываем страницу
 });
 
 void init();

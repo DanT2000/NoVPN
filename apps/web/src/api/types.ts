@@ -81,6 +81,14 @@ export interface BackupInput {
   userAgent?: string | null;
   hwid?: string | null;
   enabled?: boolean;
+  /** Корзина: обход белых списков / аварийный (наш сервер лёг). */
+  kind?: 'whitelist' | 'outage';
+  /** Порядок перебора (меньше — раньше). */
+  sort?: number;
+  /** Кому доступна: всем с доступом к резерву / только приоритетным. */
+  availableFor?: 'all' | 'priority';
+  /** Собственный месячный лимит подписки, ГБ (null/пусто = без лимита). */
+  limitGb?: number | null;
 }
 /** Патч резервной подписки — те же поля, все необязательны. */
 export type BackupPatch = Partial<BackupInput>;

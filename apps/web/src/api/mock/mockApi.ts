@@ -887,6 +887,10 @@ export const mockApi: ApiClient = {
       userAgent: body.userAgent?.trim() ? body.userAgent.trim() : null,
       hwid: body.hwid?.trim() ? body.hwid.trim() : null,
       enabled: body.enabled !== false,
+      kind: body.kind === 'outage' ? 'outage' : 'whitelist',
+      sort: Number(body.sort) || 0,
+      availableFor: body.availableFor === 'priority' ? 'priority' : 'all',
+      limitGb: body.limitGb == null ? null : Number(body.limitGb) || null,
       provider: { upload: null, download: null, total: null, expire: null },
       format: null, serverCount: 0, lastFetchedAt: null, lastError: null,
       internalBytes: 0, createdAt: now, updatedAt: now,
@@ -1001,6 +1005,7 @@ const BACKUP_SUBS: import('@novpn/shared').BackupSubscription[] = [
   {
     id: 'bk_shared_1', ownerUserId: null, title: 'Аварийный пул (сборный)',
     url: 'https://sub.reserve.example/abcd1234', userAgent: 'v2rayNG/1.9.5', hwid: null, enabled: true,
+    kind: 'whitelist', sort: 0, availableFor: 'all', limitGb: null,
     provider: { upload: 12e9, download: 88e9, total: 500e9, expire: Math.floor(Date.now() / 1000) + 45 * 86400 },
     format: 'base64', serverCount: 2, lastFetchedAt: new Date(Date.now() - 36e5).toISOString(), lastError: null,
     internalBytes: 21e9, createdAt: new Date(Date.now() - 20 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 36e5).toISOString(),
@@ -1008,6 +1013,7 @@ const BACKUP_SUBS: import('@novpn/shared').BackupSubscription[] = [
   {
     id: 'bk_personal_1', ownerUserId: 'u3', title: 'Личный резерв офиса',
     url: 'https://sub.other.example/office-xyz', userAgent: null, hwid: 'HWID-OFFICE-01', enabled: true,
+    kind: 'outage', sort: 0, availableFor: 'all', limitGb: 10,
     provider: { upload: 3e9, download: 40e9, total: null, expire: null },
     format: 'base64', serverCount: 1, lastFetchedAt: new Date(Date.now() - 72e5).toISOString(), lastError: null,
     internalBytes: 6e9, createdAt: new Date(Date.now() - 8 * 86400000).toISOString(), updatedAt: new Date(Date.now() - 72e5).toISOString(),

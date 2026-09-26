@@ -208,7 +208,9 @@ object Sub {
         val (beforeQuery, queryRaw) = beforeFrag.split("?", limit = 2).let { it[0] to it.getOrNull(1).orEmpty() }
         val at = beforeQuery.lastIndexOf('@')
         val user = if (at >= 0) beforeQuery.substring(0, at) else ""
-        val hostPort = if (at >= 0) beforeQuery.substring(at + 1) else beforeQuery
+        // Отсекаем путь `host:port/...` (напр. vless с завершающим «/» перед «?») — иначе
+        // порт разбирался как «port/» → toIntOrNull()==null → откат на 443. Как в sub.rs.
+        val hostPort = (if (at >= 0) beforeQuery.substring(at + 1) else beforeQuery).substringBefore('/')
         // IPv6 в квадратных скобках: [::1]:443
         val end = hostPort.lastIndexOf(']')
         val host: String
@@ -345,7 +347,9 @@ object Sub {
         val method: String; val password: String; val host: String; val port: String
         if (at >= 0) {
             val cred = body.substring(0, at)
-            val hostPort = body.substring(at + 1)
+            // SIP002: ss://base64(method:pass)@host:port/?plugin=... — срезаем путь «/…»,
+            // иначе порт разбирался как «port/» и падал в 443. Как в sub.rs.
+            val hostPort = body.substring(at + 1).substringBefore('/')
             val decoded = runCatching {
                 String(Base64.getDecoder().decode(cred.trimEnd('=')), Charsets.UTF_8)
             }.getOrDefault(cred)
@@ -391,7 +395,9 @@ object Sub {
                 val vnext = (ob["settings"] as? JsonObject)?.get("vnext")?.let { it as? JsonArray }
                     ?.firstOrNull() as? JsonObject ?: continue
                 val address = (vnext["address"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-                val port = (vnext["port"] as? JsonPrimitive)?.intOrNull ?: 443
+                // Клэмп 1..65535 (как desktop): 0/переполнение → 443, иначе линк вёл бы себя
+                // по-разному на Android и десктопе.
+                val port = ((vnext["port"] as? JsonPrimitive)?.intOrNull ?: 443).let { if (it in 1..65535) it else 443 }
                 val user = (vnext["users"] as? JsonArray)?.firstOrNull() as? JsonObject
                 val uuid = (user?.get("id") as? JsonPrimitive)?.contentOrNull.orEmpty()
                 if (address.isEmpty() || uuid.isEmpty()) continue

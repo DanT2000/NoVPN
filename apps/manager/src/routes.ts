@@ -21,7 +21,7 @@ import type { AwgParams } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
 import { normCount, normGb, normExpiry } from './lib/validate.js';
-import { createXrayCfg, createAwgCfg, issueForUser, issueProxyForUser, revokeUserAccessOnServers, revokeDeviceOnServer } from './services/issue.js';
+import { createXrayCfg, createAwgCfg, issueForUser, withUserIssueLock, issueProxyForUser, revokeUserAccessOnServers, revokeDeviceOnServer } from './services/issue.js';
 import { createBackup, decryptBackup, restoreBackup } from './services/backup.js';
 import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { renderSubPage } from './services/subPage.js';
@@ -579,12 +579,19 @@ router.get('/sub/:token/meta.json', (req, res) => {
     // Резервный пул: сколько аварийных серверов доступно этому пользователю и где
     // их забрать. Сами серверы в обычном списке НЕ показываются — клиент держит
     // их скрытыми и уходит на них только при недоступности обычной инфраструктуры.
-    backup: {
-      available: backupRepo.userHasBackup(u.id),
-      count: backupRepo.backupServerLinksForUser(u.id).length,
-      priority: u.priorityAccess,
-      sub: `${origin}/sub/${token}/backup`,
-    },
+    backup: (() => {
+      // Пул С УЧЁТОМ настроек и лимитов (корзины whitelist/outage). Состояния корзин
+      // отдаём клиенту, чтобы он понимал: доступно / не положено уровню / лимит исчерпан.
+      const pool = backupRepo.reservePoolForUser(u.id);
+      return {
+        available: pool.links.length > 0,
+        count: pool.links.length,
+        priority: u.priorityAccess,
+        whitelist: pool.whitelist,
+        outage: pool.outage,
+        sub: `${origin}/sub/${token}/backup`,
+      };
+    })(),
   });
 });
 
@@ -594,11 +601,20 @@ router.get('/sub/:token/meta.json', (req, res) => {
 router.get('/sub/:token/backup', (req, res) => {
   const u = repo.getUserBySubToken(String(req.params.token ?? ''));
   if (!u || !u.isActive) return res.status(404).send('');
-  const entries = backupRepo.backupServerLinksForUser(u.id);
-  const links = entries.map((e) => e.link).filter(Boolean);
+  // Тот же гейт, что у основной подписки: истёкшему пользователю резерв не выдаём.
+  if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
+  // Клиент может запросить конкретную КОРЗИНУ: ?kind=whitelist|outage. Без параметра —
+  // обе доступные (обратная совместимость со старыми клиентами, тянущими весь пул).
+  const kp = String(req.query.kind ?? '');
+  const kind = kp === 'whitelist' || kp === 'outage' ? kp : undefined;
+  const pool = backupRepo.reservePoolForUser(u.id, kind);
+  const links = pool.links.map((e) => e.link).filter(Boolean);
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Profile-Title', 'NoVPN Reserve');
+  // Состояние корзин (ok/off/exhausted) — чтобы клиент показал «лимит исчерпан», а не молчал.
+  res.setHeader('X-Reserve-Whitelist', pool.whitelist);
+  res.setHeader('X-Reserve-Outage', pool.outage);
   res.send(Buffer.from(links.join('\n'), 'utf8').toString('base64'));
 });
 
@@ -786,6 +802,26 @@ router.post('/api/public/token-login', (req, res) => {
   });
 });
 
+// Разрешение личной ссылки в подписку для НАШИХ клиентов (Desktop/Android). Ссылку
+// вида https://<домен>/k/<accessToken> мы отправляем пользователю; клиент вытаскивает
+// токен и зовёт этот эндпоинт, получая прямые URL подписки (обычной/полной/meta) — и
+// дальше работает как с обычной подпиской, без ввода кодов/паролей руками.
+router.get('/api/public/resolve', (req, res) => {
+  const token = String(req.query.token ?? '');
+  const u = token ? repo.getUserByAccessToken(token) : null;
+  if (!u) return res.status(404).json(err('not_found', 'Ссылка недействительна. Попросите у администратора новую.'));
+  const bad = accessError(u);
+  if (bad) return res.status(403).json(err(bad.type, bad.message));
+  const subToken = repo.getSubToken(u.id);
+  if (!subToken) return res.status(404).json(err('not_found', 'Подписка ещё не выдана.'));
+  const origin = reqOrigin(req);
+  res.json({
+    sub: `${origin}/sub/${subToken}`,
+    full: `${origin}/sub/${subToken}/full`,
+    meta: `${origin}/sub/${subToken}/meta.json`,
+  });
+});
+
 router.post('/api/public/logout', (req, res) => {
   delete req.session.userId;
   res.json({ ok: true });
@@ -832,46 +868,58 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
       if (bad) return res.status(403).json(err(bad.type, bad.message));
     }
     const server = repo.getServer(d.serverId)!;
-    // Лимит устройств (только AmneziaWG): перевыпуск НЕАКТИВНОГО AWG-устройства = его
-    // повторная активация, поэтому подчиняется тому же лимиту, что и новый выпуск.
-    // Иначе можно было бы обойти лимит, реактивируя отключённые устройства. Админ — без лимита.
-    if (
-      !req.session.admin && !d.isActive && d.protocol === 'amneziawg' &&
-      u.deviceLimit != null && repo.countActiveDevices(u.id, 'amneziawg') >= u.deviceLimit
-    ) {
+    // Лимит устройств + отзыв старого + активация нового — под ПЕР-ПОЛЬЗОВАТЕЛЬСКОЙ
+    // блокировкой (как обычная выдача issueForUser). Иначе параллельные reissue/issue
+    // обошли бы лимит AmneziaWG: проверка «сосчитать активные → активировать» не
+    // атомарна через await, и две реактивации отключённых устройств прошли бы разом.
+    const result = await withUserIssueLock(
+      u.id,
+      async (): Promise<{ limit: true } | { limit: false; out: IssueDeviceResult }> => {
+        // Перевыпуск НЕАКТИВНОГО AWG-устройства = его повторная активация → тот же лимит,
+        // что и новый выпуск (иначе лимит обходится реактивацией). Админ — без лимита.
+        if (
+          !req.session.admin && !d.isActive && d.protocol === 'amneziawg' &&
+          u.deviceLimit != null && repo.countActiveDevices(u.id, 'amneziawg') >= u.deviceLimit
+        ) {
+          return { limit: true };
+        }
+
+        // СНАЧАЛА отзываем старый доступ на сервере. Иначе перевыпуск лишь забывает
+        // старый ключ в панели, а на сервере он продолжает работать — навсегда и уже
+        // без возможности отозвать (панель его перезатёрла). Именно ради этого
+        // перевыпуск обычно и жмут: ключ утёк.
+        const oldRow = repo.getDeviceRow(d.id);
+        if (oldRow && (await sshHasSshAccess(server.id))) {
+          if (oldRow.protocol === 'xray' && oldRow.uuid) await sshRevokeXray(server, oldRow.uuid);
+          else if (oldRow.protocol === 'amneziawg' && oldRow.public_key) await sshRevokeAwg(server, oldRow.public_key);
+        }
+
+        let out: IssueDeviceResult;
+        // quota_blocked: 0 — перевыпуск даёт СВЕЖИЙ живой пир на сервере, поэтому запись
+        // возвращается в нормальное состояние enforcement. Если пользователь всё ещё сверх
+        // лимита (админский перевыпуск), следующий цикл sync сам снимет пир заново; иначе
+        // остался бы is_active=1 И quota_blocked=1 с рабочим пиром, который sync не трогает.
+        if (d.protocol === 'xray') {
+          const r = await createXrayCfg(server, d.name);
+          const device = repo.updateDeviceFields(d.id, { is_active: 1, revoked_at: null, revoke_pending: 0, quota_blocked: 0, uuid: r.uuid, public_key: r.publicKey, link: r.link, conf: null })!;
+          out = { device, link: r.link };
+        } else {
+          const r = await createAwgCfg(server, d.name);
+          const device = repo.updateDeviceFields(d.id, {
+            is_active: 1, revoked_at: null, revoke_pending: 0, quota_blocked: 0, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
+            preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: encConf(r.conf), link: null,
+          })!;
+          const vk = vpnLinkFromConf(r.conf, `${repo.brandName()} — ${server.name}`);
+          out = { device, conf: r.conf, vpnKeyAvailable: !!vk, vpnKey: vk ?? undefined };
+        }
+        repo.addHistory(u.id, `Перевыпущен конфиг «${d.name}»`);
+        return { limit: false, out };
+      },
+    );
+    if (result.limit) {
       return res.status(403).json(err('devices', `Достигнут лимит устройств AmneziaWG (${u.deviceLimit}). Отключите другое устройство.`));
     }
-
-    // СНАЧАЛА отзываем старый доступ на сервере. Иначе перевыпуск лишь забывает
-    // старый ключ в панели, а на сервере он продолжает работать — навсегда и уже
-    // без возможности отозвать (панель его перезатёрла). Именно ради этого
-    // перевыпуск обычно и жмут: ключ утёк.
-    const oldRow = repo.getDeviceRow(d.id);
-    if (oldRow && (await sshHasSshAccess(server.id))) {
-      if (oldRow.protocol === 'xray' && oldRow.uuid) await sshRevokeXray(server, oldRow.uuid);
-      else if (oldRow.protocol === 'amneziawg' && oldRow.public_key) await sshRevokeAwg(server, oldRow.public_key);
-    }
-
-    let out: IssueDeviceResult;
-    // quota_blocked: 0 — перевыпуск даёт СВЕЖИЙ живой пир на сервере, поэтому запись
-    // возвращается в нормальное состояние enforcement. Если пользователь всё ещё сверх
-    // лимита (админский перевыпуск), следующий цикл sync сам снимет пир заново; иначе
-    // остался бы is_active=1 И quota_blocked=1 с рабочим пиром, который sync не трогает.
-    if (d.protocol === 'xray') {
-      const r = await createXrayCfg(server, d.name);
-      const device = repo.updateDeviceFields(d.id, { is_active: 1, revoked_at: null, revoke_pending: 0, quota_blocked: 0, uuid: r.uuid, public_key: r.publicKey, link: r.link, conf: null })!;
-      out = { device, link: r.link };
-    } else {
-      const r = await createAwgCfg(server, d.name);
-      const device = repo.updateDeviceFields(d.id, {
-        is_active: 1, revoked_at: null, revoke_pending: 0, quota_blocked: 0, public_key: r.publicKey, private_key_enc: encryptSecret(r.privateKey),
-        preshared_key_enc: encryptSecret(r.presharedKey), client_ip: r.clientIp, conf: encConf(r.conf), link: null,
-      })!;
-      const vk = vpnLinkFromConf(r.conf, `${repo.brandName()} — ${server.name}`);
-      out = { device, conf: r.conf, vpnKeyAvailable: !!vk, vpnKey: vk ?? undefined };
-    }
-    repo.addHistory(u.id, `Перевыпущен конфиг «${d.name}»`);
-    res.json(out);
+    res.json(result.out);
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка.'));
   }
@@ -2250,6 +2298,10 @@ router.post('/api/admin/backup', requireAdmin, (req, res) => {
     userAgent: b.userAgent ? String(b.userAgent).slice(0, 200) : null,
     hwid: b.hwid ? String(b.hwid).slice(0, 200) : null,
     enabled: b.enabled !== false,
+    kind: b.kind === 'outage' ? 'outage' : 'whitelist',
+    sort: Number.isFinite(Number(b.sort)) ? Math.trunc(Number(b.sort)) : 0,
+    availableFor: b.availableFor === 'priority' ? 'priority' : 'all',
+    limitGb: b.limitGb == null || b.limitGb === '' ? null : Math.max(0, Number(b.limitGb)) || null,
   });
   repo.addLog(`Резервная подписка добавлена: ${sub.title || sub.url}`);
   // Первый фетч сразу, чтобы админ увидел серверы и статистику без ожидания цикла.
@@ -2273,6 +2325,10 @@ router.patch('/api/admin/backup/:id', requireAdmin, (req, res) => {
   if (b.userAgent !== undefined) fields.user_agent = b.userAgent ? String(b.userAgent).slice(0, 200) : null;
   if (b.hwid !== undefined) fields.hwid = b.hwid ? String(b.hwid).slice(0, 200) : null;
   if (b.enabled !== undefined) fields.enabled = b.enabled ? 1 : 0;
+  if (b.kind !== undefined) fields.kind = b.kind === 'outage' ? 'outage' : 'whitelist';
+  if (b.sort !== undefined) fields.sort = Math.trunc(Number(b.sort)) || 0;
+  if (b.availableFor !== undefined) fields.available_for = b.availableFor === 'priority' ? 'priority' : 'all';
+  if (b.limitGb !== undefined) fields.limit_gb = b.limitGb == null || b.limitGb === '' ? null : Math.max(0, Number(b.limitGb)) || null;
   const updated = backupRepo.updateBackupSubscription(cur.id, fields);
   res.json(updated);
 });

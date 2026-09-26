@@ -102,10 +102,18 @@ class Repo(private val app: Context) {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+    /** Сериализует read-modify-write состояния. update() зовут и с главного потока (тумблеры
+     *  UI), и с Dispatchers.IO (checkSubscription/refreshMeta), и со scope службы
+     *  (checkFullTimeout) — без сериализации параллельные вызовы теряли изменения и писали
+     *  несогласованное состояние на диск. */
+    private val updateLock = Any()
+
     fun update(block: (State) -> State) {
-        val next = block(_state.value)
-        _state.value = next
-        store.saveState(next)
+        synchronized(updateLock) {
+            val next = block(_state.value)
+            _state.value = next
+            store.saveState(next)
+        }
     }
 
     // ── подписка ──
@@ -129,7 +137,15 @@ class Repo(private val app: Context) {
         if (!clean.startsWith("https://") && !debugStand) {
             return@withContext Result.failure(IllegalArgumentException("Ссылка должна начинаться с https://"))
         }
-        val resp = runCatching { Http.get(clean) }.getOrElse {
+        // Личная ссылка https://<домен>/k/<accessToken> (её шлём пользователю) → сначала
+        // разрешаем её в прямой URL подписки; иначе за ней тянулась бы HTML-страница кабинета.
+        val effective = if (clean.contains("/k/")) {
+            resolveAccessLink(clean)
+                ?: return@withContext Result.failure(IllegalStateException("Не удалось разобрать личную ссылку — попросите у администратора новую"))
+        } else {
+            clean
+        }
+        val resp = runCatching { Http.get(effective) }.getOrElse {
             return@withContext Result.failure(IllegalStateException("Панель недоступна: ${it.message}"))
         }
         if (resp.code == 404) {
@@ -142,10 +158,35 @@ class Repo(private val app: Context) {
             return@withContext Result.failure(IllegalStateException(it.message ?: "Подписка не разобрана"))
         }
         store.saveSubRaw(resp.body)
-        update { it.copy(subUrl = clean) }
+        // Храним ЭФФЕКТИВНЫЙ (разрешённый) URL: резерв/meta должны идти на /sub/…, не на /k/.
+        update { it.copy(subUrl = effective) }
         refreshMeta()
         val servers = rebuildServers(parsed)
         Result.success(servers.map { it.key }.distinct().size)
+    }
+
+    /**
+     * Личная ссылка вида https://<домен>/k/<accessToken> — её мы шлём пользователю.
+     * Спрашиваем панель `GET <origin>/api/public/resolve?token=<token>` и получаем прямые
+     * URL подписки. Берём полный профиль (обход белых списков) если он есть, иначе обычный.
+     * Возвращает null, если это не /k/-ссылка не удалось разобрать (тогда вызывающий даст
+     * человеку понятную ошибку).
+     */
+    private fun resolveAccessLink(url: String): String? {
+        val idx = url.indexOf("/k/")
+        if (idx < 0) return null
+        val origin = url.substring(0, idx)
+        if (!origin.startsWith("http")) return null
+        val token = url.substring(idx + 3)
+            .substringBefore('/').substringBefore('?').substringBefore('#').trim()
+        if (token.isEmpty()) return null
+        val resp = runCatching { Http.get("$origin/api/public/resolve?token=$token") }.getOrNull()
+            ?: return null
+        if (resp.code !in 200..299) return null
+        // Легковесный разбор без модели: сначала full (обход), затем обычная подписка.
+        fun grab(key: String): String? =
+            Regex("\"$key\"\\s*:\\s*\"([^\"]+)\"").find(resp.body)?.groupValues?.getOrNull(1)
+        return grab("full") ?: grab("sub")
     }
 
     private fun isDebuggable(): Boolean =
@@ -313,8 +354,34 @@ class Repo(private val app: Context) {
      * подставлять нельзя — это тихо понизило бы шифрованный DNS до обычного.
      * В этом случае отдаём тот же сервер как DoT.
      */
-    fun systemDns(): List<String> = runCatching {
+    /** Последний НЕ пустой системный DNS — подстраховка на переходное окно смены сети. */
+    @Volatile
+    private var lastGoodDns: List<String> = emptyList()
+
+    fun systemDns(): List<String> {
+        val fresh = computeSystemDns()
+        // Устойчивость к переходному окну смены сети (корень бага «Сбер/Озон не
+        // открываются, лечит переподключение»): при смене соты/дата-SIM система на
+        // доли секунды не отдаёт DNS ни на одной INTERNET-сети, и раньше systemDns()
+        // возвращал ПУСТО. Тогда nameserver-policy для прямых (российских) доменов
+        // пропадала, и они уходили на зарубежный DoH (1.1.1.1/8.8.8.8), который
+        // оператор режет → NXDOMAIN. Держим последний рабочий, пока сеть не отдаст
+        // новый — политика не обнуляется, прямой доступ не рвётся.
+        return if (fresh.isNotEmpty()) {
+            lastGoodDns = fresh
+            fresh
+        } else {
+            lastGoodDns
+        }
+    }
+
+    private fun computeSystemDns(): List<String> = runCatching {
         val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        // Предпочитаем сеть, НЕСУЩУЮ маршрут по умолчанию (реальный интернет-выход), а не
+        // просто «первую валидированную»: при двух SIM и IMS-каналах DNS не той сети
+        // недоступен через дефолтный маршрут, и прямые домены не резолвятся.
+        var best: List<String> = emptyList()       // validated + маршрут по умолчанию
+        var validated: List<String> = emptyList()  // validated без дефолт-маршрута
         var fallback: List<String> = emptyList()
         @Suppress("DEPRECATION")
         for (network in cm.allNetworks) {
@@ -334,12 +401,58 @@ class Repo(private val app: Context) {
                     .distinct()
             }
             if (list.isEmpty()) continue
-            // Проверенная системой сеть важнее: на ней и живёт реальный интернет.
-            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return list
-            if (fallback.isEmpty()) fallback = list
+            // Проверенная системой сеть важнее: на ней и живёт реальный интернет; из них —
+            // та, что несёт маршрут по умолчанию (именно через неё уходят наши сокеты).
+            val validatedNet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            val hasDefaultRoute = props.routes.any { runCatching { it.isDefaultRoute }.getOrDefault(false) }
+            when {
+                validatedNet && hasDefaultRoute -> if (best.isEmpty()) best = list
+                validatedNet -> if (validated.isEmpty()) validated = list
+                fallback.isEmpty() -> fallback = list
+            }
         }
-        fallback
+        when {
+            best.isNotEmpty() -> best
+            validated.isNotEmpty() -> validated
+            else -> fallback
+        }
     }.getOrDefault(emptyList())
+
+    /**
+     * Диагностический снимок сетей для журнала. Пишется при пересборке конфига,
+     * чтобы поймать перемежающийся сбой прямого доступа (Сбер и др. российские
+     * сайты «нет интернета» после смены сети): показывает, какой резолвер выбрал
+     * systemDns() для прямых доменов и почему. Если тут «ПУСТО» — прямые домены
+     * ушли на зарубежный DoH, который оператор режет; если DNS чужой сети (напр.
+     * 8.8.8.8 с IMS-канала) — тоже. Чистая диагностика: поведение НЕ меняет.
+     */
+    fun networksDiag(): String = runCatching {
+        val cm = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val chosen = systemDns()
+        val active = runCatching { cm.activeNetwork }.getOrNull()
+        val sb = StringBuilder()
+        sb.append("DNS прямых = ")
+        sb.append(if (chosen.isEmpty()) "ПУСТО→зарубежный DoH" else chosen.joinToString(","))
+        @Suppress("DEPRECATION")
+        for (network in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+            val t = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cell"
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "eth"
+                else -> "other"
+            }
+            val inet = if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) 1 else 0
+            val valid = if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) 1 else 0
+            val lp = cm.getLinkProperties(network)
+            val dns = lp?.dnsServers?.mapNotNull { it.hostAddress }?.joinToString(",").orEmpty()
+            val iface = lp?.interfaceName ?: "?"
+            val def = if (network == active) "*" else ""
+            sb.append("; $def$iface/$t i$inet v$valid dns=[$dns]")
+        }
+        sb.toString()
+    }.getOrDefault("networksDiag: n/a")
 
     /**
      * @param forceFull увести ВЕСЬ трафик в туннель, игнорируя умную маршрутизацию.
@@ -452,7 +565,7 @@ class Repo(private val app: Context) {
         // Панель не предложила резерв этому пользователю — чистим локальную копию.
         if (meta != null && meta?.backup?.available != true) {
             store.deleteReserveRaw()
-            synchronized(this) { reserveCache = emptyList(); reserveLoaded = true }
+            synchronized(this@Repo) { reserveCache = emptyList(); reserveLoaded = true }
             return@withContext
         }
         val url = reserveUrl() ?: return@withContext
@@ -461,7 +574,7 @@ class Repo(private val app: Context) {
         val nodes = runCatching { Sub.parse(resp.body) }.getOrNull()
             ?.let { (it as? Sub.Parsed.Nodes)?.nodes } ?: return@withContext
         store.saveReserveRaw(resp.body)
-        synchronized(this) { reserveCache = nodes; reserveLoaded = true }
+        synchronized(this@Repo) { reserveCache = nodes; reserveLoaded = true }
     }
 
     /** Личная резервная подписка: добавить/заменить. Возвращает текст ошибки или null. */
@@ -537,8 +650,12 @@ class Repo(private val app: Context) {
         }
         val code = Http.send("POST", endpoint, "{\"items\":[$items]}") ?: return@withContext
         if (code in 200..299) synchronized(diagLock) {
+            // Помечаем выгруженными ТОЛЬКО реально отправленные (snapshot `pending`). Записи,
+            // добавленные во время POST, не отправлялись — их не трогаем, уйдут в следующий раз
+            // (раньше метились все → терялись).
+            val sent = pending.toHashSet()
             val list = diagList()
-            for (i in list.indices) if (!list[i].uploaded) list[i] = list[i].copy(uploaded = true)
+            for (i in list.indices) if (!list[i].uploaded && list[i] in sent) list[i] = list[i].copy(uploaded = true)
             store.saveDiag(list)
         }
     }

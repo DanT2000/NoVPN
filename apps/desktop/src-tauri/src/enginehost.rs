@@ -211,8 +211,16 @@ pub fn run() {
             match off_since {
                 None => off_since = Some(now),
                 Some(t) if now.duration_since(t) > Duration::from_secs(8) => {
-                    let _ = std::fs::remove_file(status_path());
-                    return;
+                    // Перед выходом ПЕРЕЧИТЫВАЕМ команду: если между проверкой want и этим
+                    // моментом попросили подняться (request_start), НЕ выходим — иначе гонка:
+                    // ensure_engine_host видит свежий статус и не перезапускает, а мы уже
+                    // удаляем статус и выходим, оставляя want=true без живого хоста.
+                    if read_control().map(|c| c.want).unwrap_or(false) {
+                        off_since = None;
+                    } else {
+                        let _ = std::fs::remove_file(status_path());
+                        return;
+                    }
                 }
                 _ => {}
             }

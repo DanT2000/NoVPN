@@ -386,6 +386,24 @@ fun SettingsScreen(
                 checked = state.settings.sendDiagnostics,
                 onChange = { v -> repo.update { it.copy(settings = it.settings.copy(sendDiagnostics = v)) } },
             )
+            // Состояние аварийного пула из meta.backup (панель шлёт корзины whitelist/outage).
+            // Читаем repo.meta без реактивности — как и «неподдерживаемая версия» выше:
+            // экран пересобирается при смене state, а meta к этому моменту уже обновлён.
+            repo.meta?.backup?.let { b ->
+                when {
+                    b.priority -> Notice(
+                        "Приоритетный доступ: резервные серверы без месячных ограничений.",
+                        tone = Tone.OK,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    b.exhausted -> Notice(
+                        "Месячный лимит резервных серверов исчерпан — восстановится в начале месяца. " +
+                            "Обычное VPN-подключение работает без ограничений.",
+                        tone = Tone.WARN,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
         }
         ReserveSubscription(repo)
 

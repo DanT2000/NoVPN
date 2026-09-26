@@ -264,7 +264,18 @@ export function Dashboard() {
           <div className="row-between" style={{ marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
             <div className="chip-row">
               {WINDOWS.map((w) => (
-                <Chip key={w.days} label={w.label} size="sm" active={win === w.days} onClick={() => setWin(w.days)} />
+                <Chip
+                  key={w.days}
+                  label={w.label}
+                  size="sm"
+                  active={win === w.days}
+                  // Сбрасываем выбранный день/час: при смене окна меняется гранулярность
+                  // (час↔день), и прежний ключ выделения перестаёт совпадать со столбцами —
+                  // разбор «Кто израсходовал» показывал бы устаревшие данные, а подсветка
+                  // молча исчезала. who очистится эффектом по !selFrom.
+                  onClick={() => { setWin(w.days); setSelFrom(null); setSelTo(null); }}
+                />
+
               ))}
             </div>
             {series && bars.length > 0 ? (

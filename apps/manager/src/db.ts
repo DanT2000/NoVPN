@@ -536,6 +536,24 @@ for (const stmt of [
   // Приоритетный доступ: пользователь получает общий резервный пул NoVPN
   // (внешние подписки админа) как аварийный маршрут поверх своей обычной подписки.
   'ALTER TABLE users ADD COLUMN priority_access INTEGER NOT NULL DEFAULT 0',
+  // Модель резерва (настраиваемая): КОРЗИНА (whitelist — обход белых списков / outage —
+  // наш сервер лёг), порядок перебора, собственный месячный лимит подписки (ГБ, NULL=нет)
+  // и кому доступна (all/priority). Дефолт kind='whitelist' сохраняет прежнее поведение
+  // (пул использовался для обхода); админ перетегирует в UI. Клиенты, что тянут весь
+  // /backup, не ломаются — фильтрация по корзине включается новым ?kind=.
+  "ALTER TABLE backup_subscriptions ADD COLUMN kind TEXT NOT NULL DEFAULT 'whitelist'",
+  'ALTER TABLE backup_subscriptions ADD COLUMN sort INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE backup_subscriptions ADD COLUMN limit_gb INTEGER',
+  "ALTER TABLE backup_subscriptions ADD COLUMN available_for TEXT NOT NULL DEFAULT 'all'",
+  // Помесячный учёт резервного расхода ПО КОРЗИНАМ (для мягких лимитов). Ключ
+  // (пользователь, корзина, месяц YYYY-MM). Отдельно от backup_traffic (тот кумулятивный,
+  // для отображения «внутренний расход»); лимиты считаем по календарному месяцу.
+  'CREATE TABLE IF NOT EXISTS backup_usage_monthly (user_id TEXT NOT NULL, kind TEXT NOT NULL, month TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, kind, month))',
+  // Месячный сброс квоты (reset_policy='monthly'): базовая линия — накопленный расход на
+  // момент начала периода; расход периода = накопленный − baseline. usage_period = YYYY-MM
+  // текущего периода. Дефолт baseline=0 → у существующих/never-политики поведение прежнее.
+  'ALTER TABLE users ADD COLUMN usage_baseline_gb REAL NOT NULL DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN usage_period TEXT',
 ]) {
   try {
     db.exec(stmt);

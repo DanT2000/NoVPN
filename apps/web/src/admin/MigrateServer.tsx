@@ -104,34 +104,49 @@ export function MigrateServer() {
       // перенос оказался бы чистой установкой с новыми ключами = все конфиги мертвы).
       await api.provisionServer(server.id, comps, undefined, { migrate: true });
       const deadline = Date.now() + 12 * 60_000;
+      let pollFails = 0;
       const poll = async (): Promise<void> => {
         if (!aliveRef.current) return;
-        const st = await api.provisionStatus(server.id);
-        if (!aliveRef.current) return;
-        if (st.message) setLog((l) => (l[l.length - 1] === st.message ? l : [...l, st.message]));
-        if (st.state === 'error') {
-          setErr(st.message || 'Ошибка установки');
-          return;
-        }
-        // Успех — ТОЛЬКО явный 'done'. 'idle'/'running' продолжаем ждать: idle бывает,
-        // если панель перезапустилась (статус живёт в памяти) — это не успех.
-        if (st.state === 'done') {
-          if (st.restored === false) {
-            setErr('Панель выполнила ЧИСТУЮ установку: приватные ключи не найдены, поэтому выданные ранее конфиги НЕ работают — их нужно перевыпустить.');
+        try {
+          const st = await api.provisionStatus(server.id);
+          if (!aliveRef.current) return;
+          pollFails = 0;
+          if (st.message) setLog((l) => (l[l.length - 1] === st.message ? l : [...l, st.message]));
+          if (st.state === 'error') {
+            setErr(st.message || 'Ошибка установки');
             return;
           }
-          setPct(100);
-          setStep(3);
-          void reload();
-          void checkDns();
-          return;
+          // Успех — ТОЛЬКО явный 'done'. 'idle'/'running' продолжаем ждать: idle бывает,
+          // если панель перезапустилась (статус живёт в памяти) — это не успех.
+          if (st.state === 'done') {
+            if (st.restored === false) {
+              setErr('Панель выполнила ЧИСТУЮ установку: приватные ключи не найдены, поэтому выданные ранее конфиги НЕ работают — их нужно перевыпустить.');
+              return;
+            }
+            setPct(100);
+            setStep(3);
+            void reload();
+            void checkDns();
+            return;
+          }
+          if (Date.now() > deadline) {
+            setErr('Установка не завершилась за 12 минут — проверьте сервер и статус в разделе «Серверы».');
+            return;
+          }
+          setPct((p) => Math.min(90, p + 6));
+          timerRef.current = window.setTimeout(() => void poll(), 2500);
+        } catch (e) {
+          // Транзиентный сбой опроса (сетевой блип или перезапуск самой панели во время
+          // переноса) раньше был необработанным reject → опрос молча вставал, а UI висел
+          // на шаге 2. Ждём и пробуем снова до дедлайна/лимита подряд-ошибок.
+          if (!aliveRef.current) return;
+          pollFails += 1;
+          if (Date.now() > deadline || pollFails > 10) {
+            setErr(e instanceof Error ? e.message : 'Потеряна связь с панелью во время переноса.');
+            return;
+          }
+          timerRef.current = window.setTimeout(() => void poll(), 2500);
         }
-        if (Date.now() > deadline) {
-          setErr('Установка не завершилась за 12 минут — проверьте сервер и статус в разделе «Серверы».');
-          return;
-        }
-        setPct((p) => Math.min(90, p + 6));
-        timerRef.current = window.setTimeout(() => void poll(), 2500);
       };
       void poll();
     } catch (e) {

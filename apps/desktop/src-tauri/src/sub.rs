@@ -81,7 +81,17 @@ pub fn parse(raw: &str) -> Result<Parsed, String> {
     if text.contains("proxies:") {
         if let Ok(v) = serde_yaml::from_str::<Value>(text) {
             if v.get("proxies").and_then(|p| p.as_sequence()).is_some() {
-                return Ok(Parsed::Clash(v));
+                // Берём ТОЛЬКО proxies, а не весь чужой YAML: иначе провайдер навязал бы
+                // dns/tun/rules/listeners/hosts/external-controller/authentication и т. п.
+                // (подмена маршрутизации, открытие портов). proxy-groups провайдера тоже
+                // НЕ переносим — они могли ссылаться через `use:` на proxy-providers,
+                // которых у нас нет → висячая ссылка, и mihomo отверг бы конфиг. Балансировку
+                // задаёт наша группа NoVPN (плоский select по всем точкам).
+                let mut m = Mapping::new();
+                if let Some(p) = v.get("proxies") {
+                    m.insert(Value::String("proxies".into()), p.clone());
+                }
+                return Ok(Parsed::Clash(Value::Mapping(m)));
             }
         }
     }
@@ -147,7 +157,10 @@ fn from_links(text: &str) -> Vec<Node> {
 fn dedupe_names(mut nodes: Vec<Node>) -> Vec<Node> {
     let mut seen: Vec<String> = Vec::new();
     for n in nodes.iter_mut() {
-        if n.name.trim().is_empty() {
+        // Имя тримим (как Android): иначе один и тот же линк давал на разных платформах
+        // разные имена прокси из-за ведущих/хвостовых пробелов.
+        n.name = n.name.trim().to_string();
+        if n.name.is_empty() {
             n.name = "Сервер".into();
         }
         let base = n.name.clone();
@@ -170,6 +183,13 @@ struct Uri {
     frag: String,
 }
 
+/// Порт из строки: принимаем только 1..=65535, иначе 443. Так же поступают Android и
+/// панель; без клэмпа Rust принимал port 0 и обрезал переполнение (>65535), и один и тот
+/// же линк давал на разных платформах разный порт.
+fn clamp_port(sv: &str) -> u16 {
+    sv.trim().parse::<u32>().ok().filter(|p| (1..=65535).contains(p)).map(|p| p as u16).unwrap_or(443)
+}
+
 fn split_uri(link: &str, scheme: &str) -> Option<Uri> {
     let rest = link.strip_prefix(scheme)?;
     let (rest, frag) = match rest.split_once('#') {
@@ -184,6 +204,9 @@ fn split_uri(link: &str, scheme: &str) -> Option<Uri> {
         Some((a, b)) => (a.to_string(), b),
         None => (String::new(), rest),
     };
+    // Отсекаем путь: `host:port/...` (напр. SIP002 `ss://cred@host:port/?plugin=...` или
+    // vless с завершающим «/») — иначе порт разбирался как «port/» и падал в 443.
+    let hostport = hostport.split('/').next().unwrap_or(hostport);
     // IPv6 в квадратных скобках: [::1]:443
     let (host, port) = if let Some(end) = hostport.rfind(']') {
         let h = &hostport[..=end];
@@ -209,7 +232,7 @@ fn split_uri(link: &str, scheme: &str) -> Option<Uri> {
     Some(Uri {
         user,
         host,
-        port: port.parse().unwrap_or(443),
+        port: clamp_port(port),
         query,
         frag,
     })
@@ -217,8 +240,11 @@ fn split_uri(link: &str, scheme: &str) -> Option<Uri> {
 
 impl Uri {
     fn q(&self, key: &str) -> String {
+        // При дублирующемся ключе берём ПОСЛЕДНЕЕ значение — как Android/панель (там
+        // побеждает последний), иначе один и тот же линк давал бы разные параметры.
         self.query
             .iter()
+            .rev()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.clone())
             .unwrap_or_default()
@@ -366,11 +392,7 @@ fn parse_vmess(link: &str) -> Option<Node> {
     put_str(&mut m, "name", &name);
     put_str(&mut m, "type", "vmess");
     put_str(&mut m, "server", &host);
-    put(
-        &mut m,
-        "port",
-        Value::Number(g("port").parse::<u16>().unwrap_or(443).into()),
-    );
+    put(&mut m, "port", Value::Number(clamp_port(&g("port")).into()));
     put_str(&mut m, "uuid", &g("id"));
     put(
         &mut m,
@@ -418,6 +440,9 @@ fn parse_ss(link: &str) -> Option<Node> {
             .and_then(|b| String::from_utf8(b).ok())
             .unwrap_or_else(|| cred.to_string());
         let (m, p) = dec.split_once(':')?;
+        // SIP002: ss://base64(method:pass)@host:port/?plugin=... — срезаем путь «/…»,
+        // иначе порт разбирался как «port/» и падал в 443.
+        let hostport = hostport.split('/').next().unwrap_or(hostport);
         let (h, pt) = hostport.rsplit_once(':')?;
         (m.to_string(), p.to_string(), h.to_string(), pt.to_string())
     } else {
@@ -436,11 +461,7 @@ fn parse_ss(link: &str) -> Option<Node> {
     put_str(&mut m, "name", &name);
     put_str(&mut m, "type", "ss");
     put_str(&mut m, "server", &host);
-    put(
-        &mut m,
-        "port",
-        Value::Number(port.parse::<u16>().unwrap_or(443).into()),
-    );
+    put(&mut m, "port", Value::Number(clamp_port(&port).into()));
     put_str(&mut m, "cipher", &method);
     put_str(&mut m, "password", &password);
     put(&mut m, "udp", Value::Bool(true));
@@ -477,7 +498,12 @@ fn from_xray_json(v: &serde_json::Value) -> Vec<Node> {
             let st = ob.get("streamSettings");
             let user = vnext.pointer("/users/0");
             let address = vnext.get("address").and_then(|x| x.as_str()).unwrap_or("");
-            let port = vnext.get("port").and_then(|x| x.as_u64()).unwrap_or(443) as u16;
+            let port = vnext
+                .get("port")
+                .and_then(|x| x.as_u64())
+                .filter(|p| (1..=65535).contains(p))
+                .map(|p| p as u16)
+                .unwrap_or(443);
             let uuid = user
                 .and_then(|u| u.get("id"))
                 .and_then(|x| x.as_str())

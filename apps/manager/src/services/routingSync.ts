@@ -48,6 +48,9 @@ export async function fetchSource(url: string, etag: string | null, lastModified
   const headers: Record<string, string> = { Accept: 'application/json, text/plain, application/octet-stream, */*' };
   if (etag) headers['If-None-Match'] = etag;
   if (lastModified) headers['If-Modified-Since'] = lastModified;
+  // URL источника задаёт АДМИН (доверенный) и вправе указать ВНУТРЕННЕЕ зеркало
+  // geosite/geoip — поэтому SSRF-фильтр (safeFetch) здесь НЕ применяем: он ломал бы
+  // легитимные приватные зеркала. Он нужен на пользовательском backupSync, не тут.
   const res = await fetch(url, { method: 'GET', headers, redirect: 'follow', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (res.status === 304) return { status: 304, body: Buffer.alloc(0), etag, lastModified, notModified: true };
   const etagOut = res.headers.get('etag');

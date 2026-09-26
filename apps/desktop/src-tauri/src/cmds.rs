@@ -43,6 +43,10 @@ pub struct SubResult {
     pub servers: Vec<ServerInfo>,
     /// Как провайдер отдал подписку — показываем в расширенном режиме.
     pub format: String,
+    /// ЭФФЕКТИВНЫЙ URL подписки: для личной ссылки /k/<token> — уже разрешённый /sub/…
+    /// (фронт сохраняет именно его, чтобы резерв/meta шли на правильный адрес, а не на /k/).
+    #[serde(default)]
+    pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +185,36 @@ fn describe(parsed: &Parsed) -> (Vec<ServerInfo>, String) {
 
 /// Скачивает подписку и разбирает её. Сырой текст сохраняем — он понадобится,
 /// чтобы подняться без сети.
+/// Наша ЛИЧНАЯ ссылка выдачи `https://<домен>/k/<accessToken>` (её шлём пользователю).
+/// Возвращает (origin, token), если строка похожа на неё.
+fn access_link_token(url: &str) -> Option<(String, String)> {
+    let idx = url.find("/k/")?;
+    let origin = url[..idx].to_string();
+    if !origin.starts_with("http://") && !origin.starts_with("https://") {
+        return None;
+    }
+    let token = url[idx + 3..].split(['/', '?', '#']).next()?.trim().to_string();
+    if token.is_empty() {
+        return None;
+    }
+    Some((origin, token))
+}
+
+/// Разрешает личную ссылку в прямой URL подписки через /api/public/resolve.
+/// Берём полный конфиг (обход), иначе обычную подписку.
+async fn resolve_access_link(client: &reqwest::Client, origin: &str, token: &str) -> Option<String> {
+    let resolve = format!("{origin}/api/public/resolve?token={token}");
+    let resp = client.get(&resolve).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    v.get("full")
+        .or_else(|| v.get("sub"))
+        .and_then(|x| x.as_str())
+        .map(String::from)
+}
+
 #[tauri::command]
 pub async fn sub_fetch(url: String) -> Result<SubResult, String> {
     let client = reqwest::Client::builder()
@@ -188,6 +222,13 @@ pub async fn sub_fetch(url: String) -> Result<SubResult, String> {
         .timeout(std::time::Duration::from_secs(25))
         .build()
         .map_err(|e| e.to_string())?;
+    // Личная ссылка /k/<token> → сначала разрешаем её в прямой URL подписки.
+    let url = match access_link_token(&url) {
+        Some((origin, token)) => resolve_access_link(&client, &origin, &token)
+            .await
+            .ok_or("Не удалось разобрать личную ссылку. Проверьте её или попросите у администратора новую.")?,
+        None => url,
+    };
     let resp = client
         .get(&url)
         .send()
@@ -203,7 +244,7 @@ pub async fn sub_fetch(url: String) -> Result<SubResult, String> {
         return Err("В подписке не нашлось ни одного сервера".into());
     }
     store::write_raw("subscription.txt", &text)?;
-    Ok(SubResult { servers, format })
+    Ok(SubResult { servers, format, url })
 }
 
 /// Разбирает уже сохранённую подписку — для запуска без интернета.
@@ -212,7 +253,8 @@ pub fn sub_cached() -> Result<SubResult, String> {
     let text = store::read_raw("subscription.txt").ok_or("Подписка ещё не сохранена")?;
     let parsed = sub::parse(&text)?;
     let (servers, format) = describe(&parsed);
-    Ok(SubResult { servers, format })
+    // Кэш не знает URL — фронт оставит свой сохранённый.
+    Ok(SubResult { servers, format, url: String::new() })
 }
 
 pub fn locate_engine_pub() -> Result<PathBuf, String> {
@@ -244,9 +286,32 @@ fn locate_engine() -> Result<PathBuf, String> {
 /// если приложение упадёт, настройку всё равно нужно будет вернуть.
 const PROXY_BACKUP: &str = "proxy-backup";
 
+/// Список обычных серверов подписки (имя, хост, порт) — для координатора failover.
+fn subscription_servers() -> Vec<(String, String, u16)> {
+    store::read_raw("subscription.txt")
+        .and_then(|t| sub::parse(&t).ok())
+        .map(|p| describe(&p).0)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| !s.server.is_empty() && s.port > 0)
+        .map(|s| (s.name, s.server, s.port as u16))
+        .collect()
+}
+
 fn make_config(selected: Option<&str>, rules: RulesIn, ports: Ports) -> Result<String, String> {
     let text = store::read_raw("subscription.txt").ok_or("Сначала подключите подписку")?;
-    let parsed = sub::parse(&text)?;
+    let mut parsed = sub::parse(&text)?;
+    // Вливаем аварийные серверы В ТОТ ЖЕ конфиг и группу: тогда уход на резерв — это
+    // один select_proxy без пересборки, а их адреса попадают в анти-петлю. Имена
+    // уникальны (дубли обычных серверов пропускаем).
+    if let Parsed::Nodes(ref mut nodes) = parsed {
+        let existing: std::collections::HashSet<String> = nodes.iter().map(|n| n.name.clone()).collect();
+        for r in crate::reserve::cached_nodes() {
+            if !existing.contains(&r.name) {
+                nodes.push(r);
+            }
+        }
+    }
     Ok(core::build_config(&parsed, &rules.into(), selected, ports))
 }
 
@@ -491,6 +556,22 @@ pub fn vpn_connect(
     selected: Option<String>,
     rules: RulesIn,
 ) -> Result<(), String> {
+    // Освежаем аварийный пул ДО захвата connect-замка: block_on первого синка (до 6с) не
+    // должен держать running.1 — иначе он на эти секунды блокирует disconnect и поток
+    // события Tauri (команда синхронная). Резерв вливается в конфиг из кэша (reserve.txt);
+    // если кэша ещё нет (первое подключение), коротко дожидаемся синка, иначе — фоном.
+    if let Some(sub_url) = store::read("state")
+        .and_then(|v| v.pointer("/subscription/url").and_then(|x| x.as_str()).map(String::from))
+    {
+        if crate::reserve::cached_nodes().is_empty() {
+            tauri::async_runtime::block_on(async {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(6), crate::reserve::sync(&sub_url)).await;
+            });
+        } else {
+            tauri::async_runtime::spawn(async move { crate::reserve::sync(&sub_url).await });
+        }
+    }
+
     // Сериализуем подключение целиком: замок держится до конца функции, поэтому
     // второе подключение (авто-переподключение либо повторный клик) дождётся
     // первого и не станет менять общий системный прокси у него из-под ног.
@@ -536,6 +617,8 @@ pub fn vpn_connect(
         // Явно выбираем сервер (reload сохранял бы прежний выбор группы select).
         if let Some(name) = selected.as_deref() {
             let _ = core::select_proxy(ports.controller, core::GROUP, name);
+            // Авто-переключение: если этот сервер отвалится — подберём рабочий.
+            crate::failover::start(name.to_string(), subscription_servers());
         }
         return Ok(());
     }
@@ -601,6 +684,11 @@ pub fn vpn_connect(
             return Err("Внутренняя ошибка состояния".into());
         }
     }
+    // Прокси-режим: тоже запускаем сторож авто-переключения (в TUN он стартует выше).
+    // Без этого в режиме прокси авто-подбор сервера включался только после vpn_reload.
+    if let Some(name) = selected.as_deref() {
+        crate::failover::start(name.to_string(), subscription_servers());
+    }
     Ok(())
 }
 
@@ -642,6 +730,7 @@ pub fn vpn_reload(
     // не задан или переключить не вышло, правила всё равно применены.
     if let Some(name) = selected.as_deref() {
         let _ = core::select_proxy(ports.controller, core::GROUP, name);
+        crate::failover::start(name.to_string(), subscription_servers());
     }
     Ok(())
 }
@@ -672,6 +761,8 @@ pub fn vpn_disconnect(running: tauri::State<'_, Running>) -> Result<(), String> 
     // .1→.0 совпадает с connect (нет взаимной блокировки), реентрантности нет —
     // vpn_connect не вызывает команду disconnect.
     let _serial = running.1.lock().map_err(|_| "Внутренняя ошибка состояния")?;
+    // Останавливаем координатор авто-переключения — VPN больше не поднят.
+    crate::failover::stop();
     let mut guard = running.0.lock().map_err(|_| "Внутренняя ошибка состояния")?;
     if let Some(mut e) = guard.take() {
         e.stop();

@@ -36,6 +36,8 @@
     "available": false,
     "count": 0,
     "priority": false,
+    "whitelist": "ok",
+    "outage": "ok",
     "sub": "https://panel.example/sub/FIXTURE-TOKEN/backup"
   }
 }

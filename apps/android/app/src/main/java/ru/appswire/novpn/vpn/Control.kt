@@ -77,6 +77,18 @@ class Control(private val port: Int, private val secret: String) {
         client.newCall(request(path).put(body).build()).execute().use { it.isSuccessful }
     }.getOrDefault(false)
 
+    /**
+     * Сбрасывает ВСЕ живые соединения движка. Нужно при смене сети: старые
+     * соединения (в т.ч. к VPN-серверу) остаются висеть на исчезнувшей сети, и без
+     * сброса движок ждёт их таймаута — трафик «висит», пока не оживёт сам или пока
+     * не перезапустить VPN. Вызывать РАЗ по факту смены сети, а НЕ в цикле: в цикле
+     * это рвало бы рабочий прямой трафик. При смене сети рвать нечего — соединения и
+     * так мертвы.
+     */
+    fun closeConnections(): Boolean = runCatching {
+        client.newCall(request("/connections").delete().build()).execute().use { it.isSuccessful }
+    }.getOrDefault(false)
+
     /** Задержка до точки, мс; null — не ответила. */
     fun delay(name: String, url: String = "http://cp.cloudflare.com/generate_204", timeoutMs: Int = 3000): Int? =
         runCatching {

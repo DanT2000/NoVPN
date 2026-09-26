@@ -676,15 +676,20 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         xPub || xSid || xSni || awgPub
           ? { xrayRealityPubKey: xPub || undefined, xrayShortId: xSid || undefined, xraySni: xSni || undefined, awgServerPubKey: awgPub || undefined }
           : undefined;
+      // SSH-поля (порт/пользователь/метод/секрет) шлём ТОЛЬКО когда админ ввёл новый
+      // секрет, т.е. осознанно задаёт SSH-доступ. Иначе форма затирала бы реальные
+      // порт/пользователя дефолтами 22/root (они не подгружаются в форму по соображениям
+      // безопасности) при любой правке — напр. смене названия. Бэкенд поля с undefined
+      // не трогает, так что существующий SSH-доступ сохраняется.
+      const sshCreds = secret.trim();
       await editServer(server.id, {
         name: name.trim() || server.name,
         country: country.trim() || null,
         flagEmoji: flagEmoji || null,
         vpnHost: vpnHost.trim() || server.host,
-        sshPort: parseInt(sshPort, 10) || 22,
-        sshUser: sshUser.trim() || 'root',
-        authMethod: sshAuth,
-        secret: secret.trim() || undefined,
+        ...(sshCreds
+          ? { sshPort: parseInt(sshPort, 10) || 22, sshUser: sshUser.trim() || 'root', authMethod: sshAuth, secret: sshCreds }
+          : {}),
         components: protocols,
         serverKeys,
       });

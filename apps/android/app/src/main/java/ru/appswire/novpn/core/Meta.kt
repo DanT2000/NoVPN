@@ -56,7 +56,15 @@ data class BackupInfo(
     val priority: Boolean = false,
     /** Ссылка на список резервных серверов (base64, тот же формат, что подписка). */
     val sub: String = "",
-)
+    /** Состояние корзины «обход белых списков»: ok — доступна; off — не положена
+     *  уровню; exhausted — месячный лимит исчерпан. Старая панель поля не шлёт → off. */
+    val whitelist: String = "off",
+    /** Состояние корзины «наш сервер недоступен» (аварийная). */
+    val outage: String = "off",
+) {
+    /** Хотя бы одна корзина упёрлась в месячный лимит — показать «лимит исчерпан». */
+    val exhausted: Boolean get() = whitelist == "exhausted" || outage == "exhausted"
+}
 
 @Serializable
 data class Meta(

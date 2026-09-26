@@ -89,9 +89,17 @@ object Oem {
         return null
     }
 
-    /** Системные настройки VPN — там включается «Постоянный VPN» (always-on). */
-    fun vpnSettingsIntent(): Intent =
-        Intent("android.net.vpn.SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    /** Системные настройки VPN — там включается «Постоянный VPN» (always-on).
+     *  Публичный ACTION_VPN_SETTINGS (API 24+) — стабилен; легаси-строка оставлена
+     *  запасной для ROM, где зарегистрирован только старый action. */
+    fun vpnSettingsIntent(context: Context): Intent {
+        val pm = context.packageManager
+        val primary = Intent(Settings.ACTION_VPN_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (primary.resolveActivity(pm) != null) return primary
+        val legacy = Intent("android.net.vpn.SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (legacy.resolveActivity(pm) != null) return legacy
+        return primary // пусть система сама покажет «нет приложения», но по публичному action
+    }
 
     /** Карточка приложения в настройках: батарея, автозапуск, уведомления. */
     fun appDetailsIntent(context: Context): Intent =
@@ -141,13 +149,29 @@ object Oem {
             }
         }
 
+        // Samsung (One UI) не «убийца автозапуска», но усыпляет фоновые приложения через
+        // «Спящие/Глубоко спящие приложения» — из-за этого VPN отваливается в фоне. Ведём
+        // человека в тот же экран батареи One UI (fallback — карточка приложения).
+        if (isSamsung) {
+            out += Hint(
+                id = "samsung-sleep",
+                title = "Убрать NoVPN из «спящих» (Samsung)",
+                text = "One UI усыпляет фоновые приложения, и связь рвётся. Настройки → Обслуживание " +
+                    "устройства → Батарея → Ограничения фонового использования: добавьте NoVPN в " +
+                    "«Приложения, которые не переходят в спящий режим» и уберите его из списков " +
+                    "«Спящие»/«Глубоко спящие приложения».",
+                done = null,
+                action = autostartIntent(context) ?: appDetailsIntent(context),
+            )
+        }
+
         out += Hint(
             id = "always-on",
             title = "Постоянный VPN",
             text = "Системная настройка: Android сам поднимет VPN после перезагрузки и не даст трафику " +
                 "уйти мимо туннеля. Настройки → Сеть → VPN → NoVPN → «Постоянный VPN».",
             done = null,
-            action = vpnSettingsIntent(),
+            action = vpnSettingsIntent(context),
         )
 
         return out

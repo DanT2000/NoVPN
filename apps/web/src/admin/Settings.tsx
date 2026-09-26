@@ -1,12 +1,12 @@
 // A10 — Настройки. Брендинг, значения по умолчанию, шаблон и параметры безопасности.
 
 import { useEffect, useState } from 'react';
-import type { AppSettings, UserProtocol } from '@novpn/shared';
-import { RU_WHITELIST_ROUTES } from '@novpn/shared';
+import type { AppSettings, UserProtocol, ReserveLimits } from '@novpn/shared';
+import { RU_WHITELIST_ROUTES, RESERVE_DEFAULTS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import type { PanelUpdateState } from '../api/types';
-import { Chip, Field, Panel } from '../components/ui';
+import { Chip, Field, Panel, Toggle } from '../components/ui';
 
 const PROTO_OPTIONS: Array<{ value: UserProtocol; label: string }> = [
   { value: 'xray', label: 'Xray' },
@@ -45,6 +45,9 @@ export function Settings() {
   const [hookToken, setHookToken] = useState(s?.updateHookToken ?? '');
   const [upd, setUpd] = useState<PanelUpdateState | null>(null);
   const [updBusy, setUpdBusy] = useState(false);
+  // Лимиты резервной маршрутизации (2 корзины × 2 уровня, месячные, null=безлимит).
+  const [reserve, setReserve] = useState<ReserveLimits>({ ...RESERVE_DEFAULTS, ...(s?.reserve ?? {}) });
+  const setR = <K extends keyof ReserveLimits>(k: K, v: ReserveLimits[K]) => setReserve((r) => ({ ...r, [k]: v }));
   // Редактируемый список доменов обхода (по строке на домен). Если у панели он ещё не
   // задан явно — префилл встроенным дефолтом (146 доменов), чтобы админ видел и правил их.
   const wlDefaultText = RU_WHITELIST_ROUTES.join('\n');
@@ -208,6 +211,7 @@ export function Settings() {
     adminChatId !== (s.adminTelegramChatId ?? '') ||
     notifyErrors !== (s.notifyErrors !== false) ||
     dailyDigest !== (s.dailyDigest !== false) ||
+    JSON.stringify(reserve) !== JSON.stringify({ ...RESERVE_DEFAULTS, ...(s.reserve ?? {}) }) ||
     whitelistText !== wlInitial;
 
   const save = async () => {
@@ -233,9 +237,14 @@ export function Settings() {
         whitelistDomains: wlIsBuiltin ? [] : wlLines,
         updateHookUrl: hookUrl.trim(),
         updateHookToken: hookToken.trim(),
+        reserve,
       };
       await saveSettings(input);
       showToast('Настройки сохранены');
+      // Ссылка хука могла измениться — обновляем состояние обновления панели, иначе
+      // кнопка «Обновить сейчас» осталась бы отключённой по устаревшему hookConfigured
+      // (вопреки подсказке «станет доступна, когда укажете ссылку и сохраните»).
+      api.getPanelUpdate().then(setUpd).catch(() => {});
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не удалось сохранить настройки');
     } finally {
@@ -368,6 +377,63 @@ export function Settings() {
               </div>
             </Field>
           ) : null}
+        </Panel>
+
+        {/* Лимиты резервной маршрутизации: 2 корзины × 2 уровня, месячные, null=безлимит */}
+        <Panel title="Резервная маршрутизация — лимиты">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Две корзины — обход белых списков и аварийные серверы (когда наш сервер недоступен) — с
+            раздельными МЕСЯЧНЫМИ лимитами. Приоритетным по умолчанию безлимит. Пустое поле лимита =
+            без ограничения. При исчерпании корзина мягко отключается (обычный VPN продолжает работать).
+          </div>
+          <div className="stack" style={{ gap: 12 }}>
+            <div className="field-label">Обычные пользователи</div>
+            <label className="row" style={{ gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Доступен обход белых списков</span>
+              <Toggle on={reserve.whitelistForRegular} onChange={(v) => setR('whitelistForRegular', v)} ariaLabel="Обход белых списков для обычных" />
+            </label>
+            <Field label="Лимит обхода, ГБ/мес (пусто — безлимит)">
+              <input
+                className="input"
+                inputMode="numeric"
+                value={reserve.whitelistRegularGb ?? ''}
+                onChange={(e) => setR('whitelistRegularGb', e.target.value.trim() === '' ? null : numOr(e.target.value, 0))}
+                placeholder="безлимит"
+              />
+            </Field>
+            <label className="row" style={{ gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Доступны аварийные серверы</span>
+              <Toggle on={reserve.outageForRegular} onChange={(v) => setR('outageForRegular', v)} ariaLabel="Аварийные серверы для обычных" />
+            </label>
+            <Field label="Лимит аварийных, ГБ/мес (пусто — безлимит)">
+              <input
+                className="input"
+                inputMode="numeric"
+                value={reserve.outageRegularGb ?? ''}
+                onChange={(e) => setR('outageRegularGb', e.target.value.trim() === '' ? null : numOr(e.target.value, 0))}
+                placeholder="безлимит"
+              />
+            </Field>
+            <div className="field-label" style={{ marginTop: 6 }}>Приоритетные пользователи (доступ ко всему)</div>
+            <Field label="Лимит обхода, ГБ/мес (пусто — безлимит)">
+              <input
+                className="input"
+                inputMode="numeric"
+                value={reserve.whitelistPriorityGb ?? ''}
+                onChange={(e) => setR('whitelistPriorityGb', e.target.value.trim() === '' ? null : numOr(e.target.value, 0))}
+                placeholder="безлимит"
+              />
+            </Field>
+            <Field label="Лимит аварийных, ГБ/мес (пусто — безлимит)">
+              <input
+                className="input"
+                inputMode="numeric"
+                value={reserve.outagePriorityGb ?? ''}
+                onChange={(e) => setR('outagePriorityGb', e.target.value.trim() === '' ? null : numOr(e.target.value, 0))}
+                placeholder="безлимит"
+              />
+            </Field>
+          </div>
         </Panel>
 
         {/* Доступ в локальную сеть сервера */}

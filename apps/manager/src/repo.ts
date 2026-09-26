@@ -571,11 +571,45 @@ export function recomputeUserUsage(userId: string): void {
     .prepare('SELECT COALESCE(SUM(received_bytes + sent_bytes),0) AS b, MAX(last_seen_at) AS ls FROM proxy_accounts WHERE user_id = ?')
     .get(userId) as { b: number; ls: string | null };
   const lastSeen = [row.ls, px.ls].filter(Boolean).sort().pop() ?? null; // самый свежий из устройств/прокси
+  // Месячная политика: из накопленного вычитаем базовую линию начала периода, поэтому
+  // расход показывается ЗА ТЕКУЩИЙ период. baseline по умолчанию 0 → для 'never'-политики
+  // и старых записей поведение прежнее (весь накопленный расход).
+  const baseline = (db.prepare('SELECT usage_baseline_gb AS b FROM users WHERE id = ?').get(userId) as { b: number } | undefined)?.b ?? 0;
+  const cumulative = (row.tg ?? 0) + retired + (px.b ?? 0) / 1e9;
   db.prepare('UPDATE users SET traffic_used_gb = @tg, last_activity_at = COALESCE(@ls, last_activity_at) WHERE id = @id').run({
-    tg: (row.tg ?? 0) + retired + (px.b ?? 0) / 1e9,
+    tg: Math.max(0, cumulative - baseline),
     ls: lastSeen,
     id: userId,
   });
+}
+
+/** Общий накопленный расход пользователя (без вычета baseline), ГБ — устройства +
+ *  удалённые (retired) + прокси. Нужен для установки базовой линии при месячном сбросе. */
+function cumulativeUsageGb(userId: string): number {
+  const tg = (db.prepare('SELECT COALESCE(SUM(traffic_gb),0) AS t FROM devices WHERE user_id = ?').get(userId) as { t: number }).t;
+  const retired = (db.prepare('SELECT retired_traffic_gb AS r FROM users WHERE id = ?').get(userId) as { r: number } | undefined)?.r ?? 0;
+  const px = (db.prepare('SELECT COALESCE(SUM(received_bytes + sent_bytes),0) AS b FROM proxy_accounts WHERE user_id = ?').get(userId) as { b: number }).b;
+  return (tg ?? 0) + retired + (px ?? 0) / 1e9;
+}
+
+/** Месячный сброс квоты для пользователей с reset_policy='monthly'. Раз в календарный
+ *  месяц (UTC) фиксирует базовую линию = текущий накопленный расход, помечает период и
+ *  пересчитывает traffic_used_gb (→ ~0). Разблокировку по квоте затем делает обычный цикл
+ *  синка (usage < limit). Идемпотентно: срабатывает раз на период. Возвращает число сброшенных. */
+export function resetMonthlyQuotas(): number {
+  const month = nowIso().slice(0, 7); // YYYY-MM (UTC)
+  const users = db
+    .prepare(
+      "SELECT id FROM users WHERE reset_policy = 'monthly' AND deleted_at IS NULL AND (usage_period IS NULL OR usage_period != ?)",
+    )
+    .all(month) as Array<{ id: string }>;
+  for (const u of users) {
+    const baseline = cumulativeUsageGb(u.id);
+    db.prepare('UPDATE users SET usage_baseline_gb = @b, usage_period = @m WHERE id = @id').run({ b: baseline, m: month, id: u.id });
+    recomputeUserUsage(u.id);
+  }
+  if (users.length) addLog(`Месячный сброс квоты: ${users.length}`);
+  return users.length;
 }
 
 /** Суммарный трафик сервера — из ПЕРСИСТЕНТНЫХ накопленных счётчиков всех его

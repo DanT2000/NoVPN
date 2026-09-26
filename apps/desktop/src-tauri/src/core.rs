@@ -342,7 +342,10 @@ fn clean_domain(raw: &str) -> Option<String> {
     }
     // Отрезаем путь, порт, пользователя.
     d = d.split(['/', '?', '#', ':', '@']).next().unwrap_or("").to_string();
-    d = d.trim().trim_start_matches("www.").trim_matches('.').to_string();
+    // `www.` НЕ срезаем: точные DOMAIN-правила (список «через VPN» и анти-петля адреса
+    // сервера) должны хранить ПОЛНЫЙ хост, иначе правило указывает на другой домен.
+    // Поддомены и так покрывает DOMAIN-SUFFIX.
+    d = d.trim().trim_matches('.').to_string();
     // Запятая, пробел, пустота или отсутствие точки — не домен.
     if d.is_empty() || d.contains([',', ' ', '\t']) || !d.contains('.') {
         return None;
@@ -416,16 +419,17 @@ fn build_rules(r: &Rules, server_hosts: &[String]) -> Vec<Value> {
         }
     }
 
-    // QUIC (udp/443) — REJECT в ОБОИХ режимах: браузер открывает QUIC, UDP по
-    // туннелю теряется, отката на TCP нет — YouTube «зависает». Отрезаем сразу,
-    // и браузер падает на надёжный HTTP/2.
-    out.push(s("AND,((NETWORK,udp),(DST-PORT,443)),REJECT"));
-
-    // Локальные подсети — до всего остального. По серверной политике lanAccess:
+    // Локальные подсети — ДО QUIC-реджекта: иначе HTTP/3 (udp/443) к устройству в
+    // локальной сети отрезался бы вместе с интернет-QUIC. По серверной политике lanAccess:
     // false (обычно) — напрямую; true — правил нет, LAN идёт в туннель.
     if !r.lan_access {
         push_subnets(&mut out);
     }
+
+    // QUIC (udp/443) — REJECT в ОБОИХ режимах: браузер открывает QUIC, UDP по
+    // туннелю теряется, отката на TCP нет — YouTube «зависает». Отрезаем сразу,
+    // и браузер падает на надёжный HTTP/2. (LAN уже ушёл DIRECT выше.)
+    out.push(s("AND,((NETWORK,udp),(DST-PORT,443)),REJECT"));
 
     if !r.smart {
         // Профиль «Полный VPN»: весь трафик в туннель, никаких доменных ИСКЛЮЧЕНИЙ
@@ -635,6 +639,27 @@ pub fn reload(controller_port: u16, config_path: &Path) -> Result<(), String> {
 /// приходилось жать «Отключить». Этот вызов заставляет группу указать на новый.
 /// `group`/`name` — фиксированный ASCII-тег и имя сервера из подписки; имя может
 /// содержать пробелы/не-ASCII, поэтому уходит в JSON-тело, а не в URL.
+/// Сбросить ВСЕ живые соединения движка (DELETE /connections). Нужно при смене
+/// сети/выходе из сна: старые соединения к серверу висят на исчезнувшей сети, и
+/// без сброса движок ждёт их таймаута — трафик «висит». Разовый вызов по событию.
+pub fn close_connections(controller_port: u16) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let req = format!(
+        "DELETE /connections HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n",
+        port = controller_port
+    );
+    let addr: SocketAddr = ([127, 0, 0, 1], controller_port).into();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))
+        .map_err(|e| format!("Движок не отвечает: {e}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let mut resp = String::new();
+    let _ = stream.read_to_string(&mut resp);
+    Ok(())
+}
+
 pub fn select_proxy(controller_port: u16, group: &str, name: &str) -> Result<(), String> {
     use std::io::{Read, Write};
 

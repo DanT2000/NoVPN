@@ -66,6 +66,9 @@ export interface ServerInfo {
 export interface SubResult {
   servers: ServerInfo[];
   format: string;
+  /** Эффективный URL подписки: для личной ссылки /k/<token> — уже разрешённый /sub/…
+   *  Пусто (sub_cached) → фронт оставляет прежний сохранённый URL. */
+  url?: string;
 }
 
 export interface RulesPayload {

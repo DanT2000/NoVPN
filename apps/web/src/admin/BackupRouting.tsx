@@ -70,14 +70,17 @@ export function BackupRouting() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Обёртка «занят → выполнить → перезагрузить» с показом ошибки тостом.
-  const run = async (key: string, fn: () => Promise<unknown>) => {
+  // Обёртка «занят → выполнить → перезагрузить» с показом ошибки тостом. Возвращает
+  // успех, чтобы вызывающий (напр. форма правки) закрывался только когда сохранение прошло.
+  const run = async (key: string, fn: () => Promise<unknown>): Promise<boolean> => {
     setBusy(key);
     try {
       await fn();
       await load();
+      return true;
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Не получилось');
+      return false;
     } finally {
       setBusy(null);
     }
@@ -143,7 +146,7 @@ export function BackupRouting() {
                       showToast('Подписка обновлена');
                     })
                   }
-                  onSave={(patch) => void run(`e:${s.id}`, () => api.updateBackup(s.id, patch))}
+                  onSave={(patch) => run(`e:${s.id}`, () => api.updateBackup(s.id, patch))}
                   onDelete={() =>
                     showConfirm({
                       title: 'Удалить резервную подписку?',
@@ -193,7 +196,7 @@ function SubCard({
   busy: string | null;
   onToggle: (v: boolean) => void;
   onRefresh: () => void;
-  onSave: (patch: BackupInput) => void;
+  onSave: (patch: BackupInput) => Promise<boolean>;
   onDelete: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -225,9 +228,10 @@ function SubCard({
         initial={s}
         busy={busy === `e:${s.id}`}
         onCancel={() => setEditing(false)}
-        onSubmit={(input) => {
-          onSave(input);
-          setEditing(false);
+        onSubmit={async (input) => {
+          // Закрываем форму ТОЛЬКО после успешного сохранения — иначе индикатор «Сохраняем…»
+          // не показывался, а при ошибке правки молча пропадали.
+          if (await onSave(input)) setEditing(false);
         }}
       />
     );
@@ -244,6 +248,9 @@ function SubCard({
           <b style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}</b>
           <span className="small muted">{s.format ?? 'формат неизвестен'}</span>
           <span className="small muted">· серверов: {s.serverCount}</span>
+          <span className="small muted">· {s.kind === 'outage' ? 'аварийный' : 'обход'}</span>
+          {s.availableFor === 'priority' ? <span className="small muted">· приоритетным</span> : null}
+          {s.limitGb != null ? <span className="small muted">· {s.limitGb} ГБ/мес</span> : null}
         </div>
         <Toggle on={s.enabled} onChange={onToggle} ariaLabel="Подписка включена" />
       </div>
@@ -394,6 +401,10 @@ function SubForm({
   const [userAgent, setUserAgent] = useState(initial?.userAgent ?? '');
   const [hwid, setHwid] = useState(initial?.hwid ?? '');
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [kind, setKind] = useState<'whitelist' | 'outage'>(initial?.kind ?? 'whitelist');
+  const [availableFor, setAvailableFor] = useState<'all' | 'priority'>(initial?.availableFor ?? 'all');
+  const [sort, setSort] = useState(String(initial?.sort ?? 0));
+  const [limitGb, setLimitGb] = useState(initial?.limitGb == null ? '' : String(initial.limitGb));
   const urlOk = /^https?:\/\//i.test(url.trim());
 
   return (
@@ -432,6 +443,24 @@ function SubForm({
           placeholder="необязательно"
         />
       </Field>
+      <Field label="Корзина" hint="whitelist — обход белых списков; outage — когда наш сервер лёг.">
+        <select className="select" value={kind} onChange={(e) => setKind(e.target.value === 'outage' ? 'outage' : 'whitelist')}>
+          <option value="whitelist">Обход белых списков</option>
+          <option value="outage">Аварийный (наш сервер лёг)</option>
+        </select>
+      </Field>
+      <Field label="Кому доступна" hint="Всем с доступом к резерву — или только «Приоритетным».">
+        <select className="select" value={availableFor} onChange={(e) => setAvailableFor(e.target.value === 'priority' ? 'priority' : 'all')}>
+          <option value="all">Всем (по настройкам уровня)</option>
+          <option value="priority">Только приоритетным</option>
+        </select>
+      </Field>
+      <Field label="Порядок перебора" hint="Меньше — раньше. Безлимитные/дешёвые выше, лимитные — в конец.">
+        <input className="input" inputMode="numeric" value={sort} onChange={(e) => setSort(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" />
+      </Field>
+      <Field label="Лимит подписки, ГБ/мес (справочно)" hint="Лимит у внешнего провайдера — для справки и порядка перебора. Пользовательские лимиты (что реально ограничивает людей) задаются в Настройках → «Резервная маршрутизация — лимиты» по корзинам и уровням.">
+        <input className="input" inputMode="numeric" value={limitGb} onChange={(e) => setLimitGb(e.target.value.replace(/[^0-9]/g, ''))} placeholder="без лимита" />
+      </Field>
       <label className="row" style={{ gap: 10, alignItems: 'center', cursor: 'pointer', justifyContent: 'space-between' }}>
         <span style={{ fontWeight: 600 }}>Включена</span>
         <Toggle on={enabled} onChange={setEnabled} ariaLabel="Подписка включена" />
@@ -448,6 +477,10 @@ function SubForm({
               userAgent: userAgent.trim() || undefined,
               hwid: hwid.trim() || undefined,
               enabled,
+              kind,
+              availableFor,
+              sort: Number(sort) || 0,
+              limitGb: limitGb.trim() === '' ? null : Number(limitGb) || null,
             })
           }
         >
