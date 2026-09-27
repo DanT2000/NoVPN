@@ -15,6 +15,15 @@
     <!-- Без снятия ограничений батареи оболочки усыпляют службу, и связь рвётся
          через несколько минут после выключения экрана. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Только для сканирования QR-кода подписки; спрашиваем в момент нажатия
+         кнопки сканера, не при запуске. Камера не обязательна: без неё приложение
+         ставится, а кнопка сканера просто не показывается. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Явно: иначе Google Play по разрешению CAMERA сам припишет обязательные
+         camera/autofocus и скроет приложение от планшетов без камеры. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Видимость чужих приложений (Android 11+). QUERY_ALL_PACKAGES намеренно НЕ
          запрашивается: Google разрешает его лишь антивирусам, файловым менеджерам

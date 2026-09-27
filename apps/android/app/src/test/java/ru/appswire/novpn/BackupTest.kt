@@ -156,8 +156,13 @@ class BackupTest {
         val root = Yaml().load<Map<String, Any?>>(yaml)
         val dns = root["dns"] as Map<*, *>
         val policy = dns["nameserver-policy"] as Map<*, *>
-        assertEquals("обычный сервер — через системный DNS", listOf("10.0.0.1"), policy["+.nl.main.example"])
-        assertEquals("резервный сервер — через системный DNS", listOf("10.0.0.1"), policy["+.r1.reserve.example"])
+        // Первым — системный DNS; за ним допустим только обычный (не DoH) российский
+        // фоллбэк 77.88.8.8 (0.2.3: вялый провайдерский DNS не должен ронять подключение).
+        for ((what, host) in listOf("обычный" to "+.nl.main.example", "резервный" to "+.r1.reserve.example")) {
+            val servers = policy[host] as List<*>
+            assertEquals("$what сервер — сначала системный DNS", "10.0.0.1", servers.first())
+            assertTrue("$what сервер — без DoH: $servers", servers.none { it.toString().contains("://") })
+        }
         // И они не должны получать фейковый IP — движок дозванивается к ним по-настоящему.
         val fakeFilter = dns["fake-ip-filter"] as List<*>
         assertTrue(fakeFilter.contains("+.nl.main.example"))

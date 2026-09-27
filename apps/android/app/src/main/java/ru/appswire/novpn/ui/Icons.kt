@@ -96,6 +96,21 @@ object NoVpnIcons {
 
     val Search: ImageVector by lazy { stroked("Search", 1.6f, "M4 10.5a6.5 6.5 0 1 0 13 0a6.5 6.5 0 1 0-13 0", "M20 20l-4.4-4.4") }
 
+    /** Сканер QR: уголки видоискателя и линия развёртки. */
+    val Scan: ImageVector by lazy {
+        stroked(
+            "Scan", 1.6f,
+            "M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8",
+            "M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8",
+            "M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16",
+            "M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16",
+            "M7.5 12h9",
+        )
+    }
+
+    /** Фонарик — молния. */
+    val Torch: ImageVector by lazy { stroked("Torch", 1.6f, "M13 3 5.5 13.5H11L10 21l7.5-10.5H12L13 3Z") }
+
     /**
      * Логотип: щит с буквой N — тот же контур, что в `res/drawable/ic_stat_novpn.xml`
      * и в иконке приложения. Заливка, не штрих: рисуется белым на синем.

@@ -265,6 +265,7 @@ fun ConnectionScreen(
 
     if (changing) {
         var url by remember { mutableStateOf(deepLink ?: "") }
+        var scanError by remember { mutableStateOf<String?>(null) }
         NoVpnDialog(
             title = if (state.subUrl.isBlank()) "Добавить подписку" else "Изменить подписку",
             onClose = {
@@ -286,7 +287,17 @@ fun ConnectionScreen(
                         refresh(url.trim())
                     }
                 },
+                trailing = {
+                    QrScanButton(
+                        onLink = {
+                            changing = false
+                            refresh(it)
+                        },
+                        onError = { scanError = it },
+                    )
+                },
             )
+            scanError?.let { Notice(it, tone = Tone.DANGER, modifier = Modifier.padding(top = 10.dp)) }
             Btn(
                 "Применить",
                 onClick = {
@@ -531,6 +542,19 @@ private fun ReserveSubscription(repo: Repo) {
         keyboardType = KeyboardType.Uri,
         imeAction = ImeAction.Go,
         onDone = { add() },
+        // Резерв — чужая подписка: после скана только подставляем, добавляет человек сам.
+        trailing = {
+            QrScanButton(
+                onLink = {
+                    url = it
+                    message = null
+                },
+                onError = {
+                    isError = true
+                    message = it
+                },
+            )
+        },
     )
     message?.let {
         Notice(it, tone = if (isError) Tone.DANGER else Tone.OK, modifier = Modifier.padding(top = 10.dp))

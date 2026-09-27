@@ -478,6 +478,7 @@ fun Input(
     imeAction: ImeAction = ImeAction.Done,
     onDone: (() -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val c = NoVpnTheme.colors
     val interaction = remember { MutableInteractionSource() }
@@ -515,6 +516,10 @@ fun Input(
                         Text(placeholder, fontSize = 15.sp, color = c.textFaint, fontFamily = if (mono) Mono else null, maxLines = 1)
                     }
                     inner()
+                }
+                if (trailing != null) {
+                    Spacer(Modifier.width(8.dp))
+                    trailing()
                 }
             }
         },

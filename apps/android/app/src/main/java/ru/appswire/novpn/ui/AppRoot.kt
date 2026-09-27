@@ -347,8 +347,22 @@ private fun Onboarding(repo: Repo, deepLink: String?, onDeepLinkUsed: () -> Unit
                 keyboardType = KeyboardType.Uri,
                 imeAction = ImeAction.Go,
                 onDone = { submit() },
+                trailing = {
+                    QrScanButton(
+                        onLink = {
+                            url = it
+                            error = null
+                            submit()
+                        },
+                        onError = { error = it },
+                    )
+                },
             )
-            TNote("Ссылку выдаёт ваш провайдер NoVPN — в панели или письмом.", modifier = Modifier.padding(top = 8.dp))
+            TNote(
+                "Ссылку выдаёт ваш провайдер NoVPN — в панели или письмом. " +
+                    "Можно отсканировать QR-код из личного кабинета.",
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
         error?.let { Notice(it, tone = Tone.DANGER, modifier = Modifier.padding(top = 12.dp)) }
 
