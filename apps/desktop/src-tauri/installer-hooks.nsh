@@ -3,6 +3,44 @@
 ; Выбор папки, папка в «Пуске» и галочка ярлыка на рабочем столе есть в
 ; стандартном шаблоне Tauri. Здесь только то, чего в нём нет.
 
+; -- Остановить приложение и движок перед заменой/удалением файлов ---------
+; В режиме адаптера движок — это novpn-desktop.exe --engine-host, запущенный
+; задачей планировщика С ПРАВАМИ АДМИНИСТРАТОРА. Установщик ставится для
+; пользователя, без прав: taskkill получает «отказано в доступе», а встроенная
+; проверка Tauri «приложение запущено» в тихом режиме (автообновление) молча
+; прерывала установку. Приложение вставало на старой версии и снова шло
+; обновляться — по кругу (0.3.33 → 0.3.34), каждый виток рвал VPN.
+; Поэтому: просим движок выйти через его же файл-команду (он читает её каждые
+; 400 мс; хосты до 0.3.35 не знают quit и выходят по want:false через ~9 с
+; простоя) и ждём, пока процесс исчезнет. Список берём у tasklist — он видит
+; и процессы с правами администратора.
+!macro NOVPN_STOP_ALL ID
+  ClearErrors
+  CreateDirectory "$APPDATA\NoVPN\engine"
+  FileOpen $R7 "$APPDATA\NoVPN\engine\control.json" w
+  IfErrors novpn_ctl_done_${ID}
+    FileWrite $R7 '{"want":false,"quit":true,"epoch":0,"mixed_port":7893,"controller_port":9893}'
+    FileClose $R7
+  novpn_ctl_done_${ID}:
+
+  ; До ~45 секунд: гасим то, что можем без прав (окно, движок прокси-режима),
+  ; и ждём, пока исчезнет всё, включая привилегированный хост.
+  StrCpy $R6 0
+  novpn_procs_${ID}:
+    nsExec::Exec 'taskkill /F /IM ${MAINBINARYNAME}.exe /T'
+    Pop $R5
+    nsExec::Exec 'taskkill /F /IM mihomo.exe'
+    Pop $R5
+    nsExec::Exec 'cmd /C tasklist /NH /FI "IMAGENAME eq ${MAINBINARYNAME}.exe" | find /I "${MAINBINARYNAME}.exe"'
+    Pop $R5
+    StrCmp $R5 "0" 0 novpn_procs_gone_${ID}
+    IntOp $R6 $R6 + 1
+    IntCmp $R6 50 novpn_procs_gone_${ID} 0 novpn_procs_gone_${ID}
+    Sleep 500
+    Goto novpn_procs_${ID}
+  novpn_procs_gone_${ID}:
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   ; Запоминаем прежнее место установки ДО того, как основной раздел перепишет
   ; ключ производителя на новое. Понадобится, если человек сменил папку.
@@ -34,28 +72,31 @@
     SetOutPath "$INSTDIR"
   novpn_dir_ok:
 
-  ; Перед установкой поверх — гасим работающие процессы, иначе NSIS не сможет
-  ; перезаписать exe и dll, которые они держат открытыми (taskkill по имени
-  ; гасит и старую копию из другой папки).
-  nsExec::Exec 'taskkill /F /IM ${MAINBINARYNAME}.exe /T'
-  nsExec::Exec 'taskkill /F /IM mihomo.exe'
-  Sleep 800
+  ; Перед установкой поверх — гасим окно и движок (в т.ч. привилегированный),
+  ; иначе NSIS не сможет перезаписать exe и dll, которые они держат открытыми.
+  !insertmacro NOVPN_STOP_ALL "i"
 
-  ; taskkill возвращает управление РАНЬШЕ, чем система закрывает дескрипторы файлов
-  ; (движок держит и wintun.dll, и свой exe). Из-за этого распаковка падала с
-  ; «невозможно открыть файл для записи: Прервать / Повтор / Пропустить». Ждём, пока
-  ; главный файл реально станет доступен на запись — до 10 секунд, дальше идём как есть.
+  ; Процесс исчез — но система закрывает дескрипторы файлов чуть позже (движок
+  ; держит и wintun.dll, и свой exe). Иначе распаковка падала с «невозможно открыть
+  ; файл для записи»; в тихом режиме NSIS такой файл ПРОПУСКАЕТ — оставался старый
+  ; exe. Ждём, пока главный exe и движок реально станут доступны на запись.
   StrCpy $R6 0
   novpn_wait_free:
-    IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 novpn_free
+    IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 novpn_check_engine
     ClearErrors
     FileOpen $R5 "$INSTDIR\${MAINBINARYNAME}.exe" a
+    IfErrors novpn_locked 0
+      FileClose $R5
+  novpn_check_engine:
+    IfFileExists "$INSTDIR\mihomo.exe" 0 novpn_free
+    ClearErrors
+    FileOpen $R5 "$INSTDIR\mihomo.exe" a
     IfErrors novpn_locked 0
       FileClose $R5
       Goto novpn_free
   novpn_locked:
     IntOp $R6 $R6 + 1
-    IntCmp $R6 20 novpn_free novpn_sleep novpn_free
+    IntCmp $R6 30 novpn_free novpn_sleep novpn_free
   novpn_sleep:
     Sleep 500
     Goto novpn_wait_free
@@ -92,10 +133,10 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ; Перед удалением завершаем приложение и движок: иначе они держат свои файлы,
-  ; удаление проходит частично, а mihomo.exe остаётся жить и держит прокси.
-  nsExec::Exec 'taskkill /F /IM ${MAINBINARYNAME}.exe /T'
-  nsExec::Exec 'taskkill /F /IM mihomo.exe'
+  ; Перед удалением завершаем приложение и движок (в т.ч. привилегированный):
+  ; иначе они держат свои файлы, удаление проходит частично, а mihomo.exe остаётся
+  ; жить и держит прокси.
+  !insertmacro NOVPN_STOP_ALL "u"
   Sleep 800
 !macroend
 

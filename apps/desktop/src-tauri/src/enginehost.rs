@@ -28,6 +28,13 @@ pub struct Control {
     pub epoch: u64,
     pub mixed_port: u16,
     pub controller_port: u16,
+    /// Выйти совсем, а не просто погасить движок (перед установкой обновления).
+    /// Хост работает с правами администратора и держит открытым тот же exe, что
+    /// перезаписывает установщик, а установщик (ставится без прав) убить его не
+    /// может — поэтому просим выйти сам и сразу, без паузы простоя. Старые хосты
+    /// поле не знают и выходят по `want: false` через паузу простоя.
+    #[serde(default)]
+    pub quit: bool,
 }
 
 /// Статус движка. Пишет хост, читает интерфейс — чтобы отличать «хост поднят» от
@@ -92,6 +99,7 @@ pub fn request_start(ports: Ports) -> Result<(), String> {
         epoch: now_ms(),
         mixed_port: ports.mixed,
         controller_port: ports.controller,
+        quit: false,
     })
 }
 
@@ -99,6 +107,35 @@ pub fn request_start(ports: Ports) -> Result<(), String> {
 pub fn request_stop() {
     let prev = read_control().unwrap_or_default();
     let _ = write_control(&Control { want: false, ..prev });
+}
+
+/// Попросить хост завершиться совсем (перед установкой обновления).
+pub fn request_quit() {
+    let prev = read_control().unwrap_or_default();
+    let _ = write_control(&Control { want: false, quit: true, ..prev });
+}
+
+/// Хоста нет: статус удалён (штатный выход) или пульс давно не обновлялся
+/// (хост пишет его каждые 400 мс).
+fn host_gone(status: Option<&HostStatus>, now: u64) -> bool {
+    match status {
+        None => true,
+        Some(s) => now.saturating_sub(s.beat) > 2500,
+    }
+}
+
+/// Ждёт, пока хост завершится, не дольше `timeout`. `true` — вышел (или не был запущен).
+pub fn wait_host_exit(timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if host_gone(read_status().as_ref(), now_ms()) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
 }
 
 fn read_control() -> Option<Control> {
@@ -201,6 +238,11 @@ pub fn run() {
             if let Some(mut e) = engine.take() {
                 e.stop();
             }
+            if ctl.quit {
+                // Обновление: выходим сразу — установщику нужен свободный exe.
+                let _ = std::fs::remove_file(status_path());
+                return;
+            }
             cur_epoch = u64::MAX;
             failed_epoch = None;
             last_error = String::new();
@@ -253,7 +295,26 @@ fn needs_restart(want_epoch: u64, cur_epoch: u64, alive: bool, failed_epoch: Opt
 
 #[cfg(test)]
 mod tests {
-    use super::needs_restart;
+    use super::{host_gone, needs_restart, Control, HostStatus};
+
+    #[test]
+    fn host_gone_by_missing_or_stale_status() {
+        assert!(host_gone(None, 10_000), "статуса нет — хост вышел");
+        let fresh = HostStatus { beat: 9_000, ..Default::default() };
+        assert!(!host_gone(Some(&fresh), 10_000), "свежий пульс — ещё жив");
+        let stale = HostStatus { beat: 1_000, ..Default::default() };
+        assert!(host_gone(Some(&stale), 10_000), "пульс остановился — вышел");
+    }
+
+    #[test]
+    fn quit_is_optional_for_old_control_files() {
+        // Файл команды от прежних версий (без quit) читается, quit = false.
+        let c: Control = serde_json::from_str(r#"{"want":true,"epoch":1,"mixed_port":7893,"controller_port":9893}"#).unwrap();
+        assert!(c.want && !c.quit);
+        // А то, что пишет установщик, — с quit.
+        let c: Control = serde_json::from_str(r#"{"want":false,"quit":true,"epoch":0,"mixed_port":7893,"controller_port":9893}"#).unwrap();
+        assert!(!c.want && c.quit);
+    }
 
     #[test]
     fn restart_on_new_epoch() {

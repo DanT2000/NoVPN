@@ -28,7 +28,22 @@ SITE_BASE = 'https://vpn.appswire.ru/desktop'
 
 def version_from_conf():
     conf = json.load(io.open(os.path.join(ROOT, 'src-tauri', 'tauri.conf.json'), encoding='utf-8'))
-    return conf['version']
+    ver = conf['version']
+    # Версия живёт в ТРЁХ местах, и все обязаны совпадать. Установщик и манифест
+    # берут её из tauri.conf.json, а сама программа сверяет себя с каналом по
+    # Cargo.toml (env!("CARGO_PKG_VERSION")). В 0.3.34 подняли только conf — и
+    # установленная 0.3.34 считала себя 0.3.33, видела «новую» 0.3.34 и ставила её
+    # снова: бесконечный круг автообновления у всех. Больше не подписываем такое.
+    pkg = json.load(io.open(os.path.join(ROOT, 'package.json'), encoding='utf-8'))['version']
+    cargo = None
+    for line in io.open(os.path.join(ROOT, 'src-tauri', 'Cargo.toml'), encoding='utf-8'):
+        if line.startswith('version = '):
+            cargo = line.split('"')[1]
+            break
+    if not (ver == pkg == cargo):
+        sys.exit('Версии расходятся: tauri.conf.json=%s, package.json=%s, Cargo.toml=%s — '
+                 'поднимите все три и пересоберите.' % (ver, pkg, cargo))
+    return ver
 
 
 def main():
