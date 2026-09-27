@@ -27,6 +27,7 @@ import { vpnLinkFromConf } from './services/amneziaLink.js';
 import { renderSubPage } from './services/subPage.js';
 import * as appFiles from './services/appFiles.js';
 import { resolveTgProxyUrl, restartBot, tgApi, broadcastToLinked } from './services/telegram.js';
+import { rotateSubscription, selfRotateWaitMin } from './services/rotate.js';
 import * as guard from './services/loginGuard.js';
 import { isDefaultAdminPassword, setAdminPassword, verifyAdminPassword } from './services/adminAuth.js';
 import * as repo from './repo.js';
@@ -822,6 +823,27 @@ router.get('/api/public/resolve', (req, res) => {
   });
 });
 
+// Перевыпуск подписки самим пользователем (кабинет): поделился с кем-то — и передумал.
+// Меняются адрес подписки, личная ссылка, ключи Xray, прокси; чужие входы в кабинет
+// завершаются, текущий — остаётся (он и показывает человеку новую ссылку).
+router.post('/api/public/rotate-subscription', requireUserOrAdmin, async (req, res) => {
+  const userId = req.session.userId;
+  if (!userId) return res.status(403).json(err('unauthorized', 'Войдите в личный кабинет по своей ссылке.'));
+  const u = repo.getUser(String(userId));
+  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+  const bad = accessError(u);
+  if (bad) return res.status(403).json(err(bad.type, bad.message));
+  const wait = selfRotateWaitMin(u.id);
+  if (wait > 0) {
+    return res.status(429).json(err('rate_limited', `Подписку недавно перевыпускали. Повторить можно через ${wait} мин.`));
+  }
+  try {
+    res.json(await rotateSubscription(u.id, { origin: reqOrigin(req), keepSid: req.sessionID, by: 'user' }));
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось перевыпустить подписку.'));
+  }
+});
+
 router.post('/api/public/logout', (req, res) => {
   delete req.session.userId;
   res.json({ ok: true });
@@ -1226,6 +1248,19 @@ router.post('/api/admin/users/:id/reissue-link', requireAdmin, (req, res) => {
   repo.addLog(`Перевыпущена личная ссылка «${u.name}»`);
   repo.addHistory(u.id, 'Перевыпущена личная ссылка');
   res.json(repo.getUser(u.id));
+});
+
+// Перевыпуск подписки целиком (адрес, личная ссылка, ключи Xray, прокси, входы в
+// кабинет). Админу — без ограничения частоты и без проверки статуса пользователя.
+router.post('/api/admin/users/:id/rotate-subscription', requireAdmin, async (req, res) => {
+  const u = repo.getUser(req.params.id!);
+  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+  try {
+    const result = await rotateSubscription(u.id, { origin: reqOrigin(req), by: 'admin' });
+    res.json({ user: repo.getUser(u.id), result });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось перевыпустить подписку.'));
+  }
 });
 
 router.post('/api/admin/users/:id/extend', requireAdmin, (req, res) => {

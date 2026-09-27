@@ -85,7 +85,7 @@ type TrafMode = 'unlim' | 'custom';
 function UserCardInner({ user }: { user: User }) {
   const {
     data, isMobile, goAdmin, showToast, showConfirm,
-    updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
+    updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, rotateUserSubscription, setCodeLogin, deleteUser,
     reissueDevice, revokeDevice, issueDevice, renameDevice, cleanupDevices,
   } = useApp();
   // Ввод своего кода (6 цифр). null — форма скрыта.
@@ -141,6 +141,27 @@ function UserCardInner({ user }: { user: User }) {
       onConfirm: async () => {
         await reissueLink(user.id);
         showToast('Ссылка перевыпущена');
+      },
+    });
+  // Перевыпуск подписки целиком: человек поделился подпиской/ссылкой и хочет отозвать.
+  const rotateSubFor = () =>
+    showConfirm({
+      title: 'Перевыпустить подписку?',
+      text:
+        `У «${user.name}» перестанут работать адрес подписки, личная ссылка, ключи Xray и прокси — ` +
+        'у всех, кому их передавали; чужие входы в кабинет завершатся. На серверах Xray на секунду ' +
+        'перезапустится. Новую личную ссылку нужно отправить человеку' +
+        (user.telegram ? ' (Telegram привязан — она придёт туда сама).' : '.'),
+      confirmLabel: 'Перевыпустить',
+      danger: true,
+      onConfirm: async () => {
+        const r = await rotateUserSubscription(user.id);
+        const parts = [`ключей Xray: ${r.rotated}`];
+        if (r.proxiesRotated) parts.push(`прокси: ${r.proxiesRotated}`);
+        let msg = `Подписка перевыпущена (${parts.join(', ')})`;
+        if (r.failedServers.length) msg += `. Не ответили: ${r.failedServers.join(', ')} — старые ключи там снимутся автоматически`;
+        if (r.telegramNotified) msg += '. Новая ссылка отправлена в Telegram';
+        showToast(msg);
       },
     });
   // Бессрочный код: срок 2999 год — так помечает панель тех, кому код нужен постоянно.
@@ -422,6 +443,22 @@ function UserCardInner({ user }: { user: User }) {
           </Field>
           <div className="body small muted" style={{ marginTop: -4 }}>
             «Новая ссылка» мгновенно ломает старую — на случай, если утекла.
+          </div>
+
+          {/* Перевыпуск подписки — шире, чем «Новая ссылка»: меняет всё, чем человек
+              мог поделиться (подписка, ключи Xray, прокси, входы в кабинет). */}
+          <div style={{ height: 1, background: 'var(--border)', margin: '14px 0' }} />
+          <div className="row" style={{ gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>
+              <span style={{ fontWeight: 600 }}>Перевыпуск подписки</span>
+              <span className="body small muted" style={{ display: 'block', marginTop: 2 }}>
+                Если подпиской поделились: новые адрес подписки, личная ссылка, ключи Xray и прокси.
+                Старые перестают работать у всех.
+              </span>
+            </span>
+            <button className="btn btn-outline btn-sm" onClick={rotateSubFor} style={{ flexShrink: 0 }}>
+              Перевыпустить
+            </button>
           </div>
 
           {/* Вход по коду — запасной способ, по умолчанию выключен. */}

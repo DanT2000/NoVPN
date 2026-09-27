@@ -11,6 +11,24 @@ const DAY = 24 * 3600 * 1000;
 const expireOf = (sess: SessionData): number =>
   sess.cookie?.expires ? new Date(sess.cookie.expires).getTime() : Date.now() + DAY;
 
+/**
+ * Завершить все входы пользователя в кабинет, кроме `exceptSid` (того, кто сам
+ * перевыпускает подписку). Нужно при перевыпуске: иначе тот, кому давали личную
+ * ссылку и кто уже зашёл по ней, остался бы в кабинете до 7 дней и видел бы новую
+ * подписку. Админские сессии не трогаем. Возвращает число завершённых сессий.
+ */
+export function destroyUserSessions(userId: string, exceptSid?: string): number {
+  const r = db
+    .prepare(
+      `DELETE FROM sessions
+        WHERE json_extract(sess, '$.userId') = ?
+          AND COALESCE(json_extract(sess, '$.admin'), 0) = 0
+          AND sid != ?`,
+    )
+    .run(userId, exceptSid ?? '');
+  return r.changes;
+}
+
 export class SqliteSessionStore extends session.Store {
   constructor() {
     super();

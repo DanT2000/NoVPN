@@ -12,6 +12,8 @@ import type {
   ProxyAccount,
   PublicBootstrapData,
   PublicUserView,
+  AdminRotateSubscriptionResult,
+  RotateSubscriptionResult,
   Server,
   TelegramSettings,
   TestServerConnectionResult,
@@ -41,6 +43,23 @@ import {
   USERS,
 } from './mockData';
 import { genUuid } from '../../lib/gen';
+
+/** Мок перевыпуска: новый токен ссылки и новые ключи у активных Xray-конфигов. */
+function mockRotate(u: User): RotateSubscriptionResult {
+  u.accessToken = 'tok-' + Math.random().toString(36).slice(2, 14);
+  let rotated = 0;
+  for (const d of state.devices) {
+    if (d.userId !== u.id || !d.isActive || d.protocol !== 'xray') continue;
+    const nu = genUuid();
+    d.link = (d.link ?? '').replace(/vless:\/\/[^@]+@/, `vless://${nu}@`);
+    rotated += 1;
+  }
+  return {
+    accessLink: `https://vpn.example.ru/k/${u.accessToken}`,
+    subLink: `https://vpn.example.ru/sub/sub-${u.id}`,
+    rotated, failedServers: [], proxiesRotated: 0, sessionsClosed: 1, telegramNotified: !!u.telegram,
+  };
+}
 
 const wait = (ms = 300) => new Promise<void>((r) => setTimeout(r, ms));
 const clone = <T>(v: T): T => structuredClone(v);
@@ -133,6 +152,13 @@ export const mockApi: ApiClient = {
       allowedProxies: u ? u.allowedProxies : [],
       xrayWhitelist: state.settings.xrayWhitelist !== false,
     };
+  },
+
+  async rotateSubscription(): Promise<RotateSubscriptionResult> {
+    await wait(600);
+    const u = mockUserId ? state.users.find((x) => x.id === mockUserId) : undefined;
+    if (!u) throw new Error('Войдите в личный кабинет по своей ссылке.');
+    return mockRotate(u);
   },
 
   async publicLogout(): Promise<Ok> {
@@ -300,6 +326,14 @@ export const mockApi: ApiClient = {
     u.isActive = active;
     if (!active) state.devices.filter((d) => d.userId === id).forEach((d) => (d.isActive = false));
     return clone(u);
+  },
+
+  async rotateUserSubscription(id: string): Promise<AdminRotateSubscriptionResult> {
+    await wait(600);
+    const u = state.users.find((x) => x.id === id)!;
+    const result = mockRotate(u);
+    log(`Перевыпущена подписка «${u.name}» (администратором)`);
+    return { user: clone(u), result };
   },
 
   async reissueLink(id: string): Promise<User> {

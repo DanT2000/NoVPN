@@ -439,6 +439,9 @@ for (const stmt of [
   // потреблённый трафик пользователя обнулялся вместе с ними.
   // Токен подписки Xray: отдельный от токена входа, живёт в VPN-приложении.
   'ALTER TABLE users ADD COLUMN sub_token TEXT',
+  // Время последнего перевыпуска подписки самим пользователем: из кабинета — не чаще
+  // раза в N минут (перевыпуск перезапускает Xray на серверах, рвёт связь всем).
+  'ALTER TABLE users ADD COLUMN sub_rotated_at TEXT',
   'ALTER TABLE devices ADD COLUMN rx_raw INTEGER DEFAULT 0',
   'ALTER TABLE devices ADD COLUMN tx_raw INTEGER DEFAULT 0',
   // Числовой chat_id Telegram: поле telegram хранит только handle (@username),

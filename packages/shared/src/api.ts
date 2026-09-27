@@ -94,6 +94,31 @@ export interface IssueDeviceResult {
   subscriptionUrl?: string;
 }
 
+/** Итог перевыпуска подписки: всё, чем мог поделиться пользователь, заменено. */
+export interface RotateSubscriptionResult {
+  /** Новая личная ссылка /k/… — старая больше не работает. */
+  accessLink: string | null;
+  /** Новый адрес подписки /sub/… — старый больше не работает. */
+  subLink: string | null;
+  /** Сколько Xray-конфигов получили новый ключ. */
+  rotated: number;
+  /** Серверы, где новый ключ выпустить не удалось. Старый там снят в панели и будет
+   *  удалён с сервера автоматически, как только тот станет доступен. */
+  failedServers: string[];
+  /** Сколько прокси-логинов выдано заново. */
+  proxiesRotated: number;
+  /** Сколько чужих входов в кабинет завершено. */
+  sessionsClosed: number;
+  /** Новая личная ссылка отправлена в Telegram. */
+  telegramNotified: boolean;
+}
+
+/** Ответ админского перевыпуска: итог + обновлённый пользователь (новый accessToken). */
+export interface AdminRotateSubscriptionResult {
+  user: User;
+  result: RotateSubscriptionResult;
+}
+
 /** Пункт read-only аудита сервера. */
 export interface AuditItem {
   name: string;

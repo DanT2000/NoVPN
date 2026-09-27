@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { PROTOCOL_LABELS } from '@novpn/shared';
+import { PROTOCOL_LABELS, type RotateSubscriptionResult } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { Dot } from '../components/ui';
@@ -36,6 +36,8 @@ function Tile({ title, sub, onClick, chevron }: { title: string; sub: string; on
 export function Cabinet() {
   const { publicUser: user, publicData: data, goPublic, logoutPublic, showToast, showConfirm, reloadPublic } = useApp();
   const [pxBusy, setPxBusy] = useState<string | null>(null);
+  // Итог перевыпуска: показываем новую личную ссылку, пока человек не уйдёт со страницы.
+  const [rotated, setRotated] = useState<RotateSubscriptionResult | null>(null);
   if (!user || !data) return null;
 
   const devices = data.devices.filter((d) => d.userId === user.id);
@@ -95,6 +97,24 @@ export function Cabinet() {
         } catch (e) {
           showToast(e instanceof Error ? e.message : 'Не удалось отозвать');
         }
+      },
+    });
+  }
+
+  function rotateSubscription() {
+    showConfirm({
+      title: 'Перевыпустить подписку?',
+      text:
+        'Всё, что вы кому-то передавали, перестанет работать: ссылка на подписку, личная ссылка, ' +
+        'ключи Xray и прокси; чужие входы в кабинет завершатся. Свои устройства нужно будет ' +
+        'подключить заново — новая ссылка и QR появятся здесь же.',
+      confirmLabel: 'Перевыпустить',
+      danger: true,
+      onConfirm: async () => {
+        const r = await api.rotateSubscription();
+        setRotated(r);
+        await reloadPublic();
+        showToast('Подписка перевыпущена');
       },
     });
   }
@@ -194,6 +214,37 @@ export function Cabinet() {
         );
       })()}
 
+      {rotated ? (
+        <div className="card stack" style={{ gap: 10, borderColor: 'var(--accent)' }}>
+          <div>
+            <div className="eyebrow" style={{ marginBottom: 4 }}>Подписка перевыпущена</div>
+            <div className="body small muted">
+              Ваша новая личная ссылка — сохраните её: по старой войти больше нельзя.
+              {rotated.telegramNotified ? ' Мы также отправили её вам в Telegram.' : ''}
+            </div>
+          </div>
+          {rotated.accessLink ? (
+            <>
+              <input className="input mono" readOnly value={rotated.accessLink} style={{ fontSize: 12 }} />
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={async () => {
+                  showToast((await copyText(rotated.accessLink!)) ? 'Ссылка скопирована' : 'Не удалось скопировать');
+                }}
+              >
+                Копировать личную ссылку
+              </button>
+            </>
+          ) : null}
+          <div className="body small muted">
+            Добавьте подписку заново в приложения на своих устройствах — новая ссылка и QR выше.
+            {rotated.failedServers.length
+              ? ` Сервер ${rotated.failedServers.join(', ')} сейчас не ответил: старый ключ там снимется автоматически, а конфиг для него выпустите заново через «Подключить новое устройство».`
+              : ''}
+          </div>
+        </div>
+      ) : null}
+
       {showProxy ? (
         <div className="card stack" style={{ gap: 10 }}>
           <div>
@@ -274,6 +325,20 @@ export function Cabinet() {
       </div>
 
       <Tile title="Приложения и инструкции" sub="Android · iOS · Windows · macOS · Linux" onClick={() => goPublic('apps')} chevron />
+
+      {/* Поделился подпиской — и передумал: отзыв всего, что могло уйти на сторону. */}
+      <div className="card stack" style={{ gap: 10 }}>
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 4 }}>Поделились доступом?</div>
+          <div className="body small muted">
+            Перевыпустите подписку — у всех, кому вы её передавали, она перестанет работать.
+            Свои устройства после этого нужно подключить заново.
+          </div>
+        </div>
+        <button className="btn btn-outline btn-sm" onClick={rotateSubscription}>
+          Перевыпустить подписку
+        </button>
+      </div>
 
       <div style={{ paddingTop: 8 }}>
         <button type="button" onClick={logoutPublic} className="mono" style={{ background: 'none', border: 0, color: 'var(--text-faint)', fontSize: 12, cursor: 'pointer' }}>

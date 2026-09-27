@@ -92,6 +92,21 @@ export function resetAccessToken(userId: string): string {
   db.prepare('UPDATE users SET access_token = ?, updated_at = ? WHERE id = ?').run(token, nowIso(), userId);
   return token;
 }
+/** Новый адрес подписки (/sub/<токен>): старый сразу отвечает 404 — приложения,
+ *  куда его добавили, перестают получать конфиги. */
+export function resetSubToken(userId: string): string {
+  const token = crypto.randomBytes(18).toString('base64url');
+  db.prepare('UPDATE users SET sub_token = ?, updated_at = ? WHERE id = ?').run(token, nowIso(), userId);
+  return token;
+}
+/** Когда пользователь последний раз перевыпускал подписку (для ограничения частоты). */
+export function getSubRotatedAt(userId: string): string | null {
+  const r = db.prepare('SELECT sub_rotated_at FROM users WHERE id = ?').get(userId) as { sub_rotated_at: string | null } | undefined;
+  return r?.sub_rotated_at ?? null;
+}
+export function markSubRotated(userId: string): void {
+  db.prepare('UPDATE users SET sub_rotated_at = ? WHERE id = ?').run(nowIso(), userId);
+}
 export function codeExists(code: string, exceptId?: string): boolean {
   const r = db.prepare('SELECT id FROM users WHERE code = ? AND deleted_at IS NULL').get(code) as any;
   return !!r && r.id !== exceptId;

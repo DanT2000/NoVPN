@@ -10,6 +10,7 @@ import type {
   IssueDeviceResult,
   PublicBootstrapData,
   PublicUserView,
+  RotateSubscriptionResult,
   Server,
   TelegramSettings,
   User,
@@ -106,6 +107,8 @@ interface AppContextValue {
   setCode(id: string, code: string): Promise<User>;
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
+  /** Перевыпустить подписку пользователя целиком. Обновляет данные панели: у Xray-конфигов новые ключи. */
+  rotateUserSubscription(id: string): Promise<RotateSubscriptionResult>;
   /** Включить/выключить запасной вход по коду. */
   setCodeLogin(id: string, enabled: boolean, forever?: boolean): Promise<User>;
   deleteUser(id: string): Promise<void>;
@@ -534,6 +537,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     },
     [upsertUser],
   );
+  const rotateUserSubscription = useCallback(async (id: string) => {
+    const { user, result } = await api.rotateUserSubscription(id);
+    upsertUser(user);
+    // Тихо, без экрана загрузки: у конфигов пользователя новые ключи/ссылки.
+    try {
+      setData(await api.getInitialData());
+    } catch {
+      /* данные подтянутся при следующей загрузке */
+    }
+    return result;
+  }, [upsertUser]);
   const setCodeLogin = useCallback(
     async (id: string, enabled: boolean, forever?: boolean) => {
       const u = await api.setCodeLogin(id, enabled, forever);
@@ -620,7 +634,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices,
       adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, rotateUserSubscription, setCodeLogin, deleteUser,
       addServer, editServer, setServerAutoIssue, deleteServer,
       saveTelegram, saveApps, saveSettings,
     }),
@@ -628,7 +642,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       loading, loadError, data, publicData, publicUser, linkNotice, adminAuthed, mustChangePassword, nav, isMobile,
       reload, reloadPublic, showToast, showConfirm, goPublic, goAdmin, setPublicUser, logoutPublic,
       issueDevice, reissueDevice, revokeDevice, deleteDevice, renameDevice, cleanupDevices, adminLogin, adminLogout,
-      createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, setCodeLogin, deleteUser,
+      createUser, updateUser, extendUser, setUserActive, reissueCode, setCode, reissueLink, rotateUserSubscription, setCodeLogin, deleteUser,
       addServer, editServer, setServerAutoIssue, deleteServer, saveTelegram, saveApps, saveSettings,
     ],
   );

@@ -14,6 +14,8 @@ import type {
   ProxyAccount,
   ProxyType,
   PublicBootstrapData,
+  AdminRotateSubscriptionResult,
+  RotateSubscriptionResult,
   RoutingCheckResult,
   RoutingFileFull,
   RoutingFileMeta,
@@ -218,6 +220,9 @@ export interface ApiClient {
   issueProxy(serverId: string, userId?: string): Promise<ProxyAccount>;
   /** Отозвать прокси-аккаунт (удаляет логин на сервере). */
   revokeProxyAccount(id: string): Promise<Ok>;
+  /** Перевыпустить свою подписку (кабинет): новые адрес, личная ссылка, ключи Xray,
+   *  прокси; чужие входы в кабинет завершаются. Не чаще раза в 10 минут. */
+  rotateSubscription(): Promise<RotateSubscriptionResult>;
 
   // ── admin: auth ──
   adminLogin(password: string): Promise<{ ok: boolean; mustChangePassword?: boolean }>;
@@ -243,6 +248,9 @@ export interface ApiClient {
   setCode(id: string, code: string): Promise<User>;
   /** Выдать новую личную ссылку — старая сразу перестаёт работать. */
   reissueLink(id: string): Promise<User>;
+  /** Перевыпустить подписку пользователя целиком (адрес, личная ссылка, ключи Xray,
+   *  прокси, входы в кабинет). */
+  rotateUserSubscription(id: string): Promise<AdminRotateSubscriptionResult>;
   /** Включить/выключить запасной вход по коду. */
   /** forever — бессрочно, без автосброса через N дней. */
   setCodeLogin(id: string, enabled: boolean, forever?: boolean): Promise<User>;
