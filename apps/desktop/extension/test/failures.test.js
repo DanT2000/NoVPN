@@ -74,3 +74,16 @@ test('сводка: только сломанное, по корню домен�
 test('страница без сбоев — пустая сводка (прежний «список всего подряд» больше не появляется)', () => {
   assert.deepEqual(F.summarize({}, [{ host: 'youtube.com', type: 'sub_frame', start: 99_000, headers: true }], 100_000, 'account.msi.com', 10), []);
 });
+
+test('отказ сервера: 451 — всегда, 403 — только у самой страницы (гео-блок ChatGPT и т.п.)', () => {
+  assert.equal(F.httpReason('main_frame', 403), F.REASON_FORBIDDEN);
+  assert.equal(F.httpReason('main_frame', 451), F.REASON_FORBIDDEN);
+  assert.equal(F.httpReason('script', 451), F.REASON_FORBIDDEN);
+  assert.equal(F.httpReason('xmlhttprequest', 403), null, '403 у API — обычно «нужен вход», не блокировка');
+  assert.equal(F.httpReason('main_frame', 200), null);
+  assert.equal(F.httpReason('main_frame', 404), null);
+});
+
+test('общий ERR_FAILED (CORS, service worker страницы) — не сбой сети', () => {
+  assert.equal(F.classify('net::ERR_FAILED'), null);
+});

@@ -22,9 +22,10 @@
   /* Не сбой сети, а нормальная жизнь страницы: отмена (ушли со страницы, скрипт отменил
      fetch), блокировщик рекламы и политики браузера (…BLOCKED…), кэш, локальные схемы,
      пропавший интернет целиком (тогда сломано всё, и маршрут сайта ни при чём),
-     0.0.0.0 от DNS-фильтра (AdGuard/Pi-hole режут рекламу именно так). */
+     0.0.0.0 от DNS-фильтра (AdGuard/Pi-hole режут рекламу именно так), общий ERR_FAILED
+     (CORS, service worker самой страницы — не блокировка: живой прогон на Discord). */
   const NOT_A_FAILURE =
-    /ERR_ABORTED|NS_BINDING_ABORTED|NS_ERROR_ABORT|BLOCKED|ERR_CACHE_|ERR_INCOMPLETE_CHUNKED|ERR_FILE_|UNKNOWN_URL_SCHEME|ERR_INVALID_URL|ERR_UNSAFE_|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|NS_ERROR_OFFLINE|ERR_ADDRESS_INVALID|ERR_TOO_MANY_REDIRECTS|ERR_INVALID_RESPONSE|ERR_CONTENT_|ERR_RESPONSE_HEADERS_|ERR_INVALID_CHUNKED/i;
+    /ERR_ABORTED|NS_BINDING_ABORTED|NS_ERROR_ABORT|BLOCKED|ERR_CACHE_|ERR_INCOMPLETE_CHUNKED|ERR_FILE_|UNKNOWN_URL_SCHEME|ERR_INVALID_URL|ERR_UNSAFE_|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|NS_ERROR_OFFLINE|ERR_ADDRESS_INVALID|ERR_TOO_MANY_REDIRECTS|ERR_INVALID_RESPONSE|ERR_CONTENT_|ERR_RESPONSE_HEADERS_|ERR_INVALID_CHUNKED|ERR_FAILED$/i;
 
   /* Код ошибки → причина человеческими словами. Порядок важен: первое совпадение. */
   const REASONS = [
@@ -38,6 +39,16 @@
     [/PROXY|TUNNEL_CONNECTION_FAILED/i, 'ошибка прокси'],
   ];
   const REASON_HUNG = 'не отвечает';
+  const REASON_FORBIDDEN = 'доступ закрыт (страна или блокировка)';
+
+  /** Отказ на уровне HTTP, похожий на блокировку. 451 — «недоступно по закону», всегда.
+      403 — только у самой страницы: так гео-блок отвечает ChatGPT/OpenAI и подобные
+      («не ваша страна»), сетевой ошибки там нет вовсе. У API 403 — обычно «нужен вход». */
+  function httpReason(type, status) {
+    if (status === 451) return REASON_FORBIDDEN;
+    if (status === 403 && type === 'main_frame') return REASON_FORBIDDEN;
+    return null;
+  }
 
   /** Причина сбоя или null, если это не сбой сети. */
   function classify(error) {
@@ -152,5 +163,5 @@
     return failures;
   }
 
-  root.NovpnFailures = { classify, hungReason, baseDomain, hostOf, isNoise, summarize, record, HUNG_MS, HUNG_XHR_MS, REASON_HUNG };
+  root.NovpnFailures = { classify, httpReason, REASON_FORBIDDEN, hungReason, baseDomain, hostOf, isNoise, summarize, record, HUNG_MS, HUNG_XHR_MS, REASON_HUNG };
 })(typeof self !== 'undefined' ? self : globalThis);

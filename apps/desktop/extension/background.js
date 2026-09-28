@@ -98,7 +98,12 @@ chrome.webRequest.onBeforeRequest.addListener((d) => {
 
 chrome.webRequest.onHeadersReceived.addListener((d) => {
   const r = inflight.get(d.requestId);
-  if (r) r.headers = true; // сервер ответил — дальше это не «висит», даже если тело долгое
+  if (!r) return;
+  r.headers = true; // сервер ответил — дальше это не «висит», даже если тело долгое
+  // Ответил, но отказом, похожим на блокировку (403 у самой страницы, 451 у чего угодно):
+  // так гео-блок встречает ChatGPT — сетевой ошибки нет, а сайт не работает.
+  const reason = F.httpReason(d.type, d.statusCode);
+  if (reason) noteFailure(r, reason, d.type === 'main_frame');
 }, FILTER);
 
 chrome.webRequest.onBeforeRedirect.addListener((d) => {
@@ -123,20 +128,25 @@ chrome.webRequest.onCompleted.addListener((d) => {
 chrome.webRequest.onErrorOccurred.addListener((d) => {
   const r = inflight.get(d.requestId);
   inflight.delete(d.requestId);
-  if (d.tabId < 0) return;
-  const host = F.hostOf(d.url);
-  if (!host || F.isNoise(host)) return;
+  // Только запросы ТЕКУЩЕЙ страницы. Запросы прошлой (видео YouTube, картинки Discord)
+  // отваливаются уже после перехода — и приписывались новому сайту: живой прогон
+  // показывал googlevideo на x.com. Их нет в inflight: он очищен при навигации.
+  if (!r) return;
   let reason = F.classify(d.error);
   // Отмену (ERR_ABORTED) сбоем не считаем — кроме случая, когда запрос до этого висел
   // без ответа: страница устала ждать и бросила его. Так делает и ZeroOmega.
-  if (!reason && r && /ABORT/i.test(d.error || '')) reason = F.hungReason(r, Date.now());
-  if (!reason) return;
-  void failuresOf(d.tabId).then((f) => {
-    F.record(f, host, reason, d.type === 'main_frame');
-    persist(d.tabId);
-    void applyBadge(d.tabId);
-  });
+  if (!reason && /ABORT/i.test(d.error || '')) reason = F.hungReason(r, Date.now());
+  if (reason) noteFailure(r, reason, d.type === 'main_frame');
 }, FILTER);
+
+function noteFailure(r, reason, main) {
+  if (F.isNoise(r.host)) return;
+  void failuresOf(r.tabId).then((f) => {
+    F.record(f, r.host, reason, main);
+    persist(r.tabId);
+    void applyBadge(r.tabId);
+  });
+}
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabFailures.delete(tabId);
@@ -215,7 +225,12 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
   // Сбои страницы отвечаем сами — это память работника, приложение тут не нужно.
   if (req && req.type === 'failures') {
     summaryFor(Number(req.tabId), String(req.domain || ''))
-      .then((items) => sendResponse({ ok: true, items }))
+      .then((items) => {
+        sendResponse({ ok: true, items });
+        // Сверяем значок с тем, что видит окно: повисший запрос мог дозагрузиться
+        // без события, которое перерисовало бы значок (живой прогон: «2» при одном сбое).
+        void applyBadge(Number(req.tabId));
+      })
       .catch(() => sendResponse({ ok: true, items: [] }));
     return true;
   }
