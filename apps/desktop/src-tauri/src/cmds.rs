@@ -863,7 +863,13 @@ pub fn shutdown(app: &tauri::AppHandle) {
 
 /// Движок может упасть сам — интерфейс обязан это заметить, а не показывать
 /// «Подключено» поверх мёртвого процесса.
-#[tauri::command]
+///
+/// `async` — НЕ в главном потоке окна. Обычная (синхронная) команда Tauri 2
+/// выполняется в главном потоке, и пока она идёт, окно не таскается и не
+/// перерисовывается. Интерфейс опрашивает эту команду (и vpn_probe, vpn_conflicts,
+/// browser_rules) по таймеру — окно раз в несколько секунд «залипало» при
+/// перетаскивании. Здесь нет block_on, поэтому пул потоков безопасен.
+#[tauri::command(async)]
 pub fn vpn_alive(running: tauri::State<'_, Running>) -> bool {
     let mut guard = match running.0.lock() {
         Ok(g) => g,
@@ -888,7 +894,10 @@ pub fn vpn_alive(running: tauri::State<'_, Running>) -> bool {
 /// `true` — сервер отвечает; `false` — связи нет (сервер недоступен/заблокирован),
 /// даже если процесс движка слушает порт. Интерфейс по этому сигналу
 /// переподключается и отличает «подключено» от «реально работает».
-#[tauri::command]
+///
+/// `async` — вне главного потока: замер идёт через туннель и занимает до ~6 с при
+/// плохой сети; в главном потоке он замораживал окно (см. vpn_alive).
+#[tauri::command(async)]
 pub fn vpn_probe(running: tauri::State<'_, Running>) -> bool {
     // Движок должен быть поднят — иначе проверять нечего.
     {
@@ -952,7 +961,9 @@ pub async fn meta_fetch(url: Option<String>) -> crate::meta::MetaResult {
 
 /// Правила, добавленные из браузера. Приложение опрашивает их и подмешивает
 /// в свой список — так добавленное на сайте появляется в окне и в конфиге.
-#[tauri::command]
+/// `async` — вне главного потока: опрос каждые 700 мс; чтение файла обычно мгновенно,
+/// но антивирус или занятый диск не должны подмораживать окно (см. vpn_alive).
+#[tauri::command(async)]
 pub fn browser_rules() -> Vec<Value> {
     store::read(crate::host::RULES)
         .and_then(|v| v.get("items").cloned())
@@ -1006,7 +1017,9 @@ pub fn browsers_installed() -> Vec<crate::browsers::Browser> {
 }
 
 /// Чужие VPN-туннели, поднятые прямо сейчас. Пустой список — конфликтов нет.
-#[tauri::command]
+/// `async` — вне главного потока: главный экран опрашивает её каждые 15 с, пока
+/// окно видно, то есть ровно когда его таскают (см. vpn_alive).
+#[tauri::command(async)]
 pub fn vpn_conflicts() -> Vec<String> {
     crate::netcheck::foreign_tunnels()
 }
