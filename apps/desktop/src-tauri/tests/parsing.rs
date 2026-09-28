@@ -383,17 +383,32 @@ fn user_vpn_choice_beats_local_bypass_suffix() {
 
 #[test]
 fn direct_domains_resolve_via_system_dns_when_smart() {
-    // «Прямые» домены должны резолвиться локальным DNS (nameserver-policy: system),
-    // а не зарубежным DoH — иначе российские сервисы получают не тот IP.
+    // «Прямые» домены резолвим локальным DNS (system), а не зарубежным DoH — иначе
+    // российские сервисы получают не тот IP. Но одного system мало: под туннелем он
+    // бывает мёртвым (29.09.2026 у владельца DHCP раздавал домашний DNS, который не
+    // отвечал, вторым — 1.1.1.1, режется в РФ): каждый новый российский сайт ждал 5 с
+    // и получал SERVFAIL. Поэтому ПАРАЛЛЕЛЬНО с system спрашиваем Яндекс DNS —
+    // движок берёт первый успешный ответ. Как на Android (0.2.3).
     let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
     let p = parse(&link).unwrap();
     let rules = Rules {
         smart: true,
+        bypass_local: true,
         list_direct_domains: vec!["gosuslugi.ru".into()],
         ..Default::default()
     };
     let cfg = build_config(&p, &rules, Some("Точка"), Ports::default());
-    assert!(cfg.contains("+.gosuslugi.ru: system"), "прямой домен должен идти через системный DNS");
+    let v: serde_yaml::Value = serde_yaml::from_str(&cfg).unwrap();
+    let policy = &v["dns"]["nameserver-policy"];
+    let direct: Vec<&str> = policy["+.gosuslugi.ru"]
+        .as_sequence()
+        .expect("для прямого домена — список резолверов")
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    assert_eq!(direct, vec!["system", "77.88.8.8", "77.88.8.1"], "system + Яндекс параллельно");
+    // Локальные зоны — только system: имён домашней сети Яндекс не знает.
+    assert_eq!(policy["+.lan"].as_str(), Some("system"), "локальная зона — только системный DNS");
     // А при выключенной умной маршрутизации DNS-политики для него быть не должно.
     let off = build_config(&p, &Rules { smart: false, ..rules.clone() }, Some("Точка"), Ports::default());
     assert!(!off.contains("gosuslugi.ru"), "без умной маршрутизации прямых доменов нет");

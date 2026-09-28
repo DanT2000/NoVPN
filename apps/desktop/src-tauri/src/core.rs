@@ -26,6 +26,11 @@ use std::time::{Duration, Instant};
 
 pub const GROUP: &str = "NoVPN";
 
+/// Надёжные российские резолверы (Яндекс DNS): запасной путь для ПРЯМЫХ доменов, когда
+/// системный DNS сети вялый или мёртвый. В РФ не блокируются и корректно отдают
+/// российские сервисы. Тот же список, что на Android (Config.kt, RU_FALLBACK_DNS).
+const RU_FALLBACK_DNS: [&str; 2] = ["77.88.8.8", "77.88.8.1"];
+
 /// Локальные и внутрисетевые доменные зоны. Всегда идут напрямую и всегда
 /// разрешаются системным DNS: через туннель они не имеют смысла, а сломать
 /// доступ к роутеру и домашним сервисам — верный способ разозлить человека.
@@ -255,8 +260,18 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
             policy.insert(s(&format!("+.{d}")), s("system"));
         }
     }
+    // Прямым доменам — system И Яндекс DNS параллельно (mihomo берёт первый успешный
+    // ответ). Один system под туннелем бывает мёртвым: в нём сидит сам движок, а сеть
+    // раздаёт то неотвечающий домашний DNS, то 1.1.1.1, который в РФ режется. Так было
+    // у владельца 29.09.2026: каждый новый российский сайт ждал 5 с и получал SERVFAIL.
+    // Локальные зоны выше остаются только на system — их имён Яндекс не знает.
+    let direct_ns = || {
+        let mut v = vec![s("system")];
+        v.extend(RU_FALLBACK_DNS.iter().map(|x| s(x)));
+        Value::Sequence(v)
+    };
     for d in &direct_domains {
-        policy.insert(s(&format!("+.{d}")), s("system"));
+        policy.insert(s(&format!("+.{d}")), direct_ns());
     }
     if !policy.is_empty() {
         dns.insert(s("nameserver-policy"), Value::Mapping(policy));
