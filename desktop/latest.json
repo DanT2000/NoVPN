@@ -1,12 +1,12 @@
 {
   "product": "NoVPN Desktop",
-  "version": "0.3.35",
+  "version": "0.3.36",
   "channel": "stable",
   "mandatory": false,
   "minSupportedVersion": "0.1.0",
   "url": "https://vpn.appswire.ru/desktop/novpn.exe",
-  "sha256": "de0066b51827ff17d8e9880684b95ad183e8876df248b83f2ca7fd87eabfd09f",
-  "signature": "X8w2AMIF8appwkW2S7VGwDp6xODQTfDfiLy2kCtz47vwniLR3hk7y/ip7lomrk1mP6rUodycVocEl/CKWszZCQ==",
-  "sizeBytes": 19804167,
-  "notes": "0.3.35: исправлен бесконечный круг автообновления — версия 0.3.34 ошибочно считала себя 0.3.33 и ставила обновление снова и снова, на каждом круге обрывая VPN. Установка обновления теперь дожидается выхода фонового движка режима адаптера. Плюс всё из 0.3.34: при автозапуске с Windows приложение открывается свёрнутым в трее."
+  "sha256": "4267ec6a121f542208773b5c4287b26fcf15051159022962fdcb0de223659755",
+  "signature": "UosNi9oZqabPFgaSQANGA/TfHXiO376n2S4SdkdaXGfDd21fSEjtoD5CIrJLzloBi9bklNd9fT/+/OM0DI6PAw==",
+  "sizeBytes": 19807654,
+  "notes": "0.3.36: быстрее открываются российские сайты — если DNS домашней сети не отвечает (или отдаёт заблокированный 1.1.1.1), движок параллельно спрашивает Яндекс DNS: больше нет 5-секундных задержек и «грузится через раз». Окно больше не «залипает» при перетаскивании: фоновые проверки связи ушли из главного потока."
 }
