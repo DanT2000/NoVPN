@@ -25,7 +25,7 @@ EXT = ROOT / "extension"
 OUT = EXT / "store" / "dist"
 FIREFOX_ID = "novpn@appswire.ru"
 
-FILES = ["manifest.json", "background.js", "popup.html", "popup.css", "popup.js", "icons"]
+FILES = ["manifest.json", "failures.js", "background.js", "popup.html", "popup.css", "popup.js", "icons"]
 
 
 def read_manifest() -> dict:
@@ -42,7 +42,8 @@ def firefox_manifest() -> dict:
     m.pop("key", None)
     m.pop("minimum_chrome_version", None)
     # Событийная страница вместо service worker: Firefox service_worker в MV3 не поддерживает.
-    m["background"] = {"scripts": ["background.js"]}
+    # failures.js — первым: в service worker его подключает importScripts, а здесь — список скриптов.
+    m["background"] = {"scripts": ["failures.js", "background.js"]}
     m["browser_specific_settings"] = {"gecko": {"id": FIREFOX_ID, "strict_min_version": "128.0"}}
     return m
 

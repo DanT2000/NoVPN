@@ -32,58 +32,126 @@ function reloadTab() {
   }
 }
 
-/* Попутные домены. После выбора маршрута спрашиваем фон, какие сторонние домены
-   подгружала вкладка, и предлагаем отправить их тем же путём. Молча ничего не
-   добавляем: человек видит список, снимает лишнее и подтверждает. */
+/* Что на странице НЕ загрузилось. Фон следит за исходом каждого запроса вкладки (как
+   ZeroOmega) и отдаёт только реальные сбои: сброс, нет ответа, адрес не найден, завис.
+   Окно показывает их вживую, пока открыто, — после смены маршрута вкладка
+   перезагружается, и видно, помогло ли. Молча ничего не добавляем: человек видит список,
+   снимает лишнее и сам выбирает маршрут. */
 const ROUTE_WORD = { vpn: 'через VPN', direct: 'напрямую' };
+const ROUTE_TAG = { vpn: 'VPN', direct: 'напрямую' };
+const unchecked = new Set(); // что человек снял — не отмечаем заново при обновлении
+const routeOf = new Map(); // домен -> маршрут в приложении (узнаём один раз)
+let failPoll = null;
+let applying = false;
 
-function hideRelated() {
-  $('related').hidden = true;
-  $('related-list').textContent = '';
+function plural(n, one, few, many) {
+  const a = n % 10;
+  const b = n % 100;
+  if (a === 1 && b !== 11) return one;
+  if (a >= 2 && a <= 4 && (b < 12 || b > 14)) return few;
+  return many;
 }
 
-async function suggestRelated(route) {
-  hideRelated();
-  if (tabId == null) return;
-  const r = await send({ type: 'related', tabId, domain });
-  const items = r && r.ok ? r.items : [];
-  if (!items.length) return;
+async function lookupRoutes(items) {
+  const todo = items.map((it) => it.domain).filter((d) => !routeOf.has(d));
+  for (const d of todo) routeOf.set(d, null); // не спрашиваем повторно, пока ждём
+  await Promise.all(
+    todo.map(async (d) => {
+      const r = await send({ type: 'get', domain: d });
+      routeOf.set(d, r && r.ok ? r.route || 'none' : 'none');
+    }),
+  );
+}
 
-  $('related-title').textContent = `Этот сайт подгружает ещё ${items.length === 1 ? 'один домен' : `${items.length} домена`} — отправить ${ROUTE_WORD[route]} тоже?`;
-  const list = $('related-list');
+function renderFailures(items) {
+  const box = $('fail');
+  const ok = $('fail-ok');
+  if (!items.length) {
+    box.hidden = true;
+    ok.hidden = false;
+    return;
+  }
+  ok.hidden = true;
+  $('fail-title').textContent = `На странице не ${plural(items.length, 'загрузился', 'загрузились', 'загрузились')} ${items.length} ${plural(items.length, 'домен', 'домена', 'доменов')}:`;
+  const list = $('fail-list');
+  list.textContent = '';
   for (const it of items) {
     const li = document.createElement('li');
     const label = document.createElement('label');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
-    cb.checked = true;
+    cb.checked = !unchecked.has(it.domain);
     cb.dataset.domain = it.domain;
-    const text = document.createElement('span');
-    text.textContent = it.domain;
-    const hits = document.createElement('small');
-    hits.textContent = `${it.hits}`;
-    hits.title = 'сколько запросов ушло на этот домен';
-    label.append(cb, text, hits);
+    cb.addEventListener('change', () => {
+      if (cb.checked) unchecked.delete(it.domain);
+      else unchecked.add(it.domain);
+    });
+    const main = document.createElement('span');
+    main.className = 'fail-main';
+    const name = document.createElement('span');
+    name.className = 'fail-domain';
+    name.textContent = it.domain + (it.self ? ' · сам сайт' : '');
+    const why = document.createElement('span');
+    why.className = 'fail-reason';
+    why.textContent = it.reason + (it.count > 1 ? ` · ${it.count}` : '');
+    main.append(name, why);
+    const tag = document.createElement('small');
+    const r = routeOf.get(it.domain);
+    tag.className = 'fail-route';
+    tag.textContent = r === 'vpn' || r === 'direct' ? ROUTE_TAG[r] : '';
+    tag.title = r === 'vpn' || r === 'direct' ? `Сейчас: ${ROUTE_WORD[r]}` : 'Правила нет — идёт напрямую';
+    label.append(cb, main, tag);
     li.append(label);
     list.append(li);
   }
-  const apply = $('related-apply');
-  apply.textContent = `Отправить ${ROUTE_WORD[route]}`;
-  apply.onclick = async () => {
-    const picked = [...list.querySelectorAll('input:checked')].map((c) => c.dataset.domain);
-    apply.disabled = true;
-    let ok = 0;
-    for (const d of picked) {
-      const res = await send({ type: 'set', domain: d, route });
-      if (res && res.ok) ok += 1;
-    }
-    apply.disabled = false;
-    hideRelated();
-    note(ok ? `Готово: ещё ${ok} ${ok === 1 ? 'домен' : 'домена'} ${ROUTE_WORD[route]}.` : 'Ничего не добавлено.', !ok);
-    if (ok) reloadTab(); // попутные домены применены — перезагружаем, чтобы подхватились
-  };
-  $('related').hidden = false;
+  box.hidden = false;
 }
+
+async function refreshFailures() {
+  if (tabId == null || !domain || applying) return;
+  const r = await send({ type: 'failures', tabId, domain });
+  const items = r && r.ok ? r.items : [];
+  if (items.some((it) => !routeOf.has(it.domain))) await lookupRoutes(items);
+  if (!applying) renderFailures(items);
+}
+
+function startFailures() {
+  void refreshFailures();
+  clearInterval(failPoll);
+  failPoll = setInterval(() => void refreshFailures(), 1500);
+}
+
+async function applyFailures(route) {
+  const picked = [...$('fail-list').querySelectorAll('input:checked')].map((c) => c.dataset.domain);
+  if (!picked.length) {
+    note('Отметьте хотя бы один домен.', true);
+    return;
+  }
+  applying = true;
+  $('fail-vpn').disabled = true;
+  $('fail-direct').disabled = true;
+  let done = 0;
+  for (const d of picked) {
+    const res = await send({ type: 'set', domain: d, route });
+    if (res && res.ok) {
+      done += 1;
+      routeOf.set(d, route);
+    }
+  }
+  $('fail-vpn').disabled = false;
+  $('fail-direct').disabled = false;
+  applying = false;
+  if (!done) {
+    note('Не удалось сохранить правила.', true);
+    return;
+  }
+  if (picked.includes(domain)) paintRoute(route, 'manual');
+  note(`Готово: ${done} ${plural(done, 'домен', 'домена', 'доменов')} ${ROUTE_WORD[route]} — страница перезагружается.`);
+  reloadTab(); // новый маршрут действует на новых запросах — переоткрываем страницу
+}
+
+$('fail-vpn').addEventListener('click', () => void applyFailures('vpn'));
+$('fail-direct').addEventListener('click', () => void applyFailures('direct'));
 
 function paintRoute(route, source) {
   document.querySelectorAll('.choice').forEach((b) => {
@@ -131,7 +199,11 @@ async function init() {
   }
 
   const r = await send({ type: 'get', domain });
-  if (r && r.ok) paintRoute(r.route, r.source);
+  if (r && r.ok) {
+    paintRoute(r.route, r.source);
+    routeOf.set(domain, r.route || 'none');
+  }
+  startFailures();
 }
 
 document.querySelectorAll('.choice').forEach((btn) => {
@@ -144,18 +216,16 @@ document.querySelectorAll('.choice').forEach((btn) => {
       note(r && r.error ? r.error : 'Не удалось сохранить правило', true);
       return;
     }
+    routeOf.set(domain, route);
     note('Готово — страница перезагружается по новому маршруту.');
-    reloadTab(); // мгновенный эффект, как в SwitchyOmega
-    void suggestRelated(route);
+    reloadTab(); // мгновенный эффект, как в SwitchyOmega; список сбоев обновится сам
   });
 });
 
-$('related-skip').addEventListener('click', hideRelated);
-
 $('clear').addEventListener('click', async () => {
   if (!domain) return;
-  hideRelated();
   paintRoute(null, null);
+  routeOf.set(domain, 'none');
   const r = await send({ type: 'remove', domain });
   if (!r || !r.ok) {
     note(r && r.error ? r.error : 'Не удалось убрать правило', true);

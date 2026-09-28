@@ -7,90 +7,165 @@
 
 const HOST = 'ru.appswire.novpn';
 
-/* «Попутные домены» — как в ZeroOmega. Сайт редко живёт на одном домене: картинки на
-   cdn.*, API на api.*, видео на своём CDN. Человек нажал «через VPN» на сайте, а
-   половина страницы всё равно идёт напрямую и не грузится. Поэтому смотрим, какие
-   сторонние хосты подгружала вкладка, и предлагаем отправить их тем же маршрутом.
+/* Что на странице НЕ загрузилось — как в ZeroOmega/SwitchyOmega, но своя реализация
+   (логика — failures.js, её проверяет тест). Следим за исходом каждого запроса вкладки:
+   сбой соединения или запрос, повисший без ответа, — кандидат на смену маршрута.
+   Прежние «попутные домены» предлагали ВСЁ, что страница подгрузила, — на сайте MSI это
+   был YouTube из встроенного видео. Теперь только то, что реально сломалось.
 
-   Только наблюдаем (webRequest.onCompleted), ничего не блокируем и не читаем: нужен
-   лишь список хостов по вкладке. Данные живут в памяти работника и никуда не уходят. */
-const related = new Map(); // tabId -> Map(host -> сколько раз)
-const RELATED_CAP = 200;
+   Только наблюдаем (webRequest без блокировки), содержимое не читаем. Данные живут в
+   памяти работника; сводка сбоев дублируется в storage.session, чтобы пережить засыпание
+   service worker (MV3 гасит его, когда захочет). */
+if (typeof self.NovpnFailures === 'undefined' && typeof importScripts === 'function') {
+  importScripts('failures.js'); // Chrome/Edge: service worker. Firefox грузит его сам (background.scripts).
+}
+const F = self.NovpnFailures;
 
-/* Общая инфраструктура, которую нет смысла тащить в VPN: метрика, реклама, шрифты,
-   публичные CDN — они есть на каждом сайте и работают откуда угодно. */
-const NOISE = new Set([
-  'google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'googlesyndication.com',
-  'googleadservices.com', 'gstatic.com', 'googleapis.com', 'google.com', 'recaptcha.net',
-  'cloudflare.com', 'cloudflareinsights.com', 'jsdelivr.net', 'unpkg.com', 'cdnjs.com',
-  'facebook.net', 'facebook.com', 'fbcdn.net', 'twitter.com', 'x.com', 'sentry.io',
-  'hotjar.com', 'criteo.com', 'adsrvr.org', 'adnxs.com', 'rubiconproject.com',
-  'yandex.ru', 'yandex.net', 'mc.yandex.ru', 'yastatic.net', 'vk.com', 'mail.ru',
-  'top-fwz1.mail.ru', 'bing.com', 'microsoft.com', 'live.com', 'apple.com', 'mozilla.org',
-]);
+const inflight = new Map(); // requestId -> {tabId, host, type, start, headers}
+const tabFailures = new Map(); // tabId -> {[base]: {n, reasons, main}}
+const routeBadge = new Map(); // tabId -> 'VPN' | '' — маршрут сайта для значка
+const hungTimers = new Map(); // tabId -> таймер перепроверки «зависших»
 
-const TWO_LEVEL = new Set([
-  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'com.br', 'com.tr',
-  'co.jp', 'ne.jp', 'co.kr', 'com.ua', 'net.ua', 'org.ua', 'com.ru', 'msk.ru', 'spb.ru',
-  'com.cn', 'com.hk', 'com.tw', 'co.in', 'co.za', 'com.mx', 'com.ar',
-]);
-
-/** Регистрируемый домен: cdn.static.example.com → example.com, a.b.co.uk → b.co.uk.
-    Правило в приложении — «домен и поддомены», поэтому предлагаем именно корень. */
-function baseDomain(host) {
-  const p = host.split('.');
-  if (p.length <= 2) return host;
-  const last2 = p.slice(-2).join('.');
-  return TWO_LEVEL.has(last2) ? p.slice(-3).join('.') : last2;
+const sessionKey = (tabId) => `fail:${tabId}`;
+const saveTimers = new Map();
+function persist(tabId) {
+  clearTimeout(saveTimers.get(tabId));
+  saveTimers.set(
+    tabId,
+    setTimeout(() => {
+      saveTimers.delete(tabId);
+      const area = chrome.storage && chrome.storage.session;
+      if (!area) return;
+      const f = tabFailures.get(tabId);
+      if (f && Object.keys(f).length) void area.set({ [sessionKey(tabId)]: f });
+      else void area.remove(sessionKey(tabId));
+    }, 300),
+  );
 }
 
-function noteHost(tabId, url) {
-  let host;
-  try {
-    const u = new URL(url);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
-    host = u.hostname.replace(/^www\./, '');
-  } catch {
+async function failuresOf(tabId) {
+  let f = tabFailures.get(tabId);
+  if (f) return f;
+  // Работник мог уснуть и проснуться — подтягиваем записанное до сна.
+  const area = chrome.storage && chrome.storage.session;
+  const saved = area ? ((await area.get(sessionKey(tabId)).catch(() => ({}))) || {})[sessionKey(tabId)] : null;
+  f = tabFailures.get(tabId) || (saved && typeof saved === 'object' ? saved : {});
+  tabFailures.set(tabId, f);
+  return f;
+}
+
+function resetTab(tabId) {
+  tabFailures.set(tabId, {});
+  for (const [id, r] of inflight) if (r.tabId === tabId) inflight.delete(id);
+  persist(tabId);
+  void applyBadge(tabId);
+}
+
+function inflightOf(tabId) {
+  const out = [];
+  for (const r of inflight.values()) if (r.tabId === tabId) out.push(r);
+  return out;
+}
+
+async function summaryFor(tabId, domain) {
+  return F.summarize(await failuresOf(tabId), inflightOf(tabId), Date.now(), domain, 10);
+}
+
+/** Перепроверить «зависшие» чуть позже порога: сами они событий не порождают. */
+function scheduleHungCheck(tabId) {
+  if (hungTimers.has(tabId)) return;
+  hungTimers.set(
+    tabId,
+    setTimeout(() => {
+      hungTimers.delete(tabId);
+      void applyBadge(tabId);
+    }, F.HUNG_MS + 300),
+  );
+}
+
+const FILTER = { urls: ['<all_urls>'] };
+
+chrome.webRequest.onBeforeRequest.addListener((d) => {
+  if (d.tabId < 0) return;
+  // Новая загрузка страницы — прошлые сбои к ней уже не относятся (после смены маршрута
+  // вкладка перезагружается, и список честно начинается с нуля).
+  if (d.type === 'main_frame') resetTab(d.tabId);
+  const host = F.hostOf(d.url);
+  if (!host) return;
+  inflight.set(d.requestId, { tabId: d.tabId, host, type: d.type, start: d.timeStamp || Date.now(), headers: false });
+  scheduleHungCheck(d.tabId);
+}, FILTER);
+
+chrome.webRequest.onHeadersReceived.addListener((d) => {
+  const r = inflight.get(d.requestId);
+  if (r) r.headers = true; // сервер ответил — дальше это не «висит», даже если тело долгое
+}, FILTER);
+
+chrome.webRequest.onBeforeRedirect.addListener((d) => {
+  const r = inflight.get(d.requestId);
+  if (!r) return;
+  const host = F.hostOf(d.redirectUrl);
+  if (!host) {
+    inflight.delete(d.requestId);
     return;
   }
-  let m = related.get(tabId);
-  if (!m) {
-    m = new Map();
-    related.set(tabId, m);
-  }
-  if (m.size >= RELATED_CAP && !m.has(host)) return;
-  m.set(host, (m.get(host) || 0) + 1);
-}
+  // Редирект — тот же requestId, но новый адрес и новое ожидание ответа.
+  Object.assign(r, { host, headers: false, start: d.timeStamp || Date.now() });
+}, FILTER);
 
-chrome.webRequest.onCompleted.addListener(
-  (d) => {
-    if (d.tabId < 0) return;
-    noteHost(d.tabId, d.url);
-  },
-  { urls: ['<all_urls>'] },
-);
-// Новая навигация во вкладке — прошлые хосты к ней уже не относятся.
-chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.url || info.status === 'loading') related.delete(tabId);
+chrome.webRequest.onCompleted.addListener((d) => {
+  const r = inflight.get(d.requestId);
+  inflight.delete(d.requestId);
+  // Повисший, но в итоге дозагрузившийся — не сбой; значок мог его уже учитывать.
+  if (r && F.hungReason(r, Date.now())) void applyBadge(r.tabId);
+}, FILTER);
+
+chrome.webRequest.onErrorOccurred.addListener((d) => {
+  const r = inflight.get(d.requestId);
+  inflight.delete(d.requestId);
+  if (d.tabId < 0) return;
+  const host = F.hostOf(d.url);
+  if (!host || F.isNoise(host)) return;
+  let reason = F.classify(d.error);
+  // Отмену (ERR_ABORTED) сбоем не считаем — кроме случая, когда запрос до этого висел
+  // без ответа: страница устала ждать и бросила его. Так делает и ZeroOmega.
+  if (!reason && r && /ABORT/i.test(d.error || '')) reason = F.hungReason(r, Date.now());
+  if (!reason) return;
+  void failuresOf(d.tabId).then((f) => {
+    F.record(f, host, reason, d.type === 'main_frame');
+    persist(d.tabId);
+    void applyBadge(d.tabId);
+  });
+}, FILTER);
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabFailures.delete(tabId);
+  routeBadge.delete(tabId);
+  for (const [id, r] of inflight) if (r.tabId === tabId) inflight.delete(id);
+  const area = chrome.storage && chrome.storage.session;
+  if (area) void area.remove(sessionKey(tabId));
 });
-chrome.tabs.onRemoved.addListener((tabId) => related.delete(tabId));
 
-/** Кандидаты «тоже отправить»: корневые домены сторонних хостов вкладки, без шума
-    и без самого сайта, по убыванию частоты. Не больше восьми — иначе это не подсказка. */
-function relatedFor(tabId, domain) {
-  const m = related.get(tabId);
-  if (!m) return [];
-  const self = baseDomain(domain);
-  const score = new Map();
-  for (const [host, n] of m) {
-    const base = baseDomain(host);
-    if (base === self || NOISE.has(base) || NOISE.has(host)) continue;
-    score.set(base, (score.get(base) || 0) + n);
+/** Значок: число доменов, которые не загрузились (янтарный) — это важнее всего; иначе
+    маршрут сайта («VPN» синим или пусто). Без открытия окна видно, что что-то не так. */
+async function applyBadge(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return;
+    const domain = domainOf(tab.url || '');
+    const n = domain ? (await summaryFor(tabId, domain)).length : 0;
+    if (n > 0) {
+      await chrome.action.setBadgeText({ tabId, text: String(n) });
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: '#D9822B' });
+      await chrome.action.setTitle({ tabId, title: `NoVPN — на странице не загрузилось: ${n}. Нажмите, чтобы выбрать маршрут.` });
+    } else {
+      await chrome.action.setBadgeText({ tabId, text: routeBadge.get(tabId) || '' });
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: '#0D7DD4' });
+      await chrome.action.setTitle({ tabId, title: 'NoVPN' });
+    }
+  } catch {
+    /* вкладку закрыли на лету — не важно */
   }
-  return [...score.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([base, n]) => ({ domain: base, hits: n }));
 }
 
 /** Один запрос — одно соединение. Ответ приходит один. */
@@ -137,9 +212,16 @@ function ask(message) {
 }
 
 chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
-  // Попутные домены отвечаем сами — это память работника, приложение тут не нужно.
-  if (req && req.type === 'related') {
-    sendResponse({ ok: true, items: relatedFor(Number(req.tabId), String(req.domain || '')) });
+  // Сбои страницы отвечаем сами — это память работника, приложение тут не нужно.
+  if (req && req.type === 'failures') {
+    summaryFor(Number(req.tabId), String(req.domain || ''))
+      .then((items) => sendResponse({ ok: true, items }))
+      .catch(() => sendResponse({ ok: true, items: [] }));
+    return true;
+  }
+  if (req && req.type === 'badge') {
+    void applyBadge(Number(req.tabId));
+    sendResponse({ ok: true });
     return false;
   }
   ask(req).then(sendResponse);
@@ -151,13 +233,14 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
 async function paint(tabId, url) {
   const domain = domainOf(url);
   if (!domain) {
-    await chrome.action.setBadgeText({ tabId, text: '' });
+    routeBadge.set(tabId, '');
+    await applyBadge(tabId);
     return;
   }
   const r = await ask({ type: 'get', domain });
   const route = r && r.ok ? r.route : null;
-  await chrome.action.setBadgeText({ tabId, text: route === 'vpn' ? 'VPN' : '' });
-  await chrome.action.setBadgeBackgroundColor({ tabId, color: '#0D7DD4' });
+  routeBadge.set(tabId, route === 'vpn' ? 'VPN' : '');
+  await applyBadge(tabId);
 }
 
 function domainOf(url) {

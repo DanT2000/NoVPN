@@ -241,3 +241,28 @@ body.blocked main {
 .rel-apply { flex: 1; padding: 8px 10px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .rel-apply:hover { background: var(--accent-light); }
 .rel-apply:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Что не загрузилось ───────────────────────────────────────
+   Строка: чекбокс · домен и причина (вторая строка, приглушённо) · текущий маршрут. */
+.fail-list label { align-items: flex-start; }
+.fail-list input[type='checkbox'] { margin-top: 2px; }
+.fail-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fail-list .fail-domain {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, Consolas, monospace; color: var(--text);
+}
+.fail-list .fail-reason { font-size: 11px; color: var(--red-fg); opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fail-list .fail-route {
+  flex: none; align-self: center; font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
+  color: var(--blue-fg); background: var(--blue-bg); opacity: 1;
+}
+.fail-list .fail-route:empty { display: none; }
+.rel-apply.secondary { background: transparent; color: var(--body); border: 1px solid var(--border-control); }
+.rel-apply.secondary:hover { background: var(--surface-hover); color: var(--text); }
+.fail-hint { margin-top: 8px; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.fail-ok {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(127, 127, 127, 0.25);
+  font-size: 12px; color: var(--green-fg);
+}
+.fail-ok::before { content: '✓ '; }
+.fail-ok[hidden], #fail[hidden] { display: none; }

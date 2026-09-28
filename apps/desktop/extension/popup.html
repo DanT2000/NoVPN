@@ -33,15 +33,18 @@
 
       <button id="clear" class="link">Убрать правило</button>
 
-      <!-- Попутные домены: что ещё подгружал этот сайт — предложить тем же маршрутом. -->
-      <section id="related" class="rel" hidden>
-        <div id="related-title" class="rel-title"></div>
-        <ul id="related-list" class="rel-list"></ul>
+      <!-- Что на странице НЕ загрузилось: только реальные сбои (сброс, нет ответа, адрес
+           не найден, завис) — выбрать им маршрут в один шаг. Обновляется вживую. -->
+      <section id="fail" class="rel" hidden>
+        <div id="fail-title" class="rel-title"></div>
+        <ul id="fail-list" class="rel-list fail-list"></ul>
         <div class="rel-actions">
-          <button id="related-apply" class="rel-apply"></button>
-          <button id="related-skip" class="link">Пропустить</button>
+          <button id="fail-vpn" class="rel-apply">Через VPN</button>
+          <button id="fail-direct" class="rel-apply secondary">Напрямую</button>
         </div>
+        <div class="fail-hint">Чаще всего помогает «Через VPN»: значит, адрес заблокирован или замедлен.</div>
       </section>
+      <div id="fail-ok" class="fail-ok" hidden>Всё на странице загрузилось</div>
     </main>
 
     <p id="note" class="note"></p>
