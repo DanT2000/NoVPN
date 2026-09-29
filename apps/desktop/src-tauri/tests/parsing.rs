@@ -557,3 +557,32 @@ fn server_host_is_always_direct_anti_loop() {
     let full = build_config(&p, &Rules { smart: false, ..Default::default() }, Some("Домен"), Ports::default());
     assert!(full.contains("DOMAIN,a.example,DIRECT"));
 }
+
+#[test]
+fn switching_route_closes_only_this_sites_connections() {
+    // Смена маршрута сайта из браузера рвёт живые соединения ТОЛЬКО к нему (и поддоменам):
+    // иначе перезагруженная страница переиспользовала бы старые, а рвать всё подряд —
+    // значит оборвать человеку загрузки и звонки.
+    use novpn_desktop::core::host_matches;
+    let d = vec!["msi.com".to_string()];
+    assert!(host_matches("msi.com", &d));
+    assert!(host_matches("account.msi.com", &d));
+    assert!(host_matches("WWW.MSI.COM.", &d));
+    assert!(!host_matches("notmsi.com", &d), "чужой домен с тем же хвостом");
+    assert!(!host_matches("msi.com.evil.net", &d));
+    assert!(!host_matches("", &d));
+    assert!(!host_matches("youtube.com", &d));
+}
+
+#[test]
+fn engine_sniffs_site_name_from_connection() {
+    // Без сниффера соединение на голый IP (браузер помнит адрес, пока сайт шёл напрямую)
+    // не матчится правилом по домену — смена «напрямую → VPN» не срабатывала сразу.
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
+    let p = parse(&link).unwrap();
+    let cfg = build_config(&p, &Rules { smart: true, ..Default::default() }, Some("Точка"), Ports::default());
+    let v: serde_yaml::Value = serde_yaml::from_str(&cfg).unwrap();
+    assert_eq!(v["sniffer"]["enable"].as_bool(), Some(true));
+    assert_eq!(v["sniffer"]["parse-pure-ip"].as_bool(), Some(true));
+    assert!(v["sniffer"]["sniff"]["TLS"]["ports"].as_sequence().unwrap().iter().any(|p| p.as_str() == Some("443")));
+}

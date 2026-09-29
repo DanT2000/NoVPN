@@ -212,7 +212,9 @@ function ask(message) {
       finish({ ok: false, error });
     });
     // Приложение может быть занято подключением — но молчать бесконечно не должно.
-    setTimeout(() => finish({ ok: false, error: 'Приложение NoVPN не отвечает' }), 4000);
+    // Запись правила ждёт, пока приложение применит его в движке (до 6 с), — ей больше.
+    const writes = message && ['set', 'set_many', 'remove'].includes(message.type);
+    setTimeout(() => finish({ ok: false, error: 'Приложение NoVPN не отвечает' }), writes ? 9000 : 4000);
     try {
       port.postMessage(message);
     } catch (e) {

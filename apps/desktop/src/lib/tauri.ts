@@ -93,6 +93,11 @@ export interface RulesPayload {
   listVpnIps: string[];
   vpnProcesses: string[];
   directProcesses: string[];
+  /** Ревизия правил из браузера, которую несёт это применение (для отметки «применено»). */
+  browserRulesRev?: number;
+  /** Домены, чей маршрут только что сменили в браузере: их живые соединения движок
+      сбросит, чтобы перезагруженная страница пошла уже новым путём. */
+  closeDomains?: string[];
 }
 
 /* ── Метаданные подписки (контракт панель↔клиент) ─────────── */
@@ -325,7 +330,9 @@ export const browsersInstalled = () => call<InstalledBrowser[]>('browsers_instal
 export const vpnConflicts = () => call<string[]>('vpn_conflicts');
 
 /** Правила, добавленные кнопкой в браузере. */
-export const browserRules = () => call<BrowserRule[]>('browser_rules');
+/** Правила из браузера и их ревизия: по ревизии приложение отмечает «применено»,
+    а расширение ждёт этой отметки, прежде чем перезагрузить вкладку. */
+export const browserRules = () => call<{ rev: number; items: BrowserRule[] }>('browser_rules');
 
 export const stateLoad = <T>(name: string) => call<T | null>('state_load', { name });
 export const stateSave = (name: string, value: unknown) =>

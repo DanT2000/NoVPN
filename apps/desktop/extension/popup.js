@@ -19,9 +19,11 @@ let domain = null;
 let tabId = null;
 
 /* Перезагрузка активной вкладки после смены маршрута. Как в SwitchyOmega/Omega Proxy:
-   уже открытая страница держит соединения по СТАРОМУ маршруту, и правило начинает
-   действовать только на новых запросах — поэтому сразу перезагружаем, чтобы «нажал →
-   через VPN → страница мгновенно переоткрылась уже по новому пути». Право tabs в манифесте. */
+   «нажал → через VPN → страница переоткрылась уже по новому пути». Но у нас маршрут
+   меняет приложение, а не браузер: перезагружать можно только ПОСЛЕ того, как оно
+   применило правило в движке и сбросило старые соединения сайта, — иначе страница
+   успевала открыться по старому пути, и казалось, что ничего не произошло. Поэтому
+   приложение отвечает на запись правила только после применения (до ~6 с). */
 function reloadTab() {
   if (tabId != null) {
     try {
@@ -130,28 +132,33 @@ async function applyFailures(route) {
   applying = true;
   $('fail-vpn').disabled = true;
   $('fail-direct').disabled = true;
-  let done = 0;
-  for (const d of picked) {
-    const res = await send({ type: 'set', domain: d, route });
-    if (res && res.ok) {
-      done += 1;
-      routeOf.set(d, route);
-    }
-  }
+  note('Применяю маршрут…');
+  // Все домены — одной записью: одно применение в движке, а не перезагрузка на каждый.
+  const res = await send({ type: 'set_many', domains: picked, route });
   $('fail-vpn').disabled = false;
   $('fail-direct').disabled = false;
   applying = false;
-  if (!done) {
-    note('Не удалось сохранить правила.', true);
+  if (!res || !res.ok) {
+    note(res && res.error ? res.error : 'Не удалось сохранить правила.', true);
     return;
   }
+  const done = picked.length;
+  for (const d of picked) routeOf.set(d, route);
   if (picked.includes(domain)) paintRoute(route, 'manual');
-  note(`Готово: ${done} ${plural(done, 'домен', 'домена', 'доменов')} ${ROUTE_WORD[route]} — страница перезагружается.`);
-  reloadTab(); // новый маршрут действует на новых запросах — переоткрываем страницу
+  note(appliedNote(res, `${done} ${plural(done, 'домен', 'домена', 'доменов')} ${ROUTE_WORD[route]}`));
+  reloadTab(); // правило уже в движке — страница откроется новым путём
 }
 
 $('fail-vpn').addEventListener('click', () => void applyFailures('vpn'));
 $('fail-direct').addEventListener('click', () => void applyFailures('direct'));
+
+/** Подпись после записи правила: применено сразу или приложение применит чуть позже
+    (VPN выключен или приложение было занято — правило всё равно сохранено). */
+function appliedNote(r, what) {
+  return r && r.applied
+    ? `Готово: ${what} — страница перезагружается уже по новому маршруту.`
+    : `Сохранено: ${what}. Приложение применит правило через пару секунд — если страница не изменилась, обновите её ещё раз.`;
+}
 
 function paintRoute(route, source) {
   document.querySelectorAll('.choice').forEach((b) => {
@@ -211,14 +218,15 @@ document.querySelectorAll('.choice').forEach((btn) => {
     if (!domain) return;
     const route = btn.dataset.route;
     paintRoute(route, 'manual');
+    note('Применяю маршрут…');
     const r = await send({ type: 'set', domain, route });
     if (!r || !r.ok) {
       note(r && r.error ? r.error : 'Не удалось сохранить правило', true);
       return;
     }
     routeOf.set(domain, route);
-    note('Готово — страница перезагружается по новому маршруту.');
-    reloadTab(); // мгновенный эффект, как в SwitchyOmega; список сбоев обновится сам
+    note(appliedNote(r, `${ROUTE_WORD[route]}`));
+    reloadTab(); // уже по новому маршруту; список сбоев обновится сам
   });
 });
 
@@ -226,12 +234,13 @@ $('clear').addEventListener('click', async () => {
   if (!domain) return;
   paintRoute(null, null);
   routeOf.set(domain, 'none');
+  note('Применяю…');
   const r = await send({ type: 'remove', domain });
   if (!r || !r.ok) {
     note(r && r.error ? r.error : 'Не удалось убрать правило', true);
     return;
   }
-  note('Правило убрано — страница перезагружается.');
+  note(r.applied ? 'Правило убрано — страница перезагружается.' : 'Правило убрано — страница перезагружается (приложение применит его через пару секунд).');
   reloadTab(); // вернулись к прямому маршруту — тоже переоткрываем страницу
 });
 

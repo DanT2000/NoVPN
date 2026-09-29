@@ -17,6 +17,12 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 pub const RULES: &str = "browser-rules";
+/// Отметка приложения «правила из браузера применены в движке»: `{"rev": N}`.
+/// Хост ждёт её, прежде чем ответить расширению, — иначе вкладка перезагружалась
+/// раньше, чем новое правило начинало действовать, и открывалась по СТАРОМУ маршруту.
+pub const RULES_APPLIED: &str = "browser-rules-applied";
+/// Сколько ждать применения. Перезагрузка движка с большим конфигом — секунда-две.
+const APPLY_WAIT: Duration = Duration::from_secs(6);
 
 /// Chrome передаёт origin расширения первым аргументом — по нему и узнаём,
 /// что нас запустили как хост, а не как приложение.
@@ -51,8 +57,47 @@ fn rules() -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn save_rules(items: Vec<Value>) -> Result<(), String> {
-    store::write(RULES, &json!({ "version": 1, "items": items }))
+/// Сохраняет правила с новой ревизией (время в мс) и возвращает её — по ней
+/// потом видно, применило ли приложение именно эту запись.
+fn save_rules(items: Vec<Value>) -> Result<u64, String> {
+    let rev = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    store::write(RULES, &json!({ "version": 1, "rev": rev, "items": items }))?;
+    Ok(rev)
+}
+
+/// Ревизия правил, которую приложение уже применило в движке.
+pub fn applied_rev() -> u64 {
+    store::read(RULES_APPLIED).and_then(|v| v.get("rev").and_then(|x| x.as_u64())).unwrap_or(0)
+}
+
+/// Дождаться, пока приложение применит ревизию `rev`. Если подключения нет —
+/// применять нечему, отвечаем сразу. `false` — не дождались (приложение занято).
+fn wait_applied(rev: u64) -> bool {
+    if !connected() {
+        return false;
+    }
+    let deadline = std::time::Instant::now() + APPLY_WAIT;
+    while std::time::Instant::now() < deadline {
+        if applied_rev() >= rev {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// Ответ на запись правил: сохранить, по желанию дождаться применения.
+fn saved(result: Result<u64, String>, wait: bool) -> Value {
+    match result {
+        Ok(rev) => {
+            let applied = wait && wait_applied(rev);
+            json!({ "ok": true, "applied": applied })
+        }
+        Err(e) => json!({ "ok": false, "error": e }),
+    }
 }
 
 /// Подключение проверяем не по сохранённому состоянию, а по тому, слушает ли
@@ -98,11 +143,12 @@ pub fn normalize_domain(raw: &str) -> String {
     lower.strip_prefix("www.").unwrap_or(&lower).to_string()
 }
 
+/// Для самопроверки: без ожидания применения (там движок свой и отметок не пишет).
 pub fn handle_test(msg: &Value) -> Value {
-    handle(msg)
+    handle(msg, false)
 }
 
-fn handle(msg: &Value) -> Value {
+fn handle(msg: &Value, wait: bool) -> Value {
     let kind = msg.get("type").and_then(|x| x.as_str()).unwrap_or("");
     let domain = normalize_domain(msg.get("domain").and_then(|x| x.as_str()).unwrap_or(""));
 
@@ -127,10 +173,29 @@ fn handle(msg: &Value) -> Value {
                 .filter(|r| r.get("domain").and_then(|d| d.as_str()) != Some(domain.as_str()))
                 .collect();
             items.push(json!({ "domain": domain, "route": route }));
-            match save_rules(items) {
-                Ok(()) => json!({ "ok": true }),
-                Err(e) => json!({ "ok": false, "error": e }),
+            saved(save_rules(items), wait)
+        }
+
+        // Несколько доменов одним махом («что не загрузилось» → через VPN): одна
+        // запись и одно применение в движке, а не по перезагрузке на каждый домен.
+        "set_many" => {
+            let route = msg.get("route").and_then(|x| x.as_str()).unwrap_or("");
+            let list: Vec<String> = msg
+                .get("domains")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|d| d.as_str()).map(normalize_domain).filter(|d| !d.is_empty()).collect())
+                .unwrap_or_default();
+            if list.is_empty() || list.len() > 50 || !matches!(route, "vpn" | "direct") {
+                return json!({ "ok": false, "error": "Неверный запрос" });
             }
+            let mut items: Vec<Value> = rules()
+                .into_iter()
+                .filter(|r| r.get("domain").and_then(|d| d.as_str()).map_or(true, |d| !list.iter().any(|x| x == d)))
+                .collect();
+            for d in &list {
+                items.push(json!({ "domain": d, "route": route }));
+            }
+            saved(save_rules(items), wait)
         }
 
         "remove" => {
@@ -138,10 +203,7 @@ fn handle(msg: &Value) -> Value {
                 .into_iter()
                 .filter(|r| r.get("domain").and_then(|d| d.as_str()) != Some(domain.as_str()))
                 .collect();
-            match save_rules(items) {
-                Ok(()) => json!({ "ok": true }),
-                Err(e) => json!({ "ok": false, "error": e }),
-            }
+            saved(save_rules(items), wait)
         }
 
         _ => json!({ "ok": false, "error": "Неизвестный запрос" }),
@@ -152,7 +214,7 @@ pub fn run() {
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     while let Some(msg) = read_message(&mut stdin) {
-        let reply = handle(&msg);
+        let reply = handle(&msg, true);
         write_message(&mut stdout, &reply);
     }
 }

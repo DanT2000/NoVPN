@@ -278,6 +278,25 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
     }
     root.insert(s("dns"), Value::Mapping(dns));
 
+    // Имя сайта — по самому соединению (SNI в TLS, Host в HTTP). Без этого соединение
+    // на голый IP не матчится правилом по домену: пока сайт шёл напрямую, браузер помнит
+    // его настоящий адрес (до минуты), и смена «напрямую → через VPN» из расширения не
+    // срабатывала до истечения кэша. Адрес назначения НЕ подменяем — только для правил.
+    let mut sniffer = Mapping::new();
+    sniffer.insert(s("enable"), Value::Bool(true));
+    sniffer.insert(s("parse-pure-ip"), Value::Bool(true));
+    sniffer.insert(s("force-dns-mapping"), Value::Bool(true));
+    let ports_of = |list: &[&str]| {
+        let mut m = Mapping::new();
+        m.insert(s("ports"), Value::Sequence(list.iter().map(|p| s(p)).collect()));
+        m
+    };
+    let mut sniff = Mapping::new();
+    sniff.insert(s("TLS"), Value::Mapping(ports_of(&["443", "8443"])));
+    sniff.insert(s("HTTP"), Value::Mapping(ports_of(&["80", "8080-8880"])));
+    sniffer.insert(s("sniff"), Value::Mapping(sniff));
+    root.insert(s("sniffer"), Value::Mapping(sniffer));
+
     if rules.tunnel {
         // Свой сетевой адаптер вместо системного прокси. Только так видно
         // трафик программ, которые про настройки Windows не спрашивают.
@@ -673,6 +692,66 @@ pub fn close_connections(controller_port: u16) -> Result<(), String> {
     let mut resp = String::new();
     let _ = stream.read_to_string(&mut resp);
     Ok(())
+}
+
+/// Хост соединения относится к одному из доменов (сам домен или поддомен)?
+pub fn host_matches(host: &str, domains: &[String]) -> bool {
+    let h = host.trim().trim_end_matches('.').to_lowercase();
+    let h = h.strip_prefix("www.").unwrap_or(&h);
+    !h.is_empty()
+        && domains.iter().any(|d| {
+            let d = d.trim().trim_end_matches('.').to_lowercase();
+            !d.is_empty() && (h == d || h.ends_with(&format!(".{d}")))
+        })
+}
+
+/// Простой запрос к контроллеру по HTTP/1.0: Go-сервер mihomo отвечает на него без
+/// chunked-кодирования, тело читается до закрытия соединения.
+fn controller_http10(port: u16, method: &str, path: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(4))).ok()?;
+    let req = format!("{method} {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut resp = Vec::new();
+    let _ = stream.read_to_end(&mut resp);
+    let text = String::from_utf8_lossy(&resp).into_owned();
+    text.split_once("\r\n\r\n").map(|(_, b)| b.to_string())
+}
+
+/// Сбросить ЖИВЫЕ соединения движка только к указанным доменам (и их поддоменам).
+/// Нужно после смены маршрута сайта: браузер держит открытые соединения и
+/// переиспользует их при перезагрузке — без сброса страница шла бы по старому пути.
+/// Остальное (загрузки, звонки, игры) не трогаем. Возвращает, сколько сброшено.
+pub fn close_connections_for(controller_port: u16, domains: &[String]) -> usize {
+    if domains.is_empty() {
+        return 0;
+    }
+    let Some(body) = controller_http10(controller_port, "GET", "/connections") else {
+        return 0;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return 0;
+    };
+    let ids: Vec<String> = v
+        .get("connections")
+        .and_then(|c| c.as_array())
+        .map(|list| {
+            list.iter()
+                .filter(|c| {
+                    let m = &c["metadata"];
+                    host_matches(m["host"].as_str().unwrap_or(""), domains)
+                        || host_matches(m["sniffHost"].as_str().unwrap_or(""), domains)
+                })
+                .filter_map(|c| c["id"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    for id in &ids {
+        let _ = controller_http10(controller_port, "DELETE", &format!("/connections/{id}"));
+    }
+    ids.len()
 }
 
 pub fn select_proxy(controller_port: u16, group: &str, name: &str) -> Result<(), String> {

@@ -88,6 +88,15 @@ pub struct RulesIn {
     pub vpn_processes: Vec<String>,
     #[serde(default)]
     pub direct_processes: Vec<String>,
+    /// Ревизия правил из браузера, которую несёт это применение. После перезагрузки
+    /// движка пишем отметку «применено» — её ждёт нативный хост, чтобы расширение
+    /// перезагрузило вкладку уже по НОВОМУ маршруту, а не раньше времени.
+    #[serde(default)]
+    pub browser_rules_rev: Option<u64>,
+    /// Домены, чей маршрут только что сменили в браузере: сбрасываем их живые
+    /// соединения, иначе браузер переиспользует старые и идёт прежним путём.
+    #[serde(default)]
+    pub close_domains: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -701,8 +710,10 @@ pub fn vpn_connect(
 pub fn vpn_reload(
     running: tauri::State<'_, Running>,
     selected: Option<String>,
-    rules: RulesIn,
+    mut rules: RulesIn,
 ) -> Result<(), String> {
+    let close_domains = std::mem::take(&mut rules.close_domains);
+    let browser_rev = rules.browser_rules_rev;
     let ports = Ports::default();
     // Если движок не поднят, применять нечего: правила уйдут в конфиг при
     // следующем подключении.
@@ -724,6 +735,15 @@ pub fn vpn_reload(
     let path = dir.join("config.yaml");
     store::atomic_write(&path, config.as_bytes()).map_err(|e| format!("Не удалось записать конфиг: {e}"))?;
     core::reload(ports.controller, &path)?;
+    // Смена маршрута сайта из браузера: рвём ЖИВЫЕ соединения только к этим доменам
+    // (загрузки, звонки и прочее не трогаем) и отмечаем применение — после этого
+    // расширение перезагружает вкладку, и она идёт уже новым путём.
+    if !close_domains.is_empty() {
+        let _ = core::close_connections_for(ports.controller, &close_domains);
+    }
+    if let Some(rev) = browser_rev {
+        let _ = store::write(crate::host::RULES_APPLIED, &serde_json::json!({ "rev": rev }));
+    }
     // Переключение сервера на подключённом клиенте: reload сохраняет прежний выбор
     // группы select, поэтому явно указываем движку новый сервер — иначе смена
     // сервера не срабатывала бы без ручного «Отключить». Best-effort: если выбор
@@ -964,11 +984,11 @@ pub async fn meta_fetch(url: Option<String>) -> crate::meta::MetaResult {
 /// `async` — вне главного потока: опрос каждые 700 мс; чтение файла обычно мгновенно,
 /// но антивирус или занятый диск не должны подмораживать окно (см. vpn_alive).
 #[tauri::command(async)]
-pub fn browser_rules() -> Vec<Value> {
-    store::read(crate::host::RULES)
-        .and_then(|v| v.get("items").cloned())
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default()
+pub fn browser_rules() -> Value {
+    let v = store::read(crate::host::RULES).unwrap_or(Value::Null);
+    let items = v.get("items").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let rev = v.get("rev").and_then(|x| x.as_u64()).unwrap_or(0);
+    serde_json::json!({ "rev": rev, "items": items })
 }
 
 /// Открывает папку настроек NoVPN в проводнике — для диагностики.

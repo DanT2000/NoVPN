@@ -315,6 +315,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [nav, setNav] = useState<Nav>(start.nav);
   const [error, setError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  /* Правила из браузера: последняя увиденная ревизия (её применение отмечаем для
+     расширения) и домены, чей маршрут сменился, — их соединения сбросит движок. */
+  const [browserRev, setBrowserRev] = useState(0);
+  const browserSeen = useRef<{ init: boolean; rev: number; routes: Map<string, string>; pending: Set<string> }>({
+    init: false,
+    rev: 0,
+    routes: new Map(),
+    pending: new Set(),
+  });
   const [noInternet, setNoInternet] = useState(false);
   // Списки с сервера держим отдельно от состояния: они большие, приходят с
   // диска и сохранять их второй раз незачем.
@@ -505,8 +514,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!inTauri) return;
     let stop = false;
     const tick = async () => {
-      const rules = await browserRules().catch(() => null);
-      if (stop || !rules) return;
+      const got = await browserRules().catch(() => null);
+      if (stop || !got) return;
+      const rules = got.items ?? [];
+      const seen = browserSeen.current;
+      const now = new Map(rules.map((r) => [r.domain, r.route as string]));
+      if (!seen.init) {
+        // Первый просмотр после запуска — это не правка: запоминаем как есть, сбрасывать
+        // нечего. Отдельным флагом, а не по ревизии: у файла от старой версии хоста ревизии
+        // нет, и первая настоящая правка иначе принималась за «начальную загрузку» —
+        // соединения сайта не сбрасывались, и страница шла прежним путём (живой прогон).
+        seen.init = true;
+        seen.routes = now;
+        seen.rev = got.rev || 0;
+      } else if ((got.rev || 0) !== seen.rev) {
+        // Что изменилось с прошлого раза: добавленные, убранные, сменившие маршрут.
+        for (const [d, route] of now) if (seen.routes.get(d) !== route) seen.pending.add(d);
+        for (const d of seen.routes.keys()) if (!now.has(d)) seen.pending.add(d);
+        seen.routes = now;
+        seen.rev = got.rev || 0;
+        setBrowserRev(seen.rev);
+      }
       setS((x) => {
         const byDomain = new Map(rules.map((r) => [r.domain, r.route]));
         // Прежние правила из браузера, которых больше нет, убираем.
@@ -533,7 +561,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     };
     void tick();
-    const id = window.setInterval(tick, 700);
+    // Чаще, чем раньше (было 700 мс): расширение ждёт применения, чтобы перезагрузить вкладку.
+    const id = window.setInterval(tick, 400);
     // Правило добавляют в БРАУЗЕРЕ, то есть окно приложения в этот момент скрыто.
     // Раньше Chromium душил таймеры фонового webview (до раза в минуту) — и правило
     // «не применялось на горячую», пока не откроешь окно. Теперь фоновое throttling
@@ -704,11 +733,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!inTauri || !loaded.current || !live) return;
     const id = window.setTimeout(() => {
-      void vpnReload(nodeFor(s)?.id ?? s.serverId, rulesOf(s, srv)).catch((e: unknown) => setError(String(e)));
-    }, 500);
+      // Правка из браузера: передаём её ревизию (движок отметит «применено» — расширение
+      // ждёт этого, чтобы перезагрузить вкладку уже по новому маршруту) и домены, чьи
+      // живые соединения надо сбросить (иначе браузер переиспользует старые).
+      const seen = browserSeen.current;
+      const closeDomains = [...seen.pending];
+      const rules = { ...rulesOf(s, srv), browserRulesRev: browserRev || undefined, closeDomains };
+      void vpnReload(nodeFor(s)?.id ?? s.serverId, rules)
+        .then(() => {
+          for (const d of closeDomains) seen.pending.delete(d);
+        })
+        .catch((e: unknown) => setError(String(e)));
+    }, 250);
     return () => window.clearTimeout(id);
   }, [
     live,
+    browserRev,
     s.apps,
     s.sites,
     s.lists,
