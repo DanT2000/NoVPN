@@ -573,16 +573,3 @@ fn switching_route_closes_only_this_sites_connections() {
     assert!(!host_matches("", &d));
     assert!(!host_matches("youtube.com", &d));
 }
-
-#[test]
-fn engine_sniffs_site_name_from_connection() {
-    // Без сниффера соединение на голый IP (браузер помнит адрес, пока сайт шёл напрямую)
-    // не матчится правилом по домену — смена «напрямую → VPN» не срабатывала сразу.
-    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
-    let p = parse(&link).unwrap();
-    let cfg = build_config(&p, &Rules { smart: true, ..Default::default() }, Some("Точка"), Ports::default());
-    let v: serde_yaml::Value = serde_yaml::from_str(&cfg).unwrap();
-    assert_eq!(v["sniffer"]["enable"].as_bool(), Some(true));
-    assert_eq!(v["sniffer"]["parse-pure-ip"].as_bool(), Some(true));
-    assert!(v["sniffer"]["sniff"]["TLS"]["ports"].as_sequence().unwrap().iter().any(|p| p.as_str() == Some("443")));
-}

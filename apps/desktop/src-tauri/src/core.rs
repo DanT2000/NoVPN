@@ -278,25 +278,6 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
     }
     root.insert(s("dns"), Value::Mapping(dns));
 
-    // Имя сайта — по самому соединению (SNI в TLS, Host в HTTP). Без этого соединение
-    // на голый IP не матчится правилом по домену: пока сайт шёл напрямую, браузер помнит
-    // его настоящий адрес (до минуты), и смена «напрямую → через VPN» из расширения не
-    // срабатывала до истечения кэша. Адрес назначения НЕ подменяем — только для правил.
-    let mut sniffer = Mapping::new();
-    sniffer.insert(s("enable"), Value::Bool(true));
-    sniffer.insert(s("parse-pure-ip"), Value::Bool(true));
-    sniffer.insert(s("force-dns-mapping"), Value::Bool(true));
-    let ports_of = |list: &[&str]| {
-        let mut m = Mapping::new();
-        m.insert(s("ports"), Value::Sequence(list.iter().map(|p| s(p)).collect()));
-        m
-    };
-    let mut sniff = Mapping::new();
-    sniff.insert(s("TLS"), Value::Mapping(ports_of(&["443", "8443"])));
-    sniff.insert(s("HTTP"), Value::Mapping(ports_of(&["80", "8080-8880"])));
-    sniffer.insert(s("sniff"), Value::Mapping(sniff));
-    root.insert(s("sniffer"), Value::Mapping(sniffer));
-
     if rules.tunnel {
         // Свой сетевой адаптер вместо системного прокси. Только так видно
         // трафик программ, которые про настройки Windows не спрашивают.
