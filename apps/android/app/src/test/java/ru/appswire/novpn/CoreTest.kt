@@ -420,6 +420,30 @@ class CoreTest {
     }
 
     @Test
+    fun `наш dns при сбое идёт через туннель, свой dns человека — нет`() {
+        val parsed = Sub.parse("vless://u1@a.example:443#Х")
+        fun dns(provider: String): Map<*, *> {
+            val root = Yaml().load<Map<String, Any?>>(
+                Config.build(parsed, Rules(dnsProvider = provider), selected = null, tunFd = 3),
+            )
+            return root["dns"] as Map<*, *>
+        }
+        for (p in listOf("", "cloudflare", "google", "quad9", "   ")) {
+            val d = dns(p)
+            assertEquals(
+                listOf("https://1.1.1.1/dns-query#NoVPN", "https://8.8.8.8/dns-query#NoVPN"),
+                d["fallback"],
+            )
+            // Только при сбое: без geoip=false mihomo слал бы в запасной всё «не китайское».
+            assertEquals(false, (d["fallback-filter"] as Map<*, *>)["geoip"])
+        }
+        // Свой DNS (домашний AdGuard) не дублируем: запасной путь обходил бы его фильтры.
+        val own = dns("192.168.2.5")
+        assertEquals(listOf("192.168.2.5"), own["nameserver"])
+        assertFalse(own.containsKey("fallback"))
+    }
+
+    @Test
     fun `строгий private dns не понижается до открытого резолвера`() {
         val parsed = Sub.parse("vless://u1@a.example:443#Х")
         val root = Yaml().load<Map<String, Any?>>(

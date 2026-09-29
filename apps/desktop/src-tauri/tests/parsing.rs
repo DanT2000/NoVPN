@@ -429,6 +429,60 @@ fn custom_dns_is_used_as_nameserver() {
     assert!(empty.contains("1.1.1.1"), "пустой свой DNS -> Cloudflare");
 }
 
+fn seq(v: &serde_yaml::Value) -> Vec<String> {
+    v.as_sequence()
+        .map(|s| s.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn server_address_resolves_without_doh_in_any_mode() {
+    // Адрес VPN-сервера разрешаем DNS системы + Яндексом, а НЕ зарубежным DoH: если
+    // провайдер закрыл Cloudflare, а запасной DNS идёт через туннель, которого ещё нет,
+    // — круг, и приложение не подключится вовсе (на тестовом сервере 30.09.2026 так и было:
+    // «1.vpn.appswire.ru: dns resolve failed»). В обоих режимах — подключаться надо всегда.
+    let link = format!(
+        "vless://{UUID}@vpn.example:443?security=reality&pbk=K#Домен\n\
+         vless://{UUID}@203.0.113.7:443?security=reality&pbk=K#Адрес"
+    );
+    let p = parse(&link).unwrap();
+    for smart in [true, false] {
+        let cfg = build_config(&p, &Rules { smart, ..Default::default() }, Some("Домен"), Ports::default());
+        let v: serde_yaml::Value = serde_yaml::from_str(&cfg).unwrap();
+        let policy = &v["dns"]["nameserver-policy"];
+        assert_eq!(seq(&policy["+.vpn.example"]), vec!["system", "77.88.8.8", "77.88.8.1"], "smart={smart}");
+        assert!(seq(&v["dns"]["fake-ip-filter"]).contains(&"+.vpn.example".to_string()), "серверу нужен настоящий IP");
+        // IP-адрес сервера разрешать не нужно — никакой политики для него.
+        assert!(!cfg.contains("+.203.0.113.7"), "адрес-литерал в DNS не попадает");
+    }
+}
+
+#[test]
+fn our_dns_falls_back_through_tunnel_but_persons_own_does_not() {
+    let link = format!("vless://{UUID}@a.example:443?security=reality&pbk=K#Точка");
+    let p = parse(&link).unwrap();
+    for provider in ["", "cloudflare", "google", "quad9", "   "] {
+        let cfg = build_config(&p, &Rules { dns_provider: provider.into(), ..Default::default() }, Some("Точка"), Ports::default());
+        let v: serde_yaml::Value = serde_yaml::from_str(&cfg).unwrap();
+        let dns = &v["dns"];
+        // Наш DNS не ответил — тот же запрос через туннель, с сервера.
+        assert_eq!(
+            seq(&dns["fallback"]),
+            vec!["https://1.1.1.1/dns-query#NoVPN", "https://8.8.8.8/dns-query#NoVPN"],
+            "провайдер {provider:?}"
+        );
+        // Только при сбое: без geoip:false mihomo слал бы в запасной всё «не китайское».
+        assert_eq!(dns["fallback-filter"]["geoip"].as_bool(), Some(false));
+        // Имена DoH-серверов — DNS системы + Яндекс, а не встроенные китайские.
+        assert_eq!(seq(&dns["default-nameserver"]), vec!["system", "77.88.8.8", "77.88.8.1"]);
+    }
+    // Свой DNS человека (домашний AdGuard) не дублируем: запасной путь обходил бы его фильтры.
+    let own = build_config(&p, &Rules { dns_provider: "192.168.2.5".into(), ..Default::default() }, Some("Точка"), Ports::default());
+    let v: serde_yaml::Value = serde_yaml::from_str(&own).unwrap();
+    assert_eq!(seq(&v["dns"]["nameserver"]), vec!["192.168.2.5"]);
+    assert!(v["dns"].get("fallback").is_none(), "у своего DNS человека запасного пути нет");
+}
+
 /* ── Контракт панель↔клиент (docs/NOVPN-CLIENT-CONTRACT.md) ──────────────── */
 
 #[test]

@@ -213,7 +213,18 @@ object Config {
         serverDomains.forEach { fakeFilter += "+.$it" }
         dns["fake-ip-filter"] = fakeFilter
 
-        dns["nameserver"] = nameservers(rules.dnsProvider)
+        val (ns, ownDns) = nameservers(rules.dnsProvider)
+        dns["nameserver"] = ns
+        // Запасной путь для НАШЕГО DNS: если выбранный из списка резолвер не ответил
+        // (провайдер режет Cloudflare/Google), тот же запрос уходит ЧЕРЕЗ ТУННЕЛЬ и
+        // разрешается с сервера — местная сеть ему уже не мешает (как Amnezia DNS). Не
+        // гонка: движок ждёт основной ответ и идёт сюда только при ошибке или пустом
+        // ответе; geoip выключен, иначе mihomo слал бы сюда всё «не китайское». Свой DNS
+        // человека не дублируем — он выбран сознательно, запасной обходил бы его фильтры.
+        if (!ownDns) {
+            dns["fallback"] = TUNNEL_FALLBACK_DNS.map { "$it#$GROUP" }
+            dns["fallback-filter"] = mapOf("geoip" to false)
+        }
 
         // «system» тут не годится: на Android нет /etc/resolv.conf, движок просто
         // не найдёт резолвер. Подставляем реальные адреса, полученные у системы.
@@ -278,17 +289,22 @@ object Config {
         return host in FOREIGN_PUBLIC_DNS
     }
 
-    private fun nameservers(provider: String): List<String> {
+    /** Запасной DNS через туннель (к адресу дописывается `#NoVPN`): спрашивает уже сервер.
+     *  Адреса, а не имена — их не надо сначала разрешать. */
+    private val TUNNEL_FALLBACK_DNS = listOf("https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query")
+
+    /** Резолверы и признак «свой DNS человека» (true), а не выбранный из списка. */
+    private fun nameservers(provider: String): Pair<List<String>, Boolean> {
         val cloudflare = listOf("https://1.1.1.1/dns-query", "https://cloudflare-dns.com/dns-query")
         return when (provider) {
-            "google" -> listOf("https://dns.google/dns-query", "https://8.8.8.8/dns-query")
-            "quad9" -> listOf("https://dns.quad9.net/dns-query", "https://9.9.9.9/dns-query")
-            "cloudflare", "" -> cloudflare
+            "google" -> listOf("https://dns.google/dns-query", "https://8.8.8.8/dns-query") to false
+            "quad9" -> listOf("https://dns.quad9.net/dns-query", "https://9.9.9.9/dns-query") to false
+            "cloudflare", "" -> cloudflare to false
             else -> {
                 // Свой DNS: DoH-URL, tls:// или адрес. Несколько — через запятую.
                 val parts = provider.split(",").map { it.trim() }
                     .filter { it.isNotEmpty() && !it.any(Char::isWhitespace) }
-                parts.ifEmpty { cloudflare }
+                if (parts.isEmpty()) cloudflare to false else parts to true
             }
         }
     }

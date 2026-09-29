@@ -31,6 +31,11 @@ pub const GROUP: &str = "NoVPN";
 /// российские сервисы. Тот же список, что на Android (Config.kt, RU_FALLBACK_DNS).
 const RU_FALLBACK_DNS: [&str; 2] = ["77.88.8.8", "77.88.8.1"];
 
+/// Запасной DNS через туннель (к адресу дописывается `#NoVPN`): спрашивает уже сервер,
+/// поэтому блокировки и сбои местной сети на него не влияют. Адреса, а не имена —
+/// их не надо сначала разрешать.
+const TUNNEL_FALLBACK_DNS: [&str; 2] = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"];
+
 /// Локальные и внутрисетевые доменные зоны. Всегда идут напрямую и всегда
 /// разрешаются системным DNS: через туннель они не имеют смысла, а сломать
 /// доступ к роутеру и домашним сервисам — верный способ разозлить человека.
@@ -186,6 +191,14 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
     // Фейковый IP не выдаём тому, что и так резолвится локально — иначе
     // ломается loopback и сервисы, которые сами обращаются по IP.
     let mut fake_filter = vec![s("localhost"), s("+.localhost")];
+    // Адреса самих VPN-серверов движок разрешает сам, чтобы дозвониться до них, — им
+    // нужен настоящий IP, а не фейковый.
+    let hosts = server_hosts(parsed);
+    let server_domains: Vec<String> =
+        hosts.iter().filter(|h| !is_ip_literal(h.trim())).filter_map(|h| clean_domain(h)).collect();
+    for d in &server_domains {
+        fake_filter.push(s(&format!("+.{d}")));
+    }
     if rules.bypass_local {
         // При включённом обходе локальные зоны разрешает системный DNS: он
         // знает домен домашней/офисной сети, а публичный DoH — нет.
@@ -228,10 +241,11 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
             "https://cloudflare-dns.com/dns-query".to_string(),
         ]
     };
-    let ns: Vec<String> = match rules.dns_provider.as_str() {
-        "google" => vec!["https://dns.google/dns-query".into(), "https://8.8.8.8/dns-query".into()],
-        "quad9" => vec!["https://dns.quad9.net/dns-query".into(), "https://9.9.9.9/dns-query".into()],
-        "cloudflare" | "" => cloudflare(),
+    // Второе значение — DNS выбрал сам человек (свой адрес), а не мы.
+    let (ns, own_dns): (Vec<String>, bool) = match rules.dns_provider.as_str() {
+        "google" => (vec!["https://dns.google/dns-query".into(), "https://8.8.8.8/dns-query".into()], false),
+        "quad9" => (vec!["https://dns.quad9.net/dns-query".into(), "https://9.9.9.9/dns-query".into()], false),
+        "cloudflare" | "" => (cloudflare(), false),
         custom => {
             // Свой DNS: DoH-URL (https://…), tls://, или адрес (192.168.1.1).
             // Несколько — через запятую. Мусор/пустое откатываем на Cloudflare.
@@ -241,13 +255,37 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
                 .filter(|p| !p.is_empty() && !p.contains(char::is_whitespace))
                 .collect();
             if parts.is_empty() {
-                cloudflare()
+                (cloudflare(), false)
             } else {
-                parts
+                (parts, true)
             }
         }
     };
     dns.insert(s("nameserver"), Value::Sequence(ns.into_iter().map(|x| s(&x)).collect()));
+    // Запасной путь для НАШЕГО DNS: если выбранный из списка резолвер не ответил
+    // (провайдер режет Cloudflare/Google, как UDP к 1.1.1.1 у владельца 29.09.2026), тот
+    // же запрос уходит ЧЕРЕЗ ТУННЕЛЬ и разрешается с сервера — местная сеть ему уже не
+    // мешает (как Amnezia DNS). Это именно запасной путь, а не гонка: движок сначала ждёт
+    // основной ответ и идёт сюда только при ошибке или пустом ответе; geoip выключен,
+    // иначе по умолчанию mihomo слал бы сюда всё «не китайское». Свой DNS человека
+    // (домашний AdGuard и т. п.) НЕ дублируем: он выбран сознательно, и запасной путь
+    // обходил бы его фильтры.
+    if !own_dns {
+        dns.insert(
+            s("fallback"),
+            Value::Sequence(TUNNEL_FALLBACK_DNS.iter().map(|x| s(&format!("{x}#{GROUP}"))).collect()),
+        );
+        let mut filter = Mapping::new();
+        filter.insert(s("geoip"), Value::Bool(false));
+        dns.insert(s("fallback-filter"), Value::Mapping(filter));
+    }
+    // Чем разрешать имена самих DoH-серверов (cloudflare-dns.com, dns.google, свой
+    // DoH). Без этого ключа mihomo берёт встроенные китайские 114.114.114.114 и
+    // 223.5.5.5. Сначала DNS системы — то, что настроил человек, — и параллельно
+    // Яндекс на случай, если он молчит.
+    let mut bootstrap = vec![s("system")];
+    bootstrap.extend(RU_FALLBACK_DNS.iter().map(|x| s(x)));
+    dns.insert(s("default-nameserver"), Value::Sequence(bootstrap));
     let mut policy = Mapping::new();
     if rules.bypass_local {
         for d in LOCAL_DOMAINS {
@@ -271,6 +309,12 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
         Value::Sequence(v)
     };
     for d in &direct_domains {
+        policy.insert(s(&format!("+.{d}")), direct_ns());
+    }
+    // Адрес самого VPN-сервера — тоже system + Яндекс, в любом режиме. Через DoH его
+    // разрешать нельзя: если провайдер закрыл Cloudflare, а запасной путь идёт через
+    // туннель, которого ещё нет, — круг, и приложение не подключится вообще.
+    for d in &server_domains {
         policy.insert(s(&format!("+.{d}")), direct_ns());
     }
     if !policy.is_empty() {
@@ -325,17 +369,6 @@ pub fn build_config(parsed: &Parsed, rules: &Rules, selected: Option<&str>, port
 
     // Адреса самих VPN-серверов — для анти-петли: трафик к серверу никогда не
     // должен заворачиваться в туннель к нему же.
-    let hosts: Vec<String> = match parsed {
-        Parsed::Nodes(nodes) => nodes
-            .iter()
-            .filter_map(|n| n.map.get(s("server")).and_then(|v| v.as_str()).map(String::from))
-            .collect(),
-        Parsed::Clash(v) => v
-            .get("proxies")
-            .and_then(|p| p.as_sequence())
-            .map(|seq| seq.iter().filter_map(|p| p.get("server").and_then(|x| x.as_str()).map(String::from)).collect())
-            .unwrap_or_default(),
-    };
     root.insert(s("rules"), Value::Sequence(build_rules(rules, &hosts)));
 
     let body = serde_yaml::to_string(&Value::Mapping(root))
@@ -407,6 +440,21 @@ fn push_local_bypass(out: &mut Vec<Value>, r: &Rules) {
         if let Some(d) = clean_domain(d) {
             out.push(s(&format!("DOMAIN-SUFFIX,{d},DIRECT")));
         }
+    }
+}
+
+/// Адреса (`server`) всех точек подписки — домены или IP.
+fn server_hosts(parsed: &Parsed) -> Vec<String> {
+    match parsed {
+        Parsed::Nodes(nodes) => nodes
+            .iter()
+            .filter_map(|n| n.map.get(s("server")).and_then(|v| v.as_str()).map(String::from))
+            .collect(),
+        Parsed::Clash(v) => v
+            .get("proxies")
+            .and_then(|p| p.as_sequence())
+            .map(|seq| seq.iter().filter_map(|p| p.get("server").and_then(|x| x.as_str()).map(String::from)).collect())
+            .unwrap_or_default(),
     }
 }
 
