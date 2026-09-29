@@ -180,6 +180,17 @@ mod win {
         }
     }
 
+    /// Сносит задачу-движок. Вызывает сам движок (у него права администратора) по
+    /// команде деинсталлятора: тот ставится без прав и снести elevated-задачу не может,
+    /// а оставленная задача с наивысшими правами смотрела бы на папку, куда может
+    /// писать кто угодно от имени пользователя, — готовый обход UAC.
+    pub fn delete_engine_task() {
+        let _ = std::process::Command::new("schtasks")
+            .args(["/Delete", "/TN", ENGINE_TASK, "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+
     /// Сносит старую задачу «NoVPN Autostart» (поднимала с правами всё окно) —
     /// миграция на схему «обычное окно + отдельный движок».
     pub fn delete_legacy_task() {
@@ -205,7 +216,7 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{any_enabled, create_engine_task, delete_legacy_task, run_task, sync, task_exists};
+pub use win::{any_enabled, create_engine_task, delete_engine_task, delete_legacy_task, run_task, sync, task_exists};
 
 #[cfg(not(windows))]
 pub fn any_enabled() -> bool {
@@ -223,6 +234,8 @@ pub fn run_task() -> bool {
 pub fn create_engine_task() -> Result<(), String> {
     Ok(())
 }
+#[cfg(not(windows))]
+pub fn delete_engine_task() {}
 #[cfg(not(windows))]
 pub fn delete_legacy_task() {}
 #[cfg(not(windows))]

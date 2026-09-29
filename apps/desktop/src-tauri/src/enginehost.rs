@@ -35,6 +35,10 @@ pub struct Control {
     /// поле не знают и выходят по `want: false` через паузу простоя.
     #[serde(default)]
     pub quit: bool,
+    /// Вместе с `quit`: приложение удаляют — снести свою задачу планировщика и выйти.
+    /// Пишет только деинсталлятор (он без прав, а задача создана с правами).
+    #[serde(default)]
+    pub uninstall: bool,
 }
 
 /// Статус движка. Пишет хост, читает интерфейс — чтобы отличать «хост поднят» от
@@ -100,19 +104,20 @@ pub fn request_start(ports: Ports) -> Result<(), String> {
         mixed_port: ports.mixed,
         controller_port: ports.controller,
         quit: false,
+        uninstall: false,
     })
 }
 
 /// Попросить движок выключиться. Безвредно, даже если хост не запущен.
 pub fn request_stop() {
     let prev = read_control().unwrap_or_default();
-    let _ = write_control(&Control { want: false, ..prev });
+    let _ = write_control(&Control { want: false, uninstall: false, ..prev });
 }
 
 /// Попросить хост завершиться совсем (перед установкой обновления).
 pub fn request_quit() {
     let prev = read_control().unwrap_or_default();
-    let _ = write_control(&Control { want: false, quit: true, ..prev });
+    let _ = write_control(&Control { want: false, quit: true, uninstall: false, ..prev });
 }
 
 /// Хоста нет: статус удалён (штатный выход) или пульс давно не обновлялся
@@ -143,6 +148,11 @@ fn read_control() -> Option<Control> {
     serde_json::from_str(&text).ok()
 }
 
+/// Команда деинсталлятора «снеси задачу и выйди»: только вместе с quit и без want.
+fn uninstall_requested(c: Option<&Control>) -> bool {
+    c.map(|c| c.quit && c.uninstall && !c.want).unwrap_or(false)
+}
+
 // ── Сторона хоста (права администратора, без окна) ───────────────────
 
 /// Запущены ли мы как фоновый движок (`--engine-host`) или как разовая установка
@@ -160,8 +170,19 @@ pub fn run() {
     // Разовая установка: пришли с правами именно чтобы зарегистрировать задачу
     // (первое включение режима адаптера). Создаём её и сразу продолжаем как движок,
     // чтобы человек не ждал второго запуска.
-    if std::env::args().any(|a| a == "--install-task") {
+    let installing = std::env::args().any(|a| a == "--install-task");
+    if installing {
         let _ = crate::autostart::create_engine_task();
+    }
+
+    // Деинсталлятор поднял нас задачей ради одного: снести эту самую задачу (сам он
+    // без прав). Делаем это до всего остального — движок может быть уже удалён.
+    // Не при установке задачи: команда могла остаться от прошлого удаления (данные
+    // пользователя при удалении сохраняются), и мы снесли бы только что созданное.
+    if !installing && uninstall_requested(read_control().as_ref()) {
+        crate::autostart::delete_engine_task();
+        let _ = std::fs::remove_file(status_path());
+        return;
     }
 
     let exe = match crate::cmds::locate_engine_pub() {
@@ -240,6 +261,10 @@ pub fn run() {
             }
             if ctl.quit {
                 // Обновление: выходим сразу — установщику нужен свободный exe.
+                // Удаление: ещё и сносим свою задачу (см. поле uninstall).
+                if ctl.uninstall {
+                    crate::autostart::delete_engine_task();
+                }
                 let _ = std::fs::remove_file(status_path());
                 return;
             }
@@ -295,7 +320,7 @@ fn needs_restart(want_epoch: u64, cur_epoch: u64, alive: bool, failed_epoch: Opt
 
 #[cfg(test)]
 mod tests {
-    use super::{host_gone, needs_restart, Control, HostStatus};
+    use super::{host_gone, needs_restart, uninstall_requested, Control, HostStatus};
 
     #[test]
     fn host_gone_by_missing_or_stale_status() {
@@ -313,7 +338,22 @@ mod tests {
         assert!(c.want && !c.quit);
         // А то, что пишет установщик, — с quit.
         let c: Control = serde_json::from_str(r#"{"want":false,"quit":true,"epoch":0,"mixed_port":7893,"controller_port":9893}"#).unwrap();
-        assert!(!c.want && c.quit);
+        assert!(!c.want && c.quit && !c.uninstall, "обновление — не удаление");
+        assert!(!uninstall_requested(Some(&c)));
+    }
+
+    #[test]
+    fn only_the_uninstaller_command_removes_the_task() {
+        // Ровно то, что пишет деинсталлятор (installer-hooks.nsh, NOVPN_CTL_UNINSTALL).
+        let c: Control = serde_json::from_str(
+            r#"{"want":false,"quit":true,"uninstall":true,"epoch":0,"mixed_port":7893,"controller_port":9893}"#,
+        )
+        .unwrap();
+        assert!(uninstall_requested(Some(&c)));
+        // Без quit или при want — не удаление (порванная/чужая запись не снесёт задачу).
+        assert!(!uninstall_requested(Some(&Control { quit: false, ..c.clone() })));
+        assert!(!uninstall_requested(Some(&Control { want: true, ..c.clone() })));
+        assert!(!uninstall_requested(None));
     }
 
     #[test]

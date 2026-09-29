@@ -14,14 +14,30 @@
 ; 400 мс; хосты до 0.3.35 не знают quit и выходят по want:false через ~9 с
 ; простоя) и ждём, пока процесс исчезнет. Список берём у tasklist — он видит
 ; и процессы с правами администратора.
-!macro NOVPN_STOP_ALL ID
+!define NOVPN_CTL_QUIT '{"want":false,"quit":true,"epoch":0,"mixed_port":7893,"controller_port":9893}'
+; Удаление: движок вдобавок сносит свою задачу планировщика. Она создана с правами,
+; деинсталлятор (без прав) удалить её не может, а оставленная задача с наивысшими
+; правами смотрела бы на папку, куда пишет кто угодно от имени пользователя, — обход
+; UAC. Запустить задачу права не нужны (так её дёргает и само приложение), а движок
+; под правами удалит её сам (enginehost.rs, поле uninstall).
+!define NOVPN_CTL_UNINSTALL '{"want":false,"quit":true,"uninstall":true,"epoch":0,"mixed_port":7893,"controller_port":9893}'
+
+!macro NOVPN_STOP_ALL ID CTL
   ClearErrors
   CreateDirectory "$APPDATA\NoVPN\engine"
   FileOpen $R7 "$APPDATA\NoVPN\engine\control.json" w
   IfErrors novpn_ctl_done_${ID}
-    FileWrite $R7 '{"want":false,"quit":true,"epoch":0,"mixed_port":7893,"controller_port":9893}'
+    FileWrite $R7 '${CTL}'
     FileClose $R7
   novpn_ctl_done_${ID}:
+  !if "${ID}" == "u"
+    ; Хост не запущен (VPN выключен) — поднимаем его задачей, чтобы он снёс её.
+    ; Если уже запущен, задача с IgnoreNew второй не стартует, а живой хост сам
+    ; прочитает команду. Даём ему время, прежде чем гасить процессы ниже.
+    nsExec::Exec 'schtasks /Run /TN "NoVPN Engine"'
+    Pop $R5
+    Sleep 1500
+  !endif
 
   ; До ~45 секунд: гасим то, что можем без прав (окно, движок прокси-режима),
   ; и ждём, пока исчезнет всё, включая привилегированный хост.
@@ -74,7 +90,7 @@
 
   ; Перед установкой поверх — гасим окно и движок (в т.ч. привилегированный),
   ; иначе NSIS не сможет перезаписать exe и dll, которые они держат открытыми.
-  !insertmacro NOVPN_STOP_ALL "i"
+  !insertmacro NOVPN_STOP_ALL "i" '${NOVPN_CTL_QUIT}'
 
   ; Процесс исчез — но система закрывает дескрипторы файлов чуть позже (движок
   ; держит и wintun.dll, и свой exe). Иначе распаковка падала с «невозможно открыть
@@ -136,7 +152,7 @@
   ; Перед удалением завершаем приложение и движок (в т.ч. привилегированный):
   ; иначе они держат свои файлы, удаление проходит частично, а mihomo.exe остаётся
   ; жить и держит прокси.
-  !insertmacro NOVPN_STOP_ALL "u"
+  !insertmacro NOVPN_STOP_ALL "u" '${NOVPN_CTL_UNINSTALL}'
   Sleep 800
 !macroend
 
@@ -146,6 +162,12 @@
   ; Тихая задача автозапуска режима адаптера. Без этого после удаления система
   ; при каждом входе пыталась бы запустить несуществующий exe с правами.
   nsExec::Exec 'schtasks /Delete /TN "NoVPN Autostart" /F'
+  ; Задача движка: обычно её уже снёс сам движок (см. NOVPN_CTL_UNINSTALL); напрямую
+  ; удалить выйдет, только если деинсталлятор запущен с правами, — не мешает.
+  nsExec::Exec 'schtasks /Delete /TN "NoVPN Engine" /F'
+  ; Команда «удалиться» не должна пережить удаление: данные пользователя остаются,
+  ; и при повторной установке движок прочитал бы её снова.
+  Delete "$APPDATA\NoVPN\engine\control.json"
 
   ; Записи хоста для расширения: без них браузер будет искать удалённый файл.
   DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\ru.appswire.novpn"
