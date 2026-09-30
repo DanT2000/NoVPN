@@ -117,6 +117,9 @@ class BackupTest {
         assertEquals(NetDiagnosis.SERVER_DOWN, Diag.classify(russiaUp = true, externalUp = true, novpnUp = false))
         // Российские есть, внешних нет — похоже на ограниченный режим (белые списки).
         assertEquals(NetDiagnosis.RESTRICTED, Diag.classify(russiaUp = true, externalUp = false, novpnUp = false))
+        // Белые списки МТС (30.09.2026): соединение с нашим сервером ПРОХОДИТ, а зарубежное
+        // закрыто. Это тоже белые списки, а не «всё в порядке».
+        assertEquals(NetDiagnosis.RESTRICTED, Diag.classify(russiaUp = true, externalUp = false, novpnUp = true))
     }
 
     @Test

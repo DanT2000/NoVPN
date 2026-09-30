@@ -209,7 +209,7 @@ class NoVpnService : VpnService() {
         engine?.let { old ->
             if (old.isAlive() && tun != null) {
                 VpnBus.setState(ConnState.ON)
-                notify(notification("Подключено", repo.nodeFor()?.name))
+                notify(statusNotification())
                 return
             }
         }
@@ -476,7 +476,7 @@ class NoVpnService : VpnService() {
                 val active = reserveAtBuild?.server ?: node.name
                 eng.control.selectProxy(active)
                 VpnBus.setServer(active)
-                notify(notification(if (reserveAtBuild != null) "Резервное подключение" else "Подключено", active))
+                notify(statusNotification())
             }
         }
     }
@@ -550,12 +550,20 @@ class NoVpnService : VpnService() {
                             // Связь есть — снимаем прежний диагноз (например «нет
                             // интернета», выставленный при пропаже сети). Иначе метка
                             // висела бы и после того, как интернет вернулся.
-                            if (VpnBus.diagnosis.value != NetDiagnosis.OK) markNormal()
+                            markServerOk()
                         } else if (++healthMisses >= 2) {
                             healthMisses = 0
                             triggerFailover()
                         }
                     }
+                }
+
+                // Сторож белых списков: смотрит на саму сеть, а не на ответ сервера.
+                if (now - lastWhitelistWatch >= WHITELIST_WATCH_MS &&
+                    VpnBus.state.value == ConnState.ON && VpnBus.reserve.value == null
+                ) {
+                    lastWhitelistWatch = now
+                    scope.launch { watchWhitelist() }
                 }
             }
         }
@@ -567,6 +575,63 @@ class NoVpnService : VpnService() {
     @Volatile
     private var healthMisses = 0
 
+    @Volatile
+    private var lastWhitelistWatch = 0L
+
+    @Volatile
+    private var watchingWhitelist = false
+
+    /**
+     * Сторож белых списков. Лёгкая проверка сервера (ответ 204 через туннель) под белыми
+     * списками бывает ложно-успешной: на МТС 30.09.2026 она 14 минут подряд считала
+     * «Нидерланды» рабочими, а YouTube не грузился, — диагностика не запускалась вовсе, и
+     * человек так и не узнал, в чём дело. Поэтому раз в минуту (и сразу после смены сети)
+     * смотрим на саму сеть, мимо туннеля: российские сайты открываются, а зарубежные нет —
+     * это белые списки. Предупреждаем, даже если сервер вроде бы отвечает и даже если
+     * резерва нет. Снимает отметку тоже только сторож — когда зарубежные снова открылись.
+     */
+    private suspend fun watchWhitelist() {
+        if (watchingWhitelist || stopping) return
+        watchingWhitelist = true
+        try {
+            // В обычной сети это один маленький запрос; полная диагностика — только если
+            // зарубежное не открылось (см. Diag.whitelistCheck).
+            val d = Diag.whitelistCheck(serverAddrs())
+            if (stopping || VpnBus.reserve.value != null) return
+            val known = VpnBus.diagnosis.value
+            if (d == null) {
+                if (known == NetDiagnosis.RESTRICTED) {
+                    Log.i(TAG, "сторож: ограничения сняты")
+                    repo.recordDiag("diagnosis", "Ограничения сети сняты (сторож): зарубежные сайты снова открываются.")
+                    VpnBus.setOfferReserve(false)
+                    markNormal()
+                }
+                return
+            }
+            if (d.diagnosis == NetDiagnosis.RESTRICTED && known != NetDiagnosis.RESTRICTED) {
+                Log.i(TAG, "сторож: похоже на белые списки: ${d.detail}")
+                repo.recordDiag("diagnosis", "Сеть похожа на белые списки (сторож). Диагностика: ${d.detail}")
+                VpnBus.setDiagnosis(d.diagnosis)
+                maybeNotifyDiagnosis(d)
+                if (repo.reserveAvailable()) VpnBus.setOfferReserve(true)
+                scope.launch { runCatching { repo.uploadDiag() } }
+            }
+        } finally {
+            watchingWhitelist = false
+        }
+    }
+
+    /**
+     * Сервер ответил на лёгкую проверку — снимаем диагноз, КРОМЕ белых списков: под
+     * ними этот ответ бывает ложным (МТС пропускает мелкие запросы и режет реальный
+     * трафик). Иначе отметка «белые списки» гасла бы через секунды после сторожа, а
+     * человеку приходило бы «обнаружены / сняты» по кругу.
+     */
+    private fun markServerOk() {
+        if (VpnBus.diagnosis.value == NetDiagnosis.RESTRICTED) return
+        if (VpnBus.diagnosis.value != NetDiagnosis.OK) markNormal()
+    }
+
     private fun restartEngine(eng: Engine): Boolean {
         val fd = tun?.fd ?: return false
         val config = repo.buildConfig(Config.TUN_FD, eng.newSecret(), VpnBus.reserve.value != null) ?: return false
@@ -576,14 +641,19 @@ class NoVpnService : VpnService() {
         // резервный (он тоже в новом конфиге), иначе выбранный обычный.
         val reserve = VpnBus.reserve.value
         val active = reserve?.server ?: repo.nodeFor()?.name
-        active?.let { eng.control.selectProxy(it) }
+        active?.let {
+            eng.control.selectProxy(it)
+            // Шина должна знать, через кого движок идёт теперь: по ней рисуется шторка
+            // и от неё сторож проверяет «текущий» сервер.
+            VpnBus.setServer(it)
+        }
         // Счётчики движка обнулились вместе с ним: иначе скорость показывалась бы
         // нулевой до конца сессии, а трафик прыгнул бы назад.
         lastDown = 0
         lastUp = 0
         lastStatsAt = System.currentTimeMillis()
         VpnBus.setState(ConnState.ON)
-        notify(notification(if (reserve != null) "Резервное подключение" else "Подключено", active))
+        notify(statusNotification())
         return true
     }
 
@@ -596,7 +666,7 @@ class NoVpnService : VpnService() {
         if (passed < (hours * 3600_000).toLong()) return
         repo.update { it.copy(smartRouting = true, fullSince = 0) }
         rebuild.trySend(Unit)
-        notify(notification("Вернулись на умную маршрутизацию", repo.nodeFor()?.name))
+        notify(notification("Вернулись на умную маршрутизацию", channelLabel()))
     }
 
     private fun updateStats(eng: Engine) {
@@ -621,7 +691,7 @@ class NoVpnService : VpnService() {
             ),
         )
         if (repo.state.value.settings.notifySpeed && VpnBus.state.value == ConnState.ON) {
-            notify(notification("Подключено", repo.nodeFor()?.name, speedLine(downSpeed, upSpeed)))
+            notify(statusNotification(speedLine(downSpeed, upSpeed)))
         }
     }
 
@@ -739,7 +809,7 @@ class NoVpnService : VpnService() {
         VpnBus.setServer(c.name)
         if (c.reserve) {
             VpnBus.setReserve(ReserveInfo(c.name, c.host))
-            notify(notification("Резервное подключение", c.name))
+            notify(statusNotification())
             repo.recordDiag("reserve", "Ушли на резервный сервер: ${c.name}")
             // Первый уход на резерв: пересобираем конфиг полным туннелем (белые
             // списки — умная маршрутизация уже не спасает). Смена одного резерва на
@@ -747,7 +817,7 @@ class NoVpnService : VpnService() {
             if (!wasReserve) rebuild.trySend(Unit)
         } else {
             VpnBus.setReserve(null)
-            notify(notification("Подключено", c.name))
+            notify(statusNotification())
             repo.recordDiag("switch", if (wasReserve) "Вернулись на обычный сервер: ${c.name}" else "Переключение на сервер: ${c.name}")
             // Вернулись на обычный сервер — возвращаем и умную маршрутизацию.
             if (wasReserve) rebuild.trySend(Unit)
@@ -776,7 +846,13 @@ class NoVpnService : VpnService() {
                 if (now - lastReturnCheck >= RETURN_CHECK_MS) {
                     lastReturnCheck = now
                     val back = firstWorking(eng, normalCandidates())
-                    if (back != null) {
+                    // Под белыми списками обычный сервер бывает ложно «живым»: МТС пропускает
+                    // мелкую проверку и режет реальный трафик. 30.09.2026 так вернулись с
+                    // рабочего резерва на неработающие «Нидерланды». Возвращаемся, только
+                    // когда сама сеть перестала быть ограниченной.
+                    val stillRestricted = back != null &&
+                        Diag.diagnose(serverAddrs()).diagnosis == NetDiagnosis.RESTRICTED
+                    if (back != null && !stillRestricted) {
                         Log.i(TAG, "обычная сеть восстановилась — возврат на ${back.name}")
                         applySelection(eng, back)
                         markNormal()
@@ -786,10 +862,13 @@ class NoVpnService : VpnService() {
                 // Текущий резерв ещё жив — остаёмся на нём.
                 if (current != null && worksThrough(eng, current)) return
             } else if (current != null && worksThrough(eng, current)) {
-                // Обычный сервер работает — всё хорошо.
+                // Обычный сервер работает — всё хорошо (кроме белых списков: их отметку
+                // и предложение резерва снимает только сторож, см. markServerOk).
                 VpnBus.setReserve(null)
-                markNormal()
-                VpnBus.setOfferReserve(false)
+                if (VpnBus.diagnosis.value != NetDiagnosis.RESTRICTED) {
+                    markNormal()
+                    VpnBus.setOfferReserve(false)
+                }
                 return
             }
 
@@ -807,7 +886,7 @@ class NoVpnService : VpnService() {
             firstWorking(eng, normalCandidates().filter { it.name != current })?.let { c ->
                 Log.i(TAG, "переключение на рабочий обычный сервер ${c.name}")
                 applySelection(eng, c)
-                markNormal()
+                markServerOk()
                 return
             }
 
@@ -841,12 +920,12 @@ class NoVpnService : VpnService() {
             // все обычные, прежде чем пугать человека: именно из-за этого приходило
             // ложное «резерв недоступен», хотя интернет уже работал.
             if (current != null && worksThrough(eng, current)) {
-                markNormal()
+                markServerOk()
                 return
             }
             firstWorking(eng, normalCandidates().filter { it.name != current })?.let { c ->
                 applySelection(eng, c)
-                markNormal()
+                markServerOk()
                 return
             }
 
@@ -972,6 +1051,9 @@ class NoVpnService : VpnService() {
                     // Существенная смена сети — повод перепроверить доступ и вернуться
                     // с резерва, если сеть нормализовалась (§2).
                     lastReturnCheck = 0
+                    // Новая сеть (сменили SIM, ушли с Wi-Fi) — сразу посмотреть, не белые ли
+                    // там списки, а не ждать минуту до следующего обхода сторожа.
+                    lastWhitelistWatch = 0
                     triggerFailover()
                 }
             }
@@ -1128,6 +1210,21 @@ class NoVpnService : VpnService() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
+    /**
+     * Что показать в шторке про канал. В резервном режиме — «Резервный канал»: имя
+     * резервного сервера («Автовыбор LTE» и т. п.) человеку ничего не говорит, а видеть
+     * там обычный сервер — прямо неверно. Иначе — сервер, через который идём СЕЙЧАС
+     * (после автоподбора он может отличаться от выбранного в настройках).
+     */
+    private fun channelLabel(): String? =
+        if (VpnBus.reserve.value != null) RESERVE_LABEL else VpnBus.server.value ?: repo.nodeFor()?.name
+
+    /** Уведомление «подключено» по текущему состоянию. Его же перерисовывает счётчик
+        скорости, поэтому состояние берём с шины, а не из настроек: иначе через секунду
+        после ухода на резерв шторка снова показывала «Подключено · Нидерланды». */
+    private fun statusNotification(extra: String? = null): Notification =
+        notification(if (VpnBus.reserve.value != null) "Резервное подключение" else "Подключено", channelLabel(), extra)
+
     private fun notification(title: String, server: String?, extra: String? = null): Notification {
         val stop = PendingIntent.getService(
             this, 1, Intent(this, NoVpnService::class.java).setAction(ACTION_STOP),
@@ -1172,9 +1269,17 @@ class NoVpnService : VpnService() {
         when (d.diagnosis) {
             NetDiagnosis.RESTRICTED -> {
                 notifiedRestricted = true
+                // Сервер при этом может и отвечать (МТС пропускает соединение, но режет
+                // трафик), поэтому не утверждаем «серверы недоступны».
+                val next = when {
+                    !repo.reserveAvailable() ->
+                        "Резервного канала нет: зарубежные сайты могут не открываться, пока действуют ограничения."
+                    repo.state.value.settings.autoFailover -> "Пробуем резервный канал."
+                    else -> "Можно включить резервный канал в приложении."
+                }
                 notifyInfo(
                     "Обнаружены ограничения сети",
-                    "Похоже на белые списки: российские ресурсы доступны, а внешние и серверы NoVPN — нет. " +
+                    "Похоже на белые списки: российские сайты открываются, а зарубежные — нет. $next " +
                         "Признаки: ${d.detail}. Можно проверить в Hub.",
                 )
             }
@@ -1251,6 +1356,8 @@ class NoVpnService : VpnService() {
         private const val TAG = "novpn.service"
         private const val CHANNEL = "vpn"
         private const val CHANNEL_ALERT = "vpn-alert"
+        /** Подпись канала в шторке, пока работаем через резерв. */
+        private const val RESERVE_LABEL = "Резервный канал"
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_ERROR_ID = 2
         private const val NOTIFICATION_DIAG_ID = 3
@@ -1291,6 +1398,9 @@ class NoVpnService : VpnService() {
         /** Пауза после смены сети перед вердиктом о доступности сервера: даём ему
          *  переподняться на новой сети, иначе уходим на резерв по ложной тревоге. */
         private const val NET_SETTLE_MS = 4_000L
+        /** Как часто сторож смотрит, не белые ли списки в сети (плюс сразу после её смены).
+         *  В обычной сети это один маленький запрос — телефон и трафик не нагружает. */
+        private const val WHITELIST_WATCH_MS = 60_000L
         /** Как часто докладываем резервный расход на панель. */
         private const val RESERVE_REPORT_MS = 60_000L
 

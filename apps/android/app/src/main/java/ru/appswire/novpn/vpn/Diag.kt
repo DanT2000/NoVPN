@@ -83,6 +83,25 @@ object Diag {
         }.any { it.await() }
     }
 
+    /** Открылся ли хоть один URL — ПО ОЧЕРЕДИ до первого успеха: в обычной сети это
+        ровно один маленький запрос, а не три параллельных. */
+    private fun firstReachable(urls: List<String>): Boolean = urls.any { url ->
+        runCatching {
+            val req = Request.Builder().url(url).head().header("User-Agent", "NoVPN-Diag").build()
+            probe.newCall(req).execute().use { it.code in 200..499 }
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Проверка для сторожа белых списков — как можно легче. Зарубежное открылось → сеть не
+     * ограничена, возвращаем null (один HEAD к generate_204 раз в минуту, соединение ещё и
+     * переиспользуется). Не открылось → полная диагностика, чтобы отличить белые списки
+     * от «интернета нет вовсе».
+     */
+    suspend fun whitelistCheck(servers: List<Pair<String, Int>>): Result? = withContext(Dispatchers.IO) {
+        if (firstReachable(EXTERNAL)) null else diagnose(servers)
+    }
+
     /**
      * Полная диагностика. `servers` — адреса обычных серверов NoVPN (host, port),
      * чтобы отличить «наши серверы недоступны» от «интернета нет вовсе».
