@@ -237,7 +237,8 @@ object Sub {
 
     /** Транспорт и маскировка — общая часть для vless и trojan. */
     private fun applyTransport(m: MutableMap<String, Any?>, u: Uri) {
-        val net = u.q("type").ifEmpty { "tcp" }
+        // splithttp — прежнее имя XHTTP в Xray; движок знает его только как xhttp.
+        val net = u.q("type").ifEmpty { "tcp" }.let { if (it == "splithttp") "xhttp" else it }
         m["network"] = net
         when (net) {
             "ws" -> {
@@ -250,6 +251,19 @@ object Sub {
                 putIfNotEmpty("grpc-service-name", u.q("serviceName"))
             }
             "http" -> m["http-opts"] = linkedMapOf<String, Any?>("path" to listOf(u.q("path").ifEmpty { "/" }))
+            "xhttp" -> {
+                // Без пути, хоста и режима движок стучится в «/», а сервер ждёт свой путь:
+                // 30.09.2026 все 23 XHTTP-сервера резервного пула поэтому не работали, с
+                // этими параметрами — 22 из 23. XHTTP режет трафик на короткие запросы и
+                // проходит там, где долгие соединения замирают (белые списки МТС).
+                m["xhttp-opts"] = linkedMapOf<String, Any?>("path" to u.q("path").ifEmpty { "/" }).apply {
+                    putIfNotEmpty("host", u.q("host"))
+                    putIfNotEmpty("mode", u.q("mode"))
+                }
+                // Режим stream-one работает поверх HTTP/2 — alpn из ссылки передаём как есть.
+                val alpn = u.q("alpn").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                if (alpn.isNotEmpty()) m["alpn"] = alpn
+            }
         }
         val sni = u.q("sni").ifEmpty { u.q("host") }
         when (u.q("security")) {

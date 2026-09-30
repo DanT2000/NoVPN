@@ -58,6 +58,36 @@ fn vless_websocket_link() {
 }
 
 #[test]
+fn vless_xhttp_link_carries_path_host_mode() {
+    // Как XHTTP-серверы резервного пула (30.09.2026): Reality + XHTTP stream-one. Без
+    // xhttp-opts движок стучался в «/», и ни один из 23 не работал; с ними — 22 из 23.
+    let link = format!(
+        "vless://{UUID}@x.example:443?type=xhttp&security=reality&pbk=K&sid=ab&fp=chrome\
+         &sni=www.example.com&path=%2Fsecret&host=www.example.com&mode=stream-one\
+         &alpn=h2%2Chttp%2F1.1&encryption=none#XHTTP"
+    );
+    let p = parse(&link).unwrap();
+    let Parsed::Nodes(nodes) = &p else { panic!() };
+    let m = &nodes[0].map;
+    assert_eq!(m["network"].as_str(), Some("xhttp"));
+    assert_eq!(m["xhttp-opts"]["path"].as_str(), Some("/secret"));
+    assert_eq!(m["xhttp-opts"]["host"].as_str(), Some("www.example.com"));
+    assert_eq!(m["xhttp-opts"]["mode"].as_str(), Some("stream-one"));
+    let alpn: Vec<&str> = m["alpn"].as_sequence().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(alpn, vec!["h2", "http/1.1"]);
+    assert_eq!(m["reality-opts"]["public-key"].as_str(), Some("K"));
+
+    // Прежнее имя splithttp — тот же xhttp; без пути — корень, без режима — выбор движка.
+    let old = parse(&format!("vless://{UUID}@x.example:443?type=splithttp&security=tls#Old")).unwrap();
+    let Parsed::Nodes(nodes) = &old else { panic!() };
+    let m = &nodes[0].map;
+    assert_eq!(m["network"].as_str(), Some("xhttp"));
+    assert_eq!(m["xhttp-opts"]["path"].as_str(), Some("/"));
+    assert!(m["xhttp-opts"].get("mode").is_none());
+    assert!(m.get("alpn").is_none(), "alpn без него в ссылке не выдумываем");
+}
+
+#[test]
 fn base64_list_of_links() {
     use base64::Engine;
     let raw = format!(

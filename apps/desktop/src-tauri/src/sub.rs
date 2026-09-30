@@ -255,6 +255,8 @@ impl Uri {
 fn apply_transport(m: &mut Mapping, u: &Uri) {
     let net = match u.q("type").as_str() {
         "" => "tcp".to_string(),
+        // Прежнее имя XHTTP в Xray; движок знает его только как xhttp.
+        "splithttp" => "xhttp".to_string(),
         other => other.to_string(),
     };
     put_str(m, "network", &net);
@@ -286,6 +288,29 @@ fn apply_transport(m: &mut Mapping, u: &Uri) {
                 Value::Sequence(vec![s(if path.is_empty() { "/" } else { &path })]),
             );
             put(m, "http-opts", Value::Mapping(h));
+        }
+        "xhttp" => {
+            // Без пути, хоста и режима движок стучится в «/», а сервер ждёт свой путь:
+            // 30.09.2026 все 23 XHTTP-сервера резервного пула поэтому не работали, с
+            // этими параметрами — 22 из 23. XHTTP режет трафик на короткие запросы и
+            // проходит там, где долгие соединения замирают (белые списки МТС).
+            let mut x = Mapping::new();
+            let path = u.q("path");
+            put_str(&mut x, "path", if path.is_empty() { "/" } else { &path });
+            let host = u.q("host");
+            if !host.is_empty() {
+                put_str(&mut x, "host", &host);
+            }
+            let mode = u.q("mode");
+            if !mode.is_empty() {
+                put_str(&mut x, "mode", &mode);
+            }
+            put(m, "xhttp-opts", Value::Mapping(x));
+            // Режим stream-one работает поверх HTTP/2 — alpn из ссылки передаём как есть.
+            let alpn: Vec<Value> = u.q("alpn").split(',').map(str::trim).filter(|a| !a.is_empty()).map(s).collect();
+            if !alpn.is_empty() {
+                put(m, "alpn", Value::Sequence(alpn));
+            }
         }
         _ => {}
     }

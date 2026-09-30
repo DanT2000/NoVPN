@@ -368,6 +368,32 @@ class CoreTest {
     }
 
     @Test
+    fun `xhttp-ссылка несёт путь, хост и режим`() {
+        // Как XHTTP-серверы резервного пула (30.09.2026): Reality + XHTTP stream-one. Без
+        // xhttp-opts движок стучался в «/», и ни один из 23 не работал; с ними — 22 из 23.
+        val link = "vless://u1@x.example:443?type=xhttp&security=reality&pbk=K&sid=ab&fp=chrome" +
+            "&sni=www.example.com&path=%2Fsecret&host=www.example.com&mode=stream-one" +
+            "&alpn=h2%2Chttp%2F1.1&encryption=none#XHTTP"
+        val m = (Sub.parse(link) as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("xhttp", m["network"])
+        @Suppress("UNCHECKED_CAST")
+        val x = m["xhttp-opts"] as Map<String, Any?>
+        assertEquals("/secret", x["path"])
+        assertEquals("www.example.com", x["host"])
+        assertEquals("stream-one", x["mode"])
+        assertEquals(listOf("h2", "http/1.1"), m["alpn"])
+
+        // Прежнее имя splithttp — тот же xhttp; без пути — корень, без режима — выбор движка.
+        val old = (Sub.parse("vless://u1@x.example:443?type=splithttp&security=tls#Old") as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("xhttp", old["network"])
+        @Suppress("UNCHECKED_CAST")
+        val ox = old["xhttp-opts"] as Map<String, Any?>
+        assertEquals("/", ox["path"])
+        assertFalse(ox.containsKey("mode"))
+        assertFalse(old.containsKey("alpn"))
+    }
+
+    @Test
     fun `пустые значения в точку подключения не пишутся`() {
         val nodes = (Sub.parse("vless://u1@a.example:443?type=grpc&security=reality#Х") as Sub.Parsed.Nodes).nodes
         @Suppress("UNCHECKED_CAST")
