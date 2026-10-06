@@ -769,14 +769,19 @@ fun LogScreen(repo: Repo, onBack: () -> Unit) {
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
                 diag.forEach { e ->
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(e.at.substringAfter('T'), fontFamily = Mono, fontSize = 11.sp, color = c.textMuted2)
+                        Text(e.stamp(today), fontFamily = Mono, fontSize = 11.sp, color = c.textMuted2)
                         Text(
                             e.text,
                             fontSize = 12.sp,
                             lineHeight = 16.sp,
-                            color = if (e.kind == "error") c.redFg else if (e.kind == "reserve") c.amberFg else c.textBody,
+                            color = when (e.kind) {
+                                "error" -> c.redFg
+                                "reserve", "restart" -> c.amberFg
+                                else -> c.textBody
+                            },
                         )
                     }
                 }

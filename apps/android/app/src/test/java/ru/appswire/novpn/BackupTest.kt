@@ -9,6 +9,7 @@ import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.core.Meta
 import ru.appswire.novpn.core.Rules
 import ru.appswire.novpn.core.Sub
+import ru.appswire.novpn.store.DiagEntry
 import ru.appswire.novpn.ui.Flags
 import ru.appswire.novpn.vpn.Diag
 import ru.appswire.novpn.vpn.NetDiagnosis
@@ -120,6 +121,33 @@ class BackupTest {
         // Белые списки МТС (30.09.2026): соединение с нашим сервером ПРОХОДИТ, а зарубежное
         // закрыто. Это тоже белые списки, а не «всё в порядке».
         assertEquals(NetDiagnosis.RESTRICTED, Diag.classify(russiaUp = true, externalUp = false, novpnUp = true))
+    }
+
+    @Test
+    fun `в журнале сегодняшнее со временем, прошлые дни с датой`() {
+        val today = "2026-10-06"
+        assertEquals("05:53:04", DiagEntry("2026-10-06T05:53:04", "diagnosis", "x").stamp(today))
+        // Вчерашнее больше не выглядит как «сегодня в 15:43».
+        assertEquals("05.10 15:43", DiagEntry("2026-10-05T15:43:18", "diagnosis", "x").stamp(today))
+        // Записи без даты (старый формат) показываем как есть.
+        assertEquals("12:00:00", DiagEntry("12:00:00", "info", "x").stamp(today))
+    }
+
+    @Test
+    fun `одинаковые записи журнала не повторяются чаще раза в 5 минут`() {
+        val diag = "Обычные серверы не пропускают трафик. Диагностика: ru=+ ext=+ novpn=+ → OK"
+        val recent = listOf(
+            DiagEntry("2026-10-06T01:29:05", "diagnosis", diag),
+            DiagEntry("2026-10-06T01:29:05", "info", "Резервных серверов нет — восстановить нечем."),
+        )
+        // Через 30 с — тот же текст: повтор, не пишем (оба вида чередуются, ловим оба).
+        assertTrue(DiagEntry.isRepeat(recent, "diagnosis", diag, "2026-10-06T01:29:35"))
+        assertTrue(DiagEntry.isRepeat(recent, "info", "Резервных серверов нет — восстановить нечем.", "2026-10-06T01:29:35"))
+        // Через 6 минут — снова пишем: видно, что состояние держится.
+        assertFalse(DiagEntry.isRepeat(recent, "diagnosis", diag, "2026-10-06T01:35:10"))
+        // Другой текст или вид — всегда пишем.
+        assertFalse(DiagEntry.isRepeat(recent, "diagnosis", "Диагностика: ru=- ext=- novpn=- → NO_INTERNET", "2026-10-06T01:29:35"))
+        assertFalse(DiagEntry.isRepeat(recent, "error", diag, "2026-10-06T01:29:35"))
     }
 
     @Test

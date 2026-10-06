@@ -618,11 +618,14 @@ class Repo(private val app: Context) {
         }
     }
 
-    /** Записать событие диагностики. Хвост ограничиваем, чтобы файл не рос. */
+    /** Записать событие диагностики. Хвост ограничиваем, чтобы файл не рос; повтор той же
+        записи в пределах 5 минут не пишем (см. DiagEntry.isRepeat). */
     fun recordDiag(kind: String, text: String) {
         synchronized(diagLock) {
             val list = diagList()
-            list.add(DiagEntry(at = nowIsoLocal(), kind = kind, text = text))
+            val now = nowIsoLocal()
+            if (DiagEntry.isRepeat(list, kind, text, now)) return
+            list.add(DiagEntry(at = now, kind = kind, text = text))
             while (list.size > DIAG_MAX) list.removeAt(0)
             store.saveDiag(list)
         }

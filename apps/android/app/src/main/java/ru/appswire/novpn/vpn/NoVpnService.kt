@@ -134,6 +134,9 @@ class NoVpnService : VpnService() {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopping = true
+                // Ручное выключение тоже отмечаем: по журналу должно быть видно, где VPN
+                // перезапускал человек, а где приложение само («restart»).
+                runCatching { repo.recordDiag("info", "VPN выключен вручную") }
                 scope.launch {
                     // Пока ждали замок, мог прийти новый START (он ставит stopping=false и
                     // поднимает свежую сессию). Тогда НЕ рвём её и не глушим службу — иначе
@@ -367,6 +370,13 @@ class NoVpnService : VpnService() {
     @Volatile
     private var establishedTransport: Int = -1
 
+    /** Сама физическая сеть под туннелем (не только её тип). Смена SIM или новая сессия
+     *  оператора — это «мобильная → мобильная»: тип тот же, а сеть другая. По одному типу
+     *  опрос такую смену не видел, туннель оставался на исчезнувшей сети, и помогало
+     *  только ручное выкл/вкл VPN (06.10.2026, МегаФон → МТС → МегаФон). */
+    @Volatile
+    private var establishedNetwork: Network? = null
+
     /** Физическая сеть под туннелем: служба исключает себя из VPN, поэтому её «сеть по
      *  умолчанию» — это реальная Wi-Fi/мобильная сеть, а не туннель. */
     private fun currentUnderlyingNetwork(): Network? {
@@ -515,14 +525,23 @@ class NoVpnService : VpnService() {
                 // поэтому переустановку по колбэку ждать нельзя — опрашиваем текущую сеть
                 // сами. Если тип сменился — переустанавливаем туннель, иначе значок сети в
                 // шторке остаётся неверным (Wi-Fi с «!», пропадает «4G»). Опрос дешёвый.
-                val curTransport = transportOf(currentUnderlyingNetwork())
+                val curNet = currentUnderlyingNetwork()
+                val curTransport = transportOf(curNet)
                 if (curTransport != -1) {
                     if (establishedTransport == -1) {
                         establishedTransport = curTransport
+                        establishedNetwork = curNet
                     } else if (curTransport != establishedTransport) {
                         establishedTransport = curTransport
+                        establishedNetwork = curNet
                         reestablishTunnel("Смена типа сети (опрос)")
                         continue
+                    } else if (curNet != null && curNet != establishedNetwork) {
+                        // Тот же тип, но ДРУГАЯ сеть (сменили SIM, оператор переподнял
+                        // сессию), а колбэк система не прислала — переезжаем сами.
+                        val first = establishedNetwork == null
+                        establishedNetwork = curNet
+                        if (!first) moveToNetwork(curNet, "опрос")
                     }
                 }
 
@@ -611,13 +630,45 @@ class NoVpnService : VpnService() {
             if (d.diagnosis == NetDiagnosis.RESTRICTED && known != NetDiagnosis.RESTRICTED) {
                 Log.i(TAG, "сторож: похоже на белые списки: ${d.detail}")
                 repo.recordDiag("diagnosis", "Сеть похожа на белые списки (сторож). Диагностика: ${d.detail}")
-                VpnBus.setDiagnosis(d.diagnosis)
+                setDiagnosis(d.diagnosis)
                 maybeNotifyDiagnosis(d)
                 if (repo.reserveAvailable()) VpnBus.setOfferReserve(true)
                 scope.launch { runCatching { repo.uploadDiag() } }
             }
         } finally {
             watchingWhitelist = false
+        }
+    }
+
+    @Volatile
+    private var lastSelfHeal = 0L
+
+    /** Сколько самоперезапусков подряд не помогло (обнуляется, как только туннель ожил). */
+    @Volatile
+    private var selfHealStreak = 0
+
+    /** Пора ли перезапускать: не чаще раза в пару минут, а после нескольких бесполезных
+        попыток подряд — редко, чтобы не рвать связь по кругу, если дело не в туннеле. */
+    private fun selfHealDue(): Boolean {
+        val gap = if (selfHealStreak >= SELF_HEAL_MAX_STREAK) SELF_HEAL_BACKOFF_MS else SELF_HEAL_MIN_MS
+        return System.currentTimeMillis() - lastSelfHeal >= gap
+    }
+
+    /**
+     * Самовосстановление: переустановить туннель и движок — то же, что выкл/вкл VPN
+     * кнопкой. Видно в журнале (отдельная категория «restart») и уведомлением: раньше
+     * перезапуск, сделанный человеком или приложением, ничем не отмечался.
+     */
+    private suspend fun selfHeal(reason: String) {
+        lastSelfHeal = System.currentTimeMillis()
+        selfHealStreak++
+        Log.i(TAG, "самовосстановление №$selfHealStreak: $reason")
+        repo.recordDiag("restart", "Перезапуск туннеля (автоматически, №$selfHealStreak): $reason")
+        scope.launch { runCatching { repo.uploadDiag() } }
+        reestablishTunnel("Самовосстановление")
+        if (!stopping && engine?.isAlive() == true) {
+            val at = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date())
+            notifyInfo("Подключение перезапущено", "Трафик через VPN не шёл — NoVPN сам перезапустил туннель в $at.")
         }
     }
 
@@ -628,6 +679,8 @@ class NoVpnService : VpnService() {
      * человеку приходило бы «обнаружены / сняты» по кругу.
      */
     private fun markServerOk() {
+        // Через туннель снова идёт трафик — счётчик бесполезных перезапусков с нуля.
+        selfHealStreak = 0
         if (VpnBus.diagnosis.value == NetDiagnosis.RESTRICTED) return
         if (VpnBus.diagnosis.value != NetDiagnosis.OK) markNormal()
     }
@@ -876,8 +929,13 @@ class NoVpnService : VpnService() {
             // диагностируем и предлагаем резерв, сами не переключаемся (§3).
             if (!auto) {
                 val d = Diag.diagnose(serverAddrs())
-                VpnBus.setDiagnosis(d.diagnosis)
+                setDiagnosis(d.diagnosis)
                 maybeNotifyDiagnosis(d)
+                // Перезапуск туннеля — не смена сервера, поэтому делаем его и без автоматики.
+                if (d.diagnosis == NetDiagnosis.OK && selfHealDue()) {
+                    selfHeal("сеть в порядке и сервер доступен, а через туннель трафик не шёл")
+                    return
+                }
                 if (d.diagnosis != NetDiagnosis.OK && repo.reserveAvailable()) VpnBus.setOfferReserve(true)
                 return
             }
@@ -892,13 +950,22 @@ class NoVpnService : VpnService() {
 
             // Обычных рабочих нет — диагностируем сеть.
             val d = Diag.diagnose(serverAddrs())
-            VpnBus.setDiagnosis(d.diagnosis)
+            setDiagnosis(d.diagnosis)
             maybeNotifyDiagnosis(d)
             Log.i(TAG, "диагностика: ${d.detail}")
             repo.recordDiag("diagnosis", "Обычные серверы не пропускают трафик. Диагностика: ${d.detail}")
             scope.launch { runCatching { repo.uploadDiag() } }
             if (d.diagnosis == NetDiagnosis.NO_INTERNET) {
                 // Интернета нет вовсе — переключаться некуда, ждём восстановления сети.
+                return
+            }
+            // Сеть напрямую в порядке и сервер достижим, а через туннель не идёт ничего —
+            // туннель «залип» (после сбоя оператора, смены SIM без колбэка и т. п.). Человек в
+            // этом случае выключает и включает VPN — делаем это сами (06.10.2026 после сбоя
+            // МегаФона помог только ручной перезапуск). Резерв тут не поможет: он идёт через
+            // тот же залипший туннель.
+            if (d.diagnosis == NetDiagnosis.OK && selfHealDue()) {
+                selfHeal("сеть в порядке и сервер доступен, а через туннель трафик не шёл")
                 return
             }
             if (!repo.reserveAvailable()) {
@@ -1023,6 +1090,8 @@ class NoVpnService : VpnService() {
                 // переустановленном туннеле первый onAvailable снова придёт с тем же
                 // типом и совпадёт — цикла нет.
                 if (newTransport != -1) establishedTransport = newTransport
+                // И саму сеть: иначе опрос сочтёт её «новой» и переедет второй раз.
+                establishedNetwork = network
                 if (prev != -1 && newTransport != -1 && newTransport != prev &&
                     !stopping && engine?.isAlive() == true
                 ) {
@@ -1032,30 +1101,7 @@ class NoVpnService : VpnService() {
                 }
 
                 // Тот же тип сети (или первое событие после подключения): мягкий переезд.
-                // Старые соединения движка (в т.ч. к VPN-серверу) остались на
-                // исчезнувшей сети. Сбрасываем их РАЗ, чтобы движок сразу
-                // передознился на новой, а не ждал таймаутов — из-за этого после
-                // Wi-Fi↔LTE трафик иногда «висел» до перезапуска. Событие — одно на
-                // смену сети (registerDefaultNetworkCallback), не цикл, поэтому
-                // рабочий трафик это не рвёт (при смене сети рвать и так нечего).
-                rebuild.trySend(Unit)
-                val label = netLabel(network)
-                scope.launch(Dispatchers.IO) {
-                    val dropped = engine?.takeIf { it.isAlive() }?.control?.closeConnections() ?: false
-                    repo.recordDiag("network", "Сеть → $label: переезд туннеля" + if (dropped) ", соединения сброшены" else "")
-                    // ВАЖНО: даём серверу ПЕРЕПОДНЯТЬСЯ на новой сети, прежде чем
-                    // судить «жив/мёртв». Иначе первая же проверка (сеть ещё
-                    // настраивается) ошибочно сочтёт сервер недоступным и уведёт на
-                    // резерв — а потом висим на нём. Пауза = grace-период.
-                    delay(NET_SETTLE_MS)
-                    // Существенная смена сети — повод перепроверить доступ и вернуться
-                    // с резерва, если сеть нормализовалась (§2).
-                    lastReturnCheck = 0
-                    // Новая сеть (сменили SIM, ушли с Wi-Fi) — сразу посмотреть, не белые ли
-                    // там списки, а не ждать минуту до следующего обхода сторожа.
-                    lastWhitelistWatch = 0
-                    triggerFailover()
-                }
+                moveToNetwork(network, "")
             }
 
             override fun onLost(network: Network) {
@@ -1065,7 +1111,7 @@ class NoVpnService : VpnService() {
                 // не висело «Подключено» при мёртвой сети. При переходе Wi-Fi ↔ LTE
                 // activeNetwork уже указывает на новую сеть, и мы сюда не заходим.
                 if (runCatching { cm.activeNetwork }.getOrNull() == null) {
-                    VpnBus.setDiagnosis(NetDiagnosis.NO_INTERNET)
+                    setDiagnosis(NetDiagnosis.NO_INTERNET)
                     repo.recordDiag("network", "Сеть пропала — интернета нет")
                 }
             }
@@ -1094,10 +1140,45 @@ class NoVpnService : VpnService() {
             // Подключились, когда сети уже нет: onAvailable не придёт, поэтому
             // выставляем диагноз сразу, иначе на главной висит «Подключено».
             if (runCatching { cm.activeNetwork }.getOrNull() == null) {
-                VpnBus.setDiagnosis(NetDiagnosis.NO_INTERNET)
+                setDiagnosis(NetDiagnosis.NO_INTERNET)
             }
         } else {
             Log.e(TAG, "не удалось подписаться на смену сети: после переключения Wi-Fi/LTE потребуется переподключение")
+        }
+    }
+
+    /**
+     * Мягкий переезд туннеля на сеть того же типа — из колбэка системы или из опроса
+     * сторожа (на HyperOS колбэк может не прийти). Старые соединения движка (в т.ч. к
+     * VPN-серверу) остались на исчезнувшей сети. Сбрасываем их РАЗ, чтобы движок сразу
+     * передознился на новой, а не ждал таймаутов — из-за этого после Wi-Fi↔LTE трафик
+     * иногда «висел» до перезапуска. Событие — одно на смену сети, не цикл, поэтому
+     * рабочий трафик это не рвёт (при смене сети рвать и так нечего).
+     */
+    private fun moveToNetwork(network: Network, source: String) {
+        // Привязываем туннель к новой сети: иначе движок продолжит слать пакеты в
+        // исчезнувший интерфейс, и соединение «висит».
+        runCatching { setUnderlyingNetworks(arrayOf(network)) }
+        rebuild.trySend(Unit)
+        val label = netLabel(network)
+        scope.launch(Dispatchers.IO) {
+            val dropped = engine?.takeIf { it.isAlive() }?.control?.closeConnections() ?: false
+            repo.recordDiag(
+                "network",
+                "Сеть → $label: переезд туннеля" + (if (source.isNotEmpty()) " ($source)" else "") +
+                    if (dropped) ", соединения сброшены" else "",
+            )
+            // ВАЖНО: даём серверу ПЕРЕПОДНЯТЬСЯ на новой сети, прежде чем судить
+            // «жив/мёртв». Иначе первая же проверка (сеть ещё настраивается) ошибочно сочтёт
+            // сервер недоступным и уведёт на резерв — а потом висим на нём. Пауза = grace.
+            delay(NET_SETTLE_MS)
+            // Существенная смена сети — повод перепроверить доступ и вернуться с резерва,
+            // если сеть нормализовалась (§2).
+            lastReturnCheck = 0
+            // Новая сеть (сменили SIM, ушли с Wi-Fi) — сразу посмотреть, не белые ли там
+            // списки, а не ждать минуту до следующего обхода сторожа.
+            lastWhitelistWatch = 0
+            triggerFailover()
         }
     }
 
@@ -1222,8 +1303,23 @@ class NoVpnService : VpnService() {
     /** Уведомление «подключено» по текущему состоянию. Его же перерисовывает счётчик
         скорости, поэтому состояние берём с шины, а не из настроек: иначе через секунду
         после ухода на резерв шторка снова показывала «Подключено · Нидерланды». */
-    private fun statusNotification(extra: String? = null): Notification =
-        notification(if (VpnBus.reserve.value != null) "Резервное подключение" else "Подключено", channelLabel(), extra)
+    private fun statusNotification(extra: String? = null): Notification = when {
+        // Сеть оператора не отвечает вовсе — честно так и пишем. 06.10.2026 МегаФон 20 минут
+        // не возвращал ни байта, приложение это видело (диагностика NO_INTERNET), а в шторке
+        // висело «Подключено · Нидерланды», и человек не понимал, что происходит.
+        VpnBus.diagnosis.value == NetDiagnosis.NO_INTERNET ->
+            notification("Нет интернета", "Сеть не отвечает — ждём восстановления", extra)
+        VpnBus.reserve.value != null -> notification("Резервное подключение", channelLabel(), extra)
+        else -> notification("Подключено", channelLabel(), extra)
+    }
+
+    /** Единая точка смены диагноза: шторка перерисовывается сразу, а не со следующим
+        обновлением скорости (его может и не быть — показ скорости выключаемый). */
+    private fun setDiagnosis(d: NetDiagnosis) {
+        val changed = VpnBus.diagnosis.value != d
+        VpnBus.setDiagnosis(d)
+        if (changed && VpnBus.state.value == ConnState.ON) notify(statusNotification())
+    }
 
     private fun notification(title: String, server: String?, extra: String? = null): Notification {
         val stop = PendingIntent.getService(
@@ -1304,7 +1400,7 @@ class NoVpnService : VpnService() {
      * шлёт парное «ограничения сняты».
      */
     private fun markNormal() {
-        VpnBus.setDiagnosis(NetDiagnosis.OK)
+        setDiagnosis(NetDiagnosis.OK)
         lastNotifiedDiag = NetDiagnosis.OK
         emitRestrictedLifted()
     }
@@ -1401,6 +1497,11 @@ class NoVpnService : VpnService() {
         /** Как часто сторож смотрит, не белые ли списки в сети (плюс сразу после её смены).
          *  В обычной сети это один маленький запрос — телефон и трафик не нагружает. */
         private const val WHITELIST_WATCH_MS = 60_000L
+        /** Самовосстановление туннеля: не чаще раза в 2 минуты, после SELF_HEAL_MAX_STREAK
+         *  бесполезных попыток подряд — раз в 10 минут. */
+        private const val SELF_HEAL_MIN_MS = 120_000L
+        private const val SELF_HEAL_BACKOFF_MS = 600_000L
+        private const val SELF_HEAL_MAX_STREAK = 3
         /** Как часто докладываем резервный расход на панель. */
         private const val RESERVE_REPORT_MS = 60_000L
 
