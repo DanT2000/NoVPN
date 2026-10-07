@@ -134,7 +134,18 @@ async function applyFailures(route) {
   $('fail-direct').disabled = true;
   note('Применяю маршрут…');
   // Все домены — одной записью: одно применение в движке, а не перезагрузка на каждый.
-  const res = await send({ type: 'set_many', domains: picked, route });
+  let res = await send({ type: 'set_many', domains: picked, route });
+  if (res && !res.ok && isOldApp(res)) {
+    // Приложение старше 0.3.37 не знает set_many и отвечало «Неизвестный запрос» —
+    // правило молча не сохранялось (так было у владельца с Озоном на 0.3.36). Сохраняем
+    // по одному: старое приложение знает set, хоть и применяет без мгновенного переключения.
+    let saved = 0;
+    for (const d of picked) {
+      const one = await send({ type: 'set', domain: d, route });
+      if (one && one.ok) saved += 1;
+    }
+    res = saved === picked.length ? { ok: true, applied: false, oldApp: true } : { ok: false, error: 'Не удалось сохранить правила.' };
+  }
   $('fail-vpn').disabled = false;
   $('fail-direct').disabled = false;
   applying = false;
@@ -155,9 +166,20 @@ $('fail-direct').addEventListener('click', () => void applyFailures('direct'));
 /** Подпись после записи правила: применено сразу или приложение применит чуть позже
     (VPN выключен или приложение было занято — правило всё равно сохранено). */
 function appliedNote(r, what) {
-  return r && r.applied
-    ? `Готово: ${what} — страница перезагружается уже по новому маршруту.`
-    : `Сохранено: ${what}. Приложение применит правило через пару секунд — если страница не изменилась, обновите её ещё раз.`;
+  if (r && r.applied) return `Готово: ${what} — страница перезагружается уже по новому маршруту.`;
+  if (r && r.oldApp) {
+    return `Сохранено: ${what}. Обновите NoVPN на компьютере — в новой версии маршрут меняется сразу, без повторных обновлений страницы.`;
+  }
+  return `Сохранено: ${what}. Приложение применит правило через пару секунд — если страница не изменилась, обновите её ещё раз.`;
+}
+
+/** Ответ приложения, которое не знает новых команд расширения (старше 0.3.37): либо
+    «Неизвестный запрос» на set_many, либо успешный ответ без поля applied (новое
+    приложение отвечает applied: true/false всегда). */
+function isOldApp(r) {
+  if (!r) return false;
+  if (r.ok) return !('applied' in r);
+  return /Неизвестный запрос/.test(String(r.error || ''));
 }
 
 function paintRoute(route, source) {
@@ -225,6 +247,7 @@ document.querySelectorAll('.choice').forEach((btn) => {
       return;
     }
     routeOf.set(domain, route);
+    if (isOldApp(r)) r.oldApp = true;
     note(appliedNote(r, `${ROUTE_WORD[route]}`));
     reloadTab(); // уже по новому маршруту; список сбоев обновится сам
   });
