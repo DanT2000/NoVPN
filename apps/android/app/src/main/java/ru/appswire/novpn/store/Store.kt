@@ -78,6 +78,11 @@ class Store(context: Context) {
         runCatching { writeAtomic(META, text) }
     }
 
+    /** Подписку сменили на другую панель — ответ прежней больше не наш. */
+    fun deleteMeta() {
+        runCatching { file(META).delete() }
+    }
+
     // ── сырой текст подписки: чтобы поднять конфиг без сети ──
 
     fun loadSubRaw(): String? = readText(SUB)

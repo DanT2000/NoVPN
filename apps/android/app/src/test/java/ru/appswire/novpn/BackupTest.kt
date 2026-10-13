@@ -80,6 +80,44 @@ class BackupTest {
     }
 
     @Test
+    fun `резерв с тем же именем, что у обычного сервера, получает своё имя`() {
+        // Раньше конфиг молча пропускал такой резерв, а selectProxy и проверка обхода по
+        // этому имени били в ОБЫЧНЫЙ сервер — резерв с совпавшим именем был недоступен.
+        val main = parse(vlessMain) as Sub.Parsed.Nodes // имя «Main»
+        val sameName =
+            "vless://aaaaaaaa-bbbb-cccc-dddd-000000000009@r9.reserve.example:443?type=tcp&security=reality&sni=cdn.example#Main"
+        val ruClash =
+            "vless://aaaaaaaa-bbbb-cccc-dddd-000000000008@r8.reserve.example:443?type=tcp&security=reality&sni=cdn.example#🇷🇺 Main"
+        val reserveRaw = (parse(sameName, vlessReserve1, ruClash) as Sub.Parsed.Nodes).nodes
+        val taken = setOf("Main", "🇷🇺 Main", Config.GROUP)
+        val reserve = Sub.renameClashing(reserveRaw, taken)
+
+        assertEquals(listOf("Main (резерв)", "Reserve-1", "🇷🇺 Main (резерв)"), reserve.map { it.name })
+        // Имя в карте для движка — то же, что у кандидата.
+        assertEquals(reserve.map { it.name }, reserve.map { it.map["name"] })
+        // Исходные точки не тронуты (кэш резерва общий).
+        assertEquals("Main", reserveRaw[0].map["name"])
+        // Флаг в начале сохранился — российский резерв по-прежнему отсеивается.
+        assertTrue(Flags.isRussian(reserve[2].name))
+        // Без совпадений список возвращается как есть.
+        assertTrue(Sub.renameClashing(reserveRaw, setOf("Other")) === reserveRaw)
+
+        val yaml = Config.build(
+            parsed = main,
+            rules = Rules(),
+            selected = "Main",
+            tunFd = 3,
+            reserveProxies = reserve.map { it.map },
+            reserveHosts = reserve.mapNotNull { it.map["server"]?.toString() },
+        )
+        val root = Yaml().load<Map<String, Any?>>(yaml)
+        val names = proxiesOf(root).mapNotNull { it["name"]?.toString() }
+        assertTrue("обычный на месте", names.contains("Main"))
+        assertTrue("резерв с совпавшим именем тоже в конфиге", names.contains("Main (резерв)"))
+        assertTrue(groupProxies(root).contains("Main (резерв)"))
+    }
+
+    @Test
     fun `адрес резервного сервера идёт напрямую (анти-петля)`() {
         val main = parse(vlessMain) as Sub.Parsed.Nodes
         val reserve = parse(vlessReserve1) as Sub.Parsed.Nodes

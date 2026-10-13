@@ -81,6 +81,13 @@ class Engine(private val context: Context, private val store: Store) {
             "TMPDIR=${context.cacheDir.absolutePath}",
             // Движок не должен ходить в чужие каталоги за геобазами.
             "PATH=/system/bin",
+            // Детектор петель перед КАЖДЫМ UDP «напрямую» читает список сетевых
+            // интерфейсов (netlink). HyperOS/MIUI это запрещает → «route ip+net:
+            // netlinkrib: permission denied», и весь прямой UDP (звонки, игры, STUN)
+            // отваливается. На Android петли и так нет: трафик самого приложения система
+            // в туннель не пускает. Официальный клиент mihomo для Android (CMFA)
+            // выключает детектор так же.
+            "DISABLE_LOOPBACK_DETECTOR=true",
         )
         val args = arrayOf("-d", dir.absolutePath, "-f", store.configFile().absolutePath)
         val result = Native.spawn(

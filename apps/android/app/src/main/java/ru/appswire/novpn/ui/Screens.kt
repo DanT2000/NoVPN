@@ -106,18 +106,17 @@ fun ConnectionScreen(
     fun refresh(url: String) {
         busy = true
         message = null
+        // Ссылку снаружи считаем использованной сразу: если человек уйдёт с вкладки, пока
+        // идёт проверка, по возвращении диалог не должен открыться с ней снова.
+        onDeepLinkUsed()
         scope.launch {
+            // Сама смена подписки, списки, резерв и применение к работающему VPN доводятся
+            // до конца в Repo — уход с вкладки (отмена этого scope) их больше не обрывает.
             val r = repo.checkSubscription(url)
             busy = false
-            onDeepLinkUsed()
             r.onSuccess {
                 isError = false
                 message = "Готово: ${count(it, "сервер", "сервера", "серверов")}"
-                repo.syncLists()
-                // Ручное обновление освежает всё, что относится к пользователю (§10),
-                // включая резервный пул.
-                repo.syncReserve()
-                onRulesChanged()
             }.onFailure {
                 isError = true
                 message = it.message ?: "Не удалось обновить подписку"
@@ -146,7 +145,7 @@ fun ConnectionScreen(
                     color = if (valid) c.greenFg else c.redFg,
                 )
             }
-            if (repo.meta?.unsupported == true) {
+            if (state.metaUnsupported) {
                 Notice("Панель новее этого приложения: работаем в умном режиме, обновите NoVPN.", tone = Tone.WARN, modifier = Modifier.padding(top = 8.dp))
             }
             if (state.subUrl.isNotBlank()) {

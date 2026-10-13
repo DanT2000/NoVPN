@@ -141,6 +141,34 @@ class CoreTest {
     }
 
     @Test
+    fun `резерв при умном режиме оставляет российские сервисы и решения человека напрямую`() {
+        val r = Rules(
+            smart = false,
+            keepDirect = true,
+            listVpnDomains = listOf("youtube.com"),
+            listDirectDomains = listOf("ozon.ru", "gosuslugi.ru"),
+            userDomains = listOf(DomainRule("bank.example", vpn = false), DomainRule("chatgpt.com", vpn = true)),
+        )
+        val out = rulesOf(r)
+        // Озон и Госуслуги в белых списках операторов открываются напрямую, а через
+        // зарубежный резерв — нет: в резерве их нельзя уводить в туннель.
+        assertTrue(out.contains("DOMAIN-SUFFIX,ozon.ru,DIRECT"))
+        assertTrue(out.contains("DOMAIN-SUFFIX,gosuslugi.ru,DIRECT"))
+        assertTrue(out.contains("DOMAIN-SUFFIX,bank.example,DIRECT"))
+        // Остальное — через резерв: «через VPN» человека отдельным правилом не нужно.
+        assertFalse(out.any { it.contains("chatgpt.com") || it.contains("youtube.com") })
+        assertEquals("MATCH,${Config.GROUP}", out.last())
+        // Прямые домены резолвятся по-настоящему, а не фейковым адресом.
+        val yaml = Config.build(Sub.parse("vless://u1@1.vpn.example:443#Франция"), r, null)
+        @Suppress("UNCHECKED_CAST")
+        val dns = (Yaml().load<Map<String, Any?>>(yaml)["dns"] as Map<String, Any?>)
+        @Suppress("UNCHECKED_CAST")
+        val filter = dns["fake-ip-filter"] as List<String>
+        assertTrue(filter.contains("+.ozon.ru"))
+        assertTrue(filter.contains("+.bank.example"))
+    }
+
+    @Test
     fun `умный режим заканчивается прямым маршрутом`() {
         assertEquals("MATCH,DIRECT", rulesOf(Rules()).last())
     }
@@ -405,7 +433,7 @@ class CoreTest {
     }
 
     @Test
-    fun `из чужого clash-конфига берём только точки и группы`() {
+    fun `из чужого clash-конфига берём только точки`() {
         val yaml = """
             mixed-port: 7890
             listeners:
@@ -420,6 +448,37 @@ class CoreTest {
         assertEquals(setOf("proxies"), parsed.root.keys)
         val out = Config.build(parsed, Rules(), selected = "A", tunFd = 3)
         assertFalse("чужие слушатели в конфиг не попадают", out.contains("listeners"))
+    }
+
+    @Test
+    fun `группы провайдера через use, include-all и relay не роняют конфиг`() {
+        // Группа без своего списка proxies (собрана через провайдера или include-all) после
+        // вырезания полей превращалась в {name, type} — mihomo отвергал ВЕСЬ конфиг
+        // («`use` or `proxies` missing»). Как на десктопе: чужие группы не переносим вовсе.
+        val yaml = """
+            proxies:
+              - { name: A, type: ss, server: a.example, port: 443, cipher: aes-128-gcm, password: p }
+            proxy-providers:
+              prov: { type: http, url: "https://evil.example/p.yaml", path: ./p.yaml }
+            proxy-groups:
+              - { name: Auto, type: url-test, use: [prov], url: "http://evil.example/beacon", interval: 300 }
+              - { name: All, type: select, include-all: true, filter: "HK" }
+              - { name: Chain, type: relay, proxies: [A, Auto] }
+              - { name: Pick, type: select, proxies: [Auto, A] }
+        """.trimIndent()
+        val parsed = Sub.parse(yaml) as Sub.Parsed.Clash
+        assertEquals(setOf("proxies"), parsed.root.keys)
+        val out = Config.build(parsed, Rules(), selected = "A", tunFd = 3)
+        @Suppress("UNCHECKED_CAST")
+        val root = Yaml().load<Map<String, Any?>>(out)
+        val groups = root["proxy-groups"] as List<*>
+        assertEquals("группа ровно одна — наша", 1, groups.size)
+        val own = groups[0] as Map<*, *>
+        assertEquals(Config.GROUP, own["name"])
+        assertEquals(listOf("A"), own["proxies"])
+        assertFalse(out.contains("evil.example"))
+        assertFalse(out.contains("relay"))
+        assertFalse(out.contains("proxy-providers"))
     }
 
     @Test
@@ -472,17 +531,53 @@ class CoreTest {
     @Test
     fun `строгий private dns не понижается до открытого резолвера`() {
         val parsed = Sub.parse("vless://u1@a.example:443#Х")
-        val root = Yaml().load<Map<String, Any?>>(
-            Config.build(
-                parsed,
-                Rules(systemDns = listOf("tls://dns.adguard.com"), listDirectDomains = listOf("gosuslugi.ru")),
-                selected = null,
-                tunFd = 3,
-            ),
-        )
-        val dns = root["dns"] as Map<*, *>
+        fun dnsOf(systemDns: List<String>): Map<*, *> {
+            val root = Yaml().load<Map<String, Any?>>(
+                Config.build(
+                    parsed,
+                    Rules(systemDns = systemDns, listDirectDomains = listOf("gosuslugi.ru")),
+                    selected = null,
+                    tunFd = 3,
+                ),
+            )
+            return root["dns"] as Map<*, *>
+        }
+        // Система отдаёт DoT и следом простые адреса сети (только для бутстрапа его имени).
+        val dns = dnsOf(listOf("tls://dns.adguard.com", "192.168.1.1"))
+        // Запросы человека к прямым доменам — только через DoT, открытого резолвера в политике нет.
         assertEquals(listOf("tls://dns.adguard.com"), (dns["nameserver-policy"] as Map<*, *>)["+.gosuslugi.ru"])
-        assertFalse(dns.containsKey("default-nameserver"))
+        // А бутстрап задан явно: без ключа mihomo берёт зашитые китайские и Google-резолверы.
+        assertEquals(listOf("192.168.1.1", "77.88.8.8", "77.88.8.1"), dns["default-nameserver"])
+        // Без простых адресов сети — хотя бы Яндекс, но не встроенные дефолты движка.
+        val bare = dnsOf(listOf("tls://dns.adguard.com"))["default-nameserver"] as List<*>
+        assertEquals(listOf("77.88.8.8", "77.88.8.1"), bare)
+        for (builtin in listOf("114.114.114.114", "223.5.5.5", "8.8.8.8", "1.0.0.1")) {
+            assertFalse(builtin in bare)
+        }
+    }
+
+    @Test
+    fun `link-local dns сети с зоной не роняет конфиг`() {
+        // RDNSS роутера по link-local приходит с зоной; «%wl» mihomo не разбирает и
+        // отвергает конфиг целиком — VPN в такой IPv6-сети не поднимался.
+        val parsed = Sub.parse("vless://u1@1.vpn.example:443#Ф")
+        val yaml = Config.build(
+            parsed,
+            Rules(
+                systemDns = listOf("fe80::1%wlan0", "192.168.1.1", "fe80::2%25"),
+                listDirectDomains = listOf("gosuslugi.ru"),
+                bypassLocal = true,
+            ),
+            selected = null,
+            tunFd = 3,
+        )
+        val root = Yaml().load<Map<String, Any?>>(yaml)
+        val dns = root["dns"] as Map<*, *>
+        val policy = dns["nameserver-policy"] as Map<*, *>
+        assertEquals(listOf("192.168.1.1", "77.88.8.8", "77.88.8.1"), policy["+.gosuslugi.ru"])
+        assertEquals(listOf("192.168.1.1"), policy["+.lan"])
+        assertEquals(listOf("192.168.1.1", "77.88.8.8", "77.88.8.1"), dns["default-nameserver"])
+        assertFalse("адрес с зоной не должен попасть в DNS движка", yaml.contains("%"))
     }
 
     @Test
@@ -516,6 +611,65 @@ class CoreTest {
         val links = "vless://u1@a.example:443#A" + "\n" + "vless://u2@b.example:443#B"
         val list = java.util.Base64.getEncoder().encodeToString(links.toByteArray())
         assertEquals(2, (Sub.parse(list) as Sub.Parsed.Nodes).nodes.size)
+    }
+
+    @Test
+    fun `ss по SIP002 и SIP022 и trojan с процент-кодами разбираются`() {
+        // SIP002: userinfo — URL-безопасный base64 (так экспортирует shadowsocks-android).
+        val userinfo = "aes-128-gcm:~~~"
+        val urlSafe = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(userinfo.toByteArray())
+        assertTrue("тест должен задевать URL-алфавит: $urlSafe", urlSafe.contains('-') || urlSafe.contains('_'))
+        val ss = (Sub.parse("ss://$urlSafe@s.example:8388#S") as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("aes-128-gcm", ss["cipher"])
+        assertEquals("~~~", ss["password"])
+        assertEquals(8388, ss["port"])
+
+        // Обычный base64 по-прежнему понимается.
+        val std = java.util.Base64.getEncoder().encodeToString("chacha20-ietf-poly1305:pw".toByteArray())
+        val ss0 = (Sub.parse("ss://$std@s.example:8388#S0") as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("chacha20-ietf-poly1305", ss0["cipher"])
+        assertEquals("pw", ss0["password"])
+
+        // SIP022 (шифры 2022): открытый userinfo, ключ percent-кодирован.
+        val ss22 = (Sub.parse("ss://2022-blake3-aes-128-gcm:K%2Bab%3D%3D@s.example:443#S22") as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("2022-blake3-aes-128-gcm", ss22["cipher"])
+        assertEquals("K+ab==", ss22["password"])
+
+        // Вся ссылка в base64 (старый формат), в том числе URL-безопасном.
+        val whole = java.util.Base64.getUrlEncoder().encodeToString("aes-128-gcm:~~~@w.example:443".toByteArray())
+        val sw = (Sub.parse("ss://$whole#W") as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("w.example", sw["server"])
+        assertEquals("~~~", sw["password"])
+
+        // trojan: пароль в ссылке percent-кодирован (так его собирает и панель).
+        val tj = (Sub.parse("trojan://p%40ss%2Bw%3D@t.example:443?security=tls&sni=t.example#T") as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("p@ss+w=", tj["password"])
+        assertEquals("t.example", tj["server"])
+        // UUID vless раскодирование не меняет.
+        val vl = (Sub.parse("vless://11111111-2222-3333-4444-555555555555@v.example:443#V") as Sub.Parsed.Nodes).nodes[0].map
+        assertEquals("11111111-2222-3333-4444-555555555555", vl["uuid"])
+    }
+
+    @Test
+    fun `для диагностики берётся настоящий порт сервера`() {
+        // Xray на нестандартном порту (443 занят) и чужие провайдеры на 8443: стук на жёсткий
+        // 443 давал ложный novpn=- → SERVER_DOWN, и самовосстановление не срабатывало.
+        val links = "vless://u1@x.example:8443#A\nvless://u2@x.example:8443#B\nvless://u3@y.example#C"
+        assertEquals(
+            listOf("x.example" to 8443, "y.example" to 443),
+            Sub.endpointsOf(Sub.parse(links)),
+        )
+        val yaml = """
+            proxies:
+              - { name: A, type: vless, server: a.example, port: "2053", uuid: u }
+              - { name: H, type: hysteria2, server: h.example, port: 443, password: p }
+              - { name: N, type: trojan, server: n.example, password: p }
+        """.trimIndent()
+        // Порт строкой понимается; UDP-протоколы в TCP-пробу не идут; без порта — 443.
+        assertEquals(
+            listOf("a.example" to 2053, "n.example" to 443),
+            Sub.endpointsOf(Sub.parse(yaml)),
+        )
     }
 
     @Test

@@ -16,6 +16,10 @@ data class DomainRule(val domain: String, val vpn: Boolean)
 data class Rules(
     /** Выключенная умная маршрутизация = профиль «Полный VPN»: весь трафик в туннель. */
     val smart: Boolean = true,
+    /** Резервный режим при умной маршрутизации: весь трафик в туннель (smart=false),
+     *  но российские сервисы из списка «напрямую» и правила человека «напрямую»
+     *  остаются напрямую — в белых списках они открываются, а через зарубежный резерв нет. */
+    val keepDirect: Boolean = false,
     /** Серверная политика приватных подсетей (meta.routing.lanAccess).
      *  false — LAN напрямую; true — LAN В туннель. Легко перепутать. */
     val lanAccess: Boolean = false,
@@ -29,7 +33,9 @@ data class Rules(
     val dnsProvider: String = "cloudflare",
     /** Системные DNS устройства — для доменов «напрямую». На Android нет
      *  /etc/resolv.conf, поэтому «system» движку не подходит: адреса берём у
-     *  ConnectivityManager и подставляем явно. Пусто — политика не пишется. */
+     *  ConnectivityManager и подставляем явно. Пусто — политика не пишется.
+     *  Строгий Private DNS: первым идёт «tls://<хост>», за ним простые адреса сети —
+     *  они только для бутстрапа имени DoT-сервера, в политику не попадают. */
     val systemDns: List<String> = emptyList(),
     /** Домены человека в порядке важности: сначала из браузера, затем из окна. */
     val userDomains: List<DomainRule> = emptyList(),

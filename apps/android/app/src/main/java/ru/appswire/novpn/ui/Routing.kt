@@ -480,7 +480,14 @@ private fun ListsTab(repo: Repo, onRulesChanged: () -> Unit) {
             } else {
                 "придёт с панели при первой синхронизации"
             },
-            trailing = { Toggle(on = state.settings.autoUpdateLists, onChange = { v -> repo.update { it.copy(settings = it.settings.copy(autoUpdateLists = v)) } }) },
+            // Включает и выключает сам список (как на десктопе), а не автообновление — оно в
+            // настройках. Раньше тумблер стоял на автообновлении и маршрутизацию не менял.
+            trailing = {
+                Toggle(on = state.settings.listsEnabled, onChange = { v ->
+                    repo.update { it.copy(settings = it.settings.copy(listsEnabled = v)) }
+                    onRulesChanged()
+                })
+            },
         )
 
         if (lists != null) {

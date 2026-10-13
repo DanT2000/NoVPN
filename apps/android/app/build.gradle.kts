@@ -18,21 +18,26 @@ val signingProps = Properties().apply {
 
 android {
     namespace = "ru.appswire.novpn"
-    compileSdk = 35
+    compileSdk = 36
     ndkVersion = "27.1.12297006"
 
     defaultConfig {
         applicationId = "ru.appswire.novpn"
         // Android 8.0: ниже уже почти никого, а VpnService там полностью рабочий.
         minSdk = 26
-        targetSdk = 35
-        versionCode = 10
-        versionName = "0.2.8"
+        // Google Play с 31.08.2026 принимает только targetSdk 36 (Android 16).
+        targetSdk = 36
+        versionCode = 11
+        versionName = "0.2.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             // Движок скачивается под эти же ABI (scripts/fetch-engine.py).
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // Сборка для Google Play (-Pplay) — без x86_64: готовый движок mihomo под
+            // amd64 выровнен на 4 КБ, а Play требует 16 КБ. x86_64 нужен только
+            // эмуляторам и хромбукам; телефоны — arm64-v8a / armeabi-v7a.
+            if (project.hasProperty("play")) abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            else abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
     }
 

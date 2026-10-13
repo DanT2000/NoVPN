@@ -123,7 +123,13 @@ fun AppRoot(
     Box(modifier = Modifier.fillMaxSize().background(c.bgRoot)) {
         if (!state.onboarded) {
             Box(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                Onboarding(repo = repo, deepLink = accepted, onDeepLinkUsed = onDeepLinkUsed)
+                // Ссылку снимаем и здесь, как у ConnectionScreen: иначе после «Продолжить»
+                // она оставалась в accepted, и вкладка «Подключение» сама открывала диалог
+                // «Изменить подписку» с той же ссылкой. В поле она уже подставлена.
+                Onboarding(repo = repo, deepLink = accepted, onDeepLinkUsed = {
+                    accepted = null
+                    onDeepLinkUsed()
+                })
             }
             return@Box
         }
@@ -304,9 +310,9 @@ private fun Onboarding(repo: Repo, deepLink: String?, onDeepLinkUsed: () -> Unit
         scope.launch {
             val result = repo.checkSubscription(url)
             busy = false
+            // Списки подтягивает сам checkSubscription (в фоне приложения).
             result.onSuccess {
                 repo.update { st -> st.copy(onboarded = true) }
-                repo.syncLists()
             }.onFailure { error = it.message ?: "Не удалось проверить подписку" }
         }
     }

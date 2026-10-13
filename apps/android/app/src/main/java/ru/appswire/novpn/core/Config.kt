@@ -40,9 +40,9 @@ object Config {
     )
 
     /**
-     * Собирает готовый конфиг. Если провайдер отдал свой Clash-YAML, он берётся
-     * основой: его точки и группы сохраняются, подменяются только порты, DNS,
-     * туннель и правила — то, чем распоряжается приложение.
+     * Собирает готовый конфиг. Если провайдер отдал свой Clash-YAML, из него берутся
+     * только точки подключения; группа, порты, DNS, туннель и правила — то, чем
+     * распоряжается приложение.
      *
      * @param tunFd дескриптор туннеля от VpnService; null — движок поднимается
      *   только как локальный прокси (используется в самопроверке).
@@ -112,7 +112,7 @@ object Config {
         root["dns"] = buildDns(rules, Sub.hostsOf(parsed) + reserveHosts)
         if (tunFd != null) root["tun"] = buildTun(tunFd)
 
-        // Своя группа поверх чужих: приложение переключает сервер именно ею.
+        // Своя группа: приложение переключает сервер именно ею.
         val ordered = names.toMutableList()
         if (selected != null) {
             val pos = ordered.indexOf(selected)
@@ -126,21 +126,11 @@ object Config {
             "type" to "select",
             "proxies" to ordered,
         )
-        val groups = mutableListOf<Any?>(group)
-        (root["proxy-groups"] as? List<*>)?.forEach { g ->
-            val gm = g as? Map<*, *> ?: return@forEach
-            if (gm["name"]?.toString() == GROUP) return@forEach
-            // Чужие группы из импортированной Clash-подписки переносим ТОЛЬКО безопасными
-            // полями. url/interval/use и прочее из недоверенного входа заставили бы движок
-            // слать health-check на адрес из подписки — примитив исходящего маяка. Наши
-            // правила ссылаются лишь на группу NoVPN, так что вырезание ничего не ломает.
-            val safe = linkedMapOf<String, Any?>()
-            gm["name"]?.let { safe["name"] = it }
-            gm["type"]?.let { safe["type"] = it }
-            gm["proxies"]?.let { safe["proxies"] = it }
-            if (safe.containsKey("name")) groups += safe
-        }
-        root["proxy-groups"] = groups
+        // Группа ровно одна — наша. Чужие группы из Clash-подписки не переносим (как и
+        // десктоп): собранные через `use:`/`include-all`/`filter` они без своего списка
+        // proxies роняли весь конфиг, а вырезать «безопасное подмножество» значит гоняться
+        // за висячими ссылками группа→группа. Правила ссылаются только на NoVPN.
+        root["proxy-groups"] = listOf(group)
 
         // Анти-петля должна покрывать и резервные серверы: их адрес тоже обязан
         // идти напрямую, иначе соединение к резерву завернулось бы в туннель.
@@ -202,7 +192,7 @@ object Config {
         // Домены «напрямую» резолвим локальным DNS, а не зарубежным DoH: с
         // иностранной точки многие из них отдают не тот IP или закрываются.
         // Только при умной маршрутизации: в полном режиме «прямых» доменов нет.
-        val directDomains: List<String> = if (rules.smart) {
+        val directDomains: List<String> = if (rules.smart || rules.keepDirect) {
             (rules.listDirectDomains + rules.userDomains.filter { !it.vpn }.map { it.domain })
                 .mapNotNull(::cleanDomain)
                 .distinct()
@@ -228,11 +218,18 @@ object Config {
 
         // «system» тут не годится: на Android нет /etc/resolv.conf, движок просто
         // не найдёт резолвер. Подставляем реальные адреса, полученные у системы.
-        val local = rules.systemDns.filter { it.isNotBlank() }
+        // Только то, что движок точно разберёт: адрес-литерал или DoT строгого Private DNS.
+        // Одна кривая запись валит конфиг целиком: link-local DNS роутера приходит с зоной
+        // («fe80::1%wlan0»), а «%wl» Go-шный разбор URL считает битой escape-последовательностью
+        // → «DNS NameServer format error», и VPN в такой IPv6-сети не поднимался вовсе.
+        val all = rules.systemDns.map { it.trim() }
+            .filter { isIpv4Literal(it) || isIpv6Literal(it) || isDotServer(it) }
         // Строгий Private DNS (DoT): системный DNS приходит как «tls://…». Тогда добавлять
-        // ОТКРЫТЫЙ (plain UDP) резолвер нельзя — это тихо понизит шифрованный DNS
-        // пользователя до открытого. В этом режиме российский фоллбэк не подставляем.
-        val strictPrivateDns = local.any { it.startsWith("tls://") }
+        // ОТКРЫТЫЙ (plain UDP) резолвер в политику нельзя — это тихо понизит шифрованный DNS
+        // пользователя до открытого. В этом режиме простые адреса сети (они идут следом за
+        // tls://) годятся только для бутстрапа — разрешить имя самого DoT-сервера, см. ниже.
+        val strictPrivateDns = all.any { isDotServer(it) }
+        val local = if (strictPrivateDns) all.filter { isDotServer(it) } else all
         // ПРЯМЫЕ (российские) домены резолвим устойчиво к реальной сети РФ. Локальный DNS
         // сети бывает вялым или отдаёт не по всем доменам (домашний AdGuard/роутер), а
         // зарубежный публичный (1.1.1.1/8.8.8.8) на DPI режется/подменяется — и подмена
@@ -263,15 +260,21 @@ object Config {
         // подключится ни к обычному, ни к резервному: обход просто не стартует.
         serverDomains.forEach { policy["+.$it"] = ruDirect }
         if (policy.isNotEmpty()) dns["nameserver-policy"] = policy
-        // Резолвер для самих DoH-серверов: сюда годятся ТОЛЬКО адреса. Имя в
+        // Резолвер для самих DoH/DoT-серверов: сюда годятся ТОЛЬКО адреса. Имя в
         // «tls://dns.example» пришлось бы сначала разрешить, то есть замкнуть на себя.
-        // Российский фоллбэк держим и здесь — чтобы бутстрап DoH не завис на вялом/пустом
-        // системном DNS. В строгом Private DNS открытый фоллбэк НЕ добавляем.
-        val plainBase = local.filter { isIpv4Literal(it) || isIpv6Literal(it) }
-        val plain = if (strictPrivateDns) plainBase else (plainBase + RU_FALLBACK_DNS).distinct()
-        if (plain.isNotEmpty()) dns["default-nameserver"] = plain
+        // Российский фоллбэк держим и здесь — чтобы бутстрап не завис на вялом/пустом
+        // системном DNS. Ключ пишем ВСЕГДА, и в строгом Private DNS тоже: без него mihomo
+        // молча берёт зашитые 114.114.114.114/223.5.5.5/8.8.8.8/1.0.0.1, а в сети, где
+        // зарубежный UDP/53 закрыт, не разрешает даже имя DoT-сервера. Через этот резолвер
+        // идут только имена самих DNS-серверов (их и так видно в SNI), запросы человека —
+        // нет, так что шифрованный DNS это не понижает (Android бутстрапит так же).
+        val plain = (all.filter { isIpv4Literal(it) || isIpv6Literal(it) } + RU_FALLBACK_DNS).distinct()
+        dns["default-nameserver"] = plain
         return dns
     }
+
+    private fun isDotServer(s: String): Boolean =
+        s.startsWith("tls://") && s.length > 6 && s.none { it.isWhitespace() || it == '%' }
 
     /** Надёжные российские резолверы (Яндекс DNS). Не блокируются в РФ и корректно
      *  разрешают российские домены — фоллбэк для ПРЯМОГО трафика, когда локальный DNS
@@ -421,6 +424,16 @@ object Config {
         out += "AND,((NETWORK,udp),(DST-PORT,443)),REJECT"
 
         if (!r.smart) {
+            // Резерв (белые списки): всё через резервный сервер, КРОМЕ российских сервисов
+            // и решений человека «напрямую». Озон, банки, Госуслуги в белых списках
+            // операторов есть и напрямую открываются, а через зарубежный резерв — нет:
+            // они не пускают иностранные адреса.
+            if (r.keepDirect) {
+                for (d in r.userDomains) {
+                    if (!d.vpn) cleanDomain(d.domain)?.let { out += "DOMAIN-SUFFIX,$it,DIRECT" }
+                }
+                for (d in r.listDirectDomains) cleanDomain(d)?.let { out += "DOMAIN-SUFFIX,$it,DIRECT" }
+            }
             // «Полный VPN»: весь трафик в туннель, без доменных исключений. Но
             // локальную сеть не рвём: приватные подсети уже ушли DIRECT выше, а
             // здесь применяем обход локальных ДОМЕНОВ — доступ к NAS по имени

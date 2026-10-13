@@ -6,7 +6,12 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.NetworkCapabilities
 import android.os.Build
+import java.net.Inet6Address
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -157,12 +162,57 @@ class Repo(private val app: Context) {
         val parsed = runCatching { Sub.parse(resp.body) }.getOrElse {
             return@withContext Result.failure(IllegalStateException(it.message ?: "Подписка не разобрана"))
         }
-        store.saveSubRaw(resp.body)
-        // Храним ЭФФЕКТИВНЫЙ (разрешённый) URL: резерв/meta должны идти на /sub/…, не на /k/.
-        update { it.copy(subUrl = effective) }
-        refreshMeta()
-        val servers = rebuildServers(parsed)
-        Result.success(servers.map { it.key }.distinct().size)
+        // Дальше — смена подписки, и она не должна зависеть от жизни экрана. Человек нажал
+        // «Применить» и ушёл с вкладки: отмена корутины экрана обрывала шаг на refreshMeta,
+        // и оставались НОВЫЕ subscription.txt и subUrl при СТАРОМ списке серверов — движок
+        // шёл через первый попавшийся сервер новой подписки, а экран и шторка показывали
+        // старое имя. Поэтому файл, адрес и список серверов меняем вместе и до конца.
+        withContext(NonCancellable) {
+            val prevSub = _state.value.subUrl
+            store.saveSubRaw(resp.body)
+            // Храним ЭФФЕКТИВНЫЙ (разрешённый) URL: резерв/meta должны идти на /sub/…, не на /k/.
+            update { it.copy(subUrl = effective) }
+            if (!samePanel(prevSub, effective)) forgetPanel()
+            // Список серверов — сразу по новой подписке, ДО сетевых шагов: так он не
+            // расходится с subscription.txt, даже если панель про meta не ответит.
+            rebuildServers(parsed)
+            refreshMeta()
+            val servers = rebuildServers(parsed)
+            // Хвост (списки, резерв, применение к работающему VPN) — в фоне приложения,
+            // тоже мимо жизни экрана: иначе уход с вкладки оставлял бы движок на старом.
+            background.launch {
+                runCatching { syncLists() }
+                // Ручное обновление освежает всё, что относится к пользователю (§10),
+                // включая резервный пул.
+                runCatching { syncReserve() }
+                ru.appswire.novpn.vpn.NoVpnService.reload(app)
+            }
+            Result.success(servers.map { it.key }.distinct().size)
+        }
+    }
+
+    /** Фоновые хвосты, которые не должны умирать вместе с экраном. Живёт как процесс. */
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Та же панель и тот же пользователь: совпадает адрес meta.json (он несёт токен). */
+    private fun samePanel(a: String, b: String): Boolean {
+        val m = Meta.metaUrl(a) ?: return false
+        return m == Meta.metaUrl(b)
+    }
+
+    /**
+     * Подписку сменили на другую панель, другого пользователя или чужого провайдера —
+     * забываем всё, что знали о прежней: её отказ («Срок истёк» блокировал подключение
+     * по новой рабочей подписке до перезапуска процесса), её meta и её резервный пул
+     * (через него иначе ушёл бы трафик при сбое уже чужой подписки).
+     */
+    private fun forgetPanel() {
+        _denied.value = null
+        store.deleteMeta()
+        meta = null
+        store.deleteReserveRaw()
+        synchronized(this) { reserveCache = emptyList(); reserveLoaded = true }
+        update { it.copy(metaUnsupported = false) }
     }
 
     /**
@@ -195,7 +245,13 @@ class Repo(private val app: Context) {
     /** Спросить панель про профили. Никогда не бросает (контракт, раздел 2). */
     suspend fun refreshMeta(): MetaResult = withContext(Dispatchers.IO) {
         val sub = _state.value.subUrl
-        val url = Meta.metaUrl(sub) ?: return@withContext MetaResult(meta = meta, source = "none")
+        val url = Meta.metaUrl(sub) ?: run {
+            // Чужая подписка без /sub/<токен>: панели, которая могла бы отказать, нет.
+            // Отказ, оставшийся от прежней подписки, здесь блокировал бы рабочую новую.
+            _denied.value = null
+            if (_state.value.metaUnsupported) update { it.copy(metaUnsupported = false) }
+            return@withContext MetaResult(meta = meta, source = "none")
+        }
         val resp = runCatching { Http.get(url) }.getOrElse {
             return@withContext MetaResult(meta = meta, source = if (meta != null) "cache" else "none", networkError = it.message)
         }
@@ -208,6 +264,12 @@ class Repo(private val app: Context) {
                 if (!parsed.unsupported) {
                     store.saveMetaRaw(resp.body)
                     meta = parsed
+                }
+                // Мажор контракта новее нашего — по контракту (§8) деградируем в умный режим
+                // и просим обновиться. Флаг держим в состоянии, а не в meta: непонятную meta
+                // мы не сохраняем, и проверка «meta.unsupported» не срабатывала никогда.
+                if (_state.value.metaUnsupported != parsed.unsupported) {
+                    update { it.copy(metaUnsupported = parsed.unsupported) }
                 }
                 parsedSub()?.let { rebuildServers(it) }
                 // Полный профиль могли отозвать, пока соединение живёт (контракт, §9.4).
@@ -284,8 +346,10 @@ class Repo(private val app: Context) {
         return st.servers.filter { it.key == key }
     }
 
-    /** Есть ли у выбранного сервера профиль «Полный VPN». */
-    fun fullAvailable(st: State = _state.value): Boolean = groupOf(st).any { it.mode == "full" }
+    /** Есть ли у выбранного сервера профиль «Полный VPN». Панель новее приложения — нет:
+     *  её профили могут значить не то, что мы думаем, работаем в умном режиме (контракт, §8). */
+    fun fullAvailable(st: State = _state.value): Boolean =
+        !st.metaUnsupported && groupOf(st).any { it.mode == "full" }
 
     /** Реальный режим: выключенная умная действует только при наличии полного профиля. */
     fun effectiveSmart(st: State = _state.value): Boolean = st.smartRouting || !fullAvailable(st)
@@ -352,7 +416,8 @@ class Repo(private val app: Context) {
      *
      * Если у человека включён Private DNS в строгом режиме, открытый UDP-резолвер
      * подставлять нельзя — это тихо понизило бы шифрованный DNS до обычного.
-     * В этом случае отдаём тот же сервер как DoT.
+     * В этом случае отдаём тот же сервер как DoT, а простые адреса сети — следом и
+     * только для бутстрапа его имени (см. Rules.systemDns).
      */
     /** Последний НЕ пустой системный DNS — подстраховка на переходное окно смены сети. */
     @Volatile
@@ -392,13 +457,23 @@ class Repo(private val app: Context) {
             val privateDns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 props.privateDnsServerName
             } else null
+            val plain = props.dnsServers
+                // Link-local DNS роутера (RDNSS fe80::…) Android отдаёт с зоной: «fe80::1%wlan0».
+                // Движок такой адрес не разбирает и отвергает конфиг целиком, а без интерфейса
+                // до него всё равно не дотянуться — пропускаем, остальные адреса сети остаются.
+                .filterNot { it is Inet6Address && (it.isLinkLocalAddress || it.scopeId != 0) }
+                .mapNotNull { it.hostAddress }
+                .filterNot { '%' in it }
+                // Адреса самого туннеля резолверами быть не могут.
+                .filterNot { it.startsWith("198.18.") || it.startsWith("172.19.") }
+                .distinct()
             val list = if (!privateDns.isNullOrBlank()) {
-                listOf("tls://$privateDns")
+                // Строгий Private DNS: резолвер — DoT. Простые адреса сети идут следом ТОЛЬКО
+                // для бутстрапа его имени (Config кладёт их лишь в default-nameserver): без них
+                // движок разрешал имя DoT-сервера своими зашитыми 114.114.114.114/8.8.8.8.
+                listOf("tls://$privateDns") + plain
             } else {
-                props.dnsServers.mapNotNull { it.hostAddress }
-                    // Адреса самого туннеля резолверами быть не могут.
-                    .filterNot { it.startsWith("198.18.") || it.startsWith("172.19.") }
-                    .distinct()
+                plain
             }
             if (list.isEmpty()) continue
             // Проверенная системой сеть важнее: на ней и живёт реальный интернет; из них —
@@ -455,17 +530,23 @@ class Repo(private val app: Context) {
     }.getOrDefault("networksDiag: n/a")
 
     /**
-     * @param forceFull увести ВЕСЬ трафик в туннель, игнорируя умную маршрутизацию.
-     *   Нужно в аварийном режиме (белые списки): там даже российские сайты напрямую
-     *   не открываются, поэтому «умное» деление теряет смысл — всё идёт через рабочий
-     *   резервный сервер. На пер-приложенческие исключения (addDisallowedApplication)
-     *   это НЕ влияет: они задаются при поднятии туннеля и остаются как выбрал человек.
+     * @param forceFull аварийный режим (резерв при белых списках): весь трафик в туннель.
+     *   Кроме российских сервисов из списка «напрямую» и правил человека «напрямую» —
+     *   если человек сам не выбрал «Полный VPN» (keepDirect). Озон, банки, Госуслуги в
+     *   белых списках операторов открываются напрямую, а через зарубежный резерв — нет.
+     *   На пер-приложенческие исключения (addDisallowedApplication) это НЕ влияет: они
+     *   задаются при поднятии туннеля и остаются как выбрал человек.
      */
     fun rules(st: State = _state.value, forceFull: Boolean = false): Rules {
         val node = nodeFor(st)
         val l = lists
-        val useLists = st.settings.autoUpdateLists || l != null
+        // Тумблер «Недоступные ресурсы» на вкладке «Списки». Раньше он был привязан к
+        // автообновлению и на маршрутизацию не влиял: «выключенный» список продолжал
+        // уводить домены в VPN. Выключен — в VPN по спискам не идёт ничего, в том числе
+        // встроенный запас; российские «напрямую» остаются (как на десктопе).
+        val useLists = st.settings.listsEnabled
         val smart = effectiveSmart(st) && !forceFull
+        val keepDirect = forceFull && effectiveSmart(st)
         val userDomains = st.sites
             .filter { it.enabled }
             .map { DomainRule(it.domain, it.route == "vpn") }
@@ -475,6 +556,7 @@ class Repo(private val app: Context) {
 
         return Rules(
             smart = smart,
+            keepDirect = keepDirect,
             lanAccess = node?.lanAccess ?: false,
             bypassLocal = st.settings.bypassLocal,
             customLocal = st.settings.customLocalDomains,
@@ -484,11 +566,11 @@ class Repo(private val app: Context) {
             // Российские сервисы идут напрямую ВСЕГДА: панель их не присылает
             // (upstream — это список того, что уводится в VPN), а без этого слоя любое
             // широкое правило из списков утащило бы банк или госуслуги за границу.
-            listDirectDomains = Preset.directDomains(app) + if (useLists) l?.directDomains.orEmpty() else emptyList(),
+            listDirectDomains = Preset.directDomains(app) + l?.directDomains.orEmpty(),
             // Пока списки ещё не скачались, работаем по встроенному запасу — иначе
             // на свежей установке «VPN включён, а ничего не изменилось».
             listVpnDomains = when {
-                !smart -> emptyList()
+                !smart || !useLists -> emptyList()
                 !l?.vpnDomains.isNullOrEmpty() -> l!!.vpnDomains
                 else -> Preset.fallbackVpnDomains(app)
             },
@@ -528,6 +610,12 @@ class Repo(private val app: Context) {
     @Volatile
     private var reserveLoaded = false
 
+    /** Резерв с уже разведёнными именами — для текущего набора обычных имён. */
+    private class ReserveView(val raw: List<Sub.Node>, val taken: Set<String>, val nodes: List<Sub.Node>)
+
+    @Volatile
+    private var reserveView: ReserveView? = null
+
     /** Разобранные резервные серверы. Скрыты из обычного списка — только для аварии. */
     fun reserveNodes(): List<Sub.Node> {
         if (!reserveLoaded) synchronized(this) {
@@ -538,7 +626,12 @@ class Repo(private val app: Context) {
                 reserveLoaded = true
             }
         }
-        return reserveCache ?: emptyList()
+        val raw = reserveCache ?: return emptyList()
+        // Имена резерва разводим с обычными серверами ЗДЕСЬ, в одном месте: по этому имени
+        // резерв ищут и конфиг, и проверка обхода, и selectProxy, и отчёт о расходе.
+        val taken = _state.value.servers.mapTo(HashSet()) { it.name }.apply { addAll(ENGINE_NAMES) }
+        reserveView?.let { v -> if (v.raw === raw && v.taken == taken) return v.nodes }
+        return Sub.renameClashing(raw, taken).also { reserveView = ReserveView(raw, taken, it) }
     }
 
     fun reserveNames(): List<String> = reserveNodes().map { it.name }
@@ -705,6 +798,9 @@ class Repo(private val app: Context) {
     }
 
     companion object {
+        /** Имена, занятые в движке без нас: наша группа и встроенные прокси mihomo. */
+        private val ENGINE_NAMES = setOf(Config.GROUP, "DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL")
+
         // Это applicationContext, а не активность: держать его в статике безопасно,
         // он живёт столько же, сколько процесс.
         @SuppressLint("StaticFieldLeak")

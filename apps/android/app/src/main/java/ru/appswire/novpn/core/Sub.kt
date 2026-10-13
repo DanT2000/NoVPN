@@ -71,14 +71,16 @@ object Sub {
                     .load<Any?>(text) as? MutableMap<String, Any?>
             }.getOrNull()
             if (root != null && (root["proxies"] as? List<*>)?.isNotEmpty() == true) {
-                // Из чужого конфига берём ТОЛЬКО точки подключения и группы. Всё
-                // остальное (listeners, socks-port, bind-address, rule-providers,
-                // geox-url, hosts) — это команды движку, который крутится на телефоне
-                // человека: подписка не должна открывать порты в локальную сеть и
-                // заставлять его качать файлы с чужих адресов.
+                // Из чужого конфига берём ТОЛЬКО точки подключения. Всё остальное
+                // (listeners, socks-port, bind-address, rule-providers, geox-url, hosts) —
+                // это команды движку, который крутится на телефоне человека: подписка не
+                // должна открывать порты в локальную сеть и заставлять его качать файлы с
+                // чужих адресов. proxy-groups провайдера тоже НЕ переносим, как и десктоп
+                // (sub.rs): группа через `use:`/`include-all`/`filter` без своего списка
+                // proxies (или устаревший relay) роняла ВЕСЬ конфиг — «`use` or `proxies`
+                // missing», движок не стартовал. Наши правила ссылаются только на NoVPN.
                 val safe = linkedMapOf<String, Any?>()
                 root["proxies"]?.let { safe["proxies"] = it }
-                root["proxy-groups"]?.let { safe["proxy-groups"] = it }
                 return Parsed.Clash(safe)
             }
         }
@@ -103,6 +105,30 @@ object Sub {
         is Parsed.Nodes -> parsed.nodes.mapNotNull { it.map["server"]?.toString() }
         is Parsed.Clash -> (parsed.root["proxies"] as? List<*>).orEmpty()
             .mapNotNull { (it as? Map<*, *>)?.get("server")?.toString() }
+    }
+
+    /** Типы, которые ходят по UDP: TCP-проба до их порта ничего не говорит о сервере. */
+    private val UDP_TYPES = setOf("wireguard", "hysteria", "hysteria2", "tuic")
+
+    /**
+     * Адрес и ПОРТ серверов — для диагностики «наш сервер достижим». Порт берём из
+     * точки: панель ставит Xray и на нестандартный порт (443 бывает занят), у чужих
+     * провайдеров 8443/2053 — обычное дело. Стук на жёсткий 443 давал ложный novpn=-
+     * (SERVER_DOWN), и самовосстановление залипшего туннеля не срабатывало никогда.
+     */
+    fun endpointsOf(parsed: Parsed): List<Pair<String, Int>> {
+        val maps: List<Map<*, *>> = when (parsed) {
+            is Parsed.Nodes -> parsed.nodes.map { it.map }
+            is Parsed.Clash -> (parsed.root["proxies"] as? List<*>).orEmpty().mapNotNull { it as? Map<*, *> }
+        }
+        return maps.mapNotNull { m ->
+            if (m["type"]?.toString()?.lowercase() in UDP_TYPES) return@mapNotNull null
+            val host = m["server"]?.toString()?.trim().orEmpty()
+            if (host.isEmpty()) return@mapNotNull null
+            // В чужом YAML порт бывает и числом, и строкой.
+            val p = m["port"]?.toString()?.trim()?.toIntOrNull()
+            host to (if (p != null && p in 1..65535) p else 443)
+        }.distinct() // у умного и полного профиля один и тот же сервер
     }
 
     /** Подписки приходят и в обычном base64, и в URL-безопасном, и без выравнивания. */
@@ -130,6 +156,27 @@ object Sub {
             if (node != null) out += node
         }
         return dedupeNames(out)
+    }
+
+    /**
+     * Резервные точки, чьё имя совпало с обычным сервером (или со служебным именем
+     * движка), получают приписку «(резерв)». Иначе в движке было два прокси с одним
+     * именем: конфиг молча пропускал резервный, а проверка обхода и selectProxy по этому
+     * имени били в ОБЫЧНЫЙ сервер — такой резерв был недоступен, а под «Резервным
+     * подключением» мог оказаться обычный. Флаг в начале имени сохраняется: по нему
+     * отсеиваются российские серверы.
+     */
+    fun renameClashing(nodes: List<Node>, taken: Set<String>): List<Node> {
+        if (nodes.none { it.name in taken }) return nodes
+        val used = HashSet(taken).apply { nodes.forEach { add(it.name) } }
+        return nodes.map { n ->
+            if (n.name !in taken) return@map n
+            var name = "${n.name} (резерв)"
+            var i = 2
+            while (name in used) name = "${n.name} (резерв ${i++})"
+            used += name
+            n.copy(name = name, map = LinkedHashMap(n.map).apply { this["name"] = name })
+        }
     }
 
     /** Имена точек у провайдеров часто повторяются, а mihomo требует уникальных. */
@@ -207,7 +254,10 @@ object Sub {
         }
         val (beforeQuery, queryRaw) = beforeFrag.split("?", limit = 2).let { it[0] to it.getOrNull(1).orEmpty() }
         val at = beforeQuery.lastIndexOf('@')
-        val user = if (at >= 0) beforeQuery.substring(0, at) else ""
+        // userinfo в ссылке percent-кодирован: пароль trojan «a+b=» приходит как «a%2Bb%3D»
+        // (так его собирает и сама панель из Xray-JSON провайдера). Без раскодирования в
+        // движок уходил «a%2Bb%3D», и сервер отвергал пароль. UUID vless от этого не меняется.
+        val user = if (at >= 0) dec(beforeQuery.substring(0, at)) else ""
         // Отсекаем путь `host:port/...` (напр. vless с завершающим «/» перед «?») — иначе
         // порт разбирался как «port/» → toIntOrNull()==null → откат на 443. Как в sub.rs.
         val hostPort = (if (at >= 0) beforeQuery.substring(at + 1) else beforeQuery).substringBefore('/')
@@ -368,17 +418,13 @@ object Sub {
             // SIP002: ss://base64(method:pass)@host:port/?plugin=... — срезаем путь «/…»,
             // иначе порт разбирался как «port/» и падал в 443. Как в sub.rs.
             val hostPort = body.substring(at + 1).substringBefore('/')
-            val decoded = runCatching {
-                String(Base64.getDecoder().decode(cred.trimEnd('=')), Charsets.UTF_8)
-            }.getOrDefault(cred)
+            val decoded = ssUserInfo(cred) ?: return null
             val ci = decoded.indexOf(':'); if (ci < 0) return null
             val hi = hostPort.lastIndexOf(':'); if (hi < 0) return null
             method = decoded.substring(0, ci); password = decoded.substring(ci + 1)
             host = hostPort.substring(0, hi); port = hostPort.substring(hi + 1)
         } else {
-            val decoded = runCatching {
-                String(Base64.getDecoder().decode(body.trimEnd('=')), Charsets.UTF_8)
-            }.getOrNull() ?: return null
+            val decoded = decodeB64Any(dec(body)) ?: return null
             val ai = decoded.lastIndexOf('@'); if (ai < 0) return null
             val cred = decoded.substring(0, ai); val hostPort = decoded.substring(ai + 1)
             val ci = cred.indexOf(':'); if (ci < 0) return null
@@ -393,6 +439,28 @@ object Sub {
             "cipher" to method, "password" to password, "udp" to true,
         )
         return Node(name, m)
+    }
+
+    /**
+     * userinfo ссылки ss://. По SIP002 это base64 от «method:pass» — и обычный, и
+     * URL-безопасный («-», «_»: так экспортирует shadowsocks-android). Для шифров 2022
+     * (SIP022) — открытый «method:pass» с percent-кодированием: ключ «KEY=» приходит как
+     * «KEY%3D». Раньше URL-безопасный base64 не разбирался (узел выпадал), а %-коды
+     * уходили в движок как есть — пароль не совпадал.
+     */
+    private fun ssUserInfo(cred: String): String? {
+        val plain = dec(cred)
+        // В base64 двоеточия не бывает: есть «:» — значит, userinfo открытый.
+        if (plain.contains(':')) return plain
+        return decodeB64Any(plain)
+    }
+
+    /** base64 в обоих алфавитах и без выравнивания — как у vmess. */
+    private fun decodeB64Any(s: String): String? {
+        val cleaned = s.filterNot { it.isWhitespace() }.trimEnd('=')
+        return listOf(Base64.getDecoder(), Base64.getUrlDecoder()).firstNotNullOfOrNull { d ->
+            runCatching { String(d.decode(cleaned), Charsets.UTF_8) }.getOrNull()
+        }
     }
 
     /** Xray-JSON: так отдаёт подписка NoVPN — массив полных конфигов, из каждого

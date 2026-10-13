@@ -31,6 +31,9 @@ data class Settings(
     /** Подключаться автоматически при запуске и после перезагрузки телефона. */
     val autoconnect: Boolean = true,
     val autoUpdateLists: Boolean = true,
+    /** Список «Недоступные ресурсы» включён — его домены идут через VPN. Отдельно от
+     *  автообновления: выключить список не значит перестать его обновлять. */
+    val listsEnabled: Boolean = true,
     /** Локальная сеть напрямую: роутер, NAS, внутренние сайты мимо VPN.
      *  Выключено по умолчанию — так же, как на десктопе. */
     val bypassLocal: Boolean = false,
@@ -67,6 +70,9 @@ data class State(
     val sites: List<SiteRule> = emptyList(),
     val apps: List<AppRule> = emptyList(),
     val settings: Settings = Settings(),
+    /** Панель отдала meta.json с мажором контракта новее нашего: работаем в умном режиме
+     *  и просим обновить приложение (контракт, §8). */
+    val metaUnsupported: Boolean = false,
     /** Последняя удачная синхронизация списков — для строки статуса. */
     val listsSyncedAt: Long = 0,
     /** Человеку показали просьбу снять ограничения батареи (чтобы не спрашивать вечно). */

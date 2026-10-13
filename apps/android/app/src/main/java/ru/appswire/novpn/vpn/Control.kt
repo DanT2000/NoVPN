@@ -89,17 +89,33 @@ class Control(private val port: Int, private val secret: String) {
         client.newCall(request("/connections").delete().build()).execute().use { it.isSuccessful }
     }.getOrDefault(false)
 
+    /**
+     * Почему не прошла последняя проверка задержки: ответ движка («HTTP 504 Timeout»)
+     * или ошибка запроса к нему. null — последняя проверка прошла. Нужна для журнала:
+     * без неё «сервер не пропускает трафик» при живом интернете не разобрать.
+     */
+    @Volatile
+    var lastDelayError: String? = null
+        private set
+
     /** Задержка до точки, мс; null — не ответила. */
     fun delay(name: String, url: String = "http://cp.cloudflare.com/generate_204", timeoutMs: Int = 3000): Int? =
         runCatching {
             val path = "/proxies/" + seg(name) +
                 "/delay?timeout=$timeoutMs&url=" + java.net.URLEncoder.encode(url, "UTF-8")
             client.newCall(request(path).build()).execute().use { r ->
-                if (!r.isSuccessful) return null
-                val obj = json.parseToJsonElement(r.body?.string().orEmpty()) as? JsonObject
-                (obj?.get("delay") as? JsonPrimitive)?.longOrNull?.toInt()
+                val body = r.body?.string().orEmpty()
+                if (!r.isSuccessful) {
+                    lastDelayError = "HTTP ${r.code} ${body.take(120)}"
+                    return null
+                }
+                val obj = json.parseToJsonElement(body) as? JsonObject
+                val ms = (obj?.get("delay") as? JsonPrimitive)?.longOrNull?.toInt()
+                lastDelayError = if (ms == null) "нет задержки в ответе: ${body.take(120)}" else null
+                ms
             }
-        }.getOrNull()
+        }.onFailure { lastDelayError = "${it.javaClass.simpleName}: ${it.message?.take(120)}" }
+            .getOrNull()
 
     data class Totals(val down: Long, val up: Long, val connections: Int)
 
