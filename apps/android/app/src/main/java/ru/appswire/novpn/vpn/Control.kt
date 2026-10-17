@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -134,6 +135,28 @@ class Control(private val port: Int, private val secret: String) {
             val up = numberAfter(text, "\"uploadTotal\"")
             if (down == null && up == null) return null
             Totals(down ?: 0, up ?: 0, countConnections(text))
+        }
+    }.getOrNull()
+
+    /**
+     * Живые соединения через указанный сервер: id → сколько байт получено. null — движок
+     * не ответил. По приросту видно, что сервер РЕАЛЬНО отдаёт данные, — надёжнее теста
+     * задержки, который на мобильной сети и под нагрузкой бывает ложно «не прошёл».
+     */
+    fun downloadsVia(name: String): Map<String, Long>? = runCatching {
+        client.newCall(request("/connections").build()).execute().use { r ->
+            if (!r.isSuccessful) return null
+            val root = json.parseToJsonElement(r.body?.string().orEmpty()) as? JsonObject ?: return null
+            val arr = root["connections"] as? JsonArray ?: return emptyMap()
+            buildMap {
+                for (c in arr) {
+                    val o = c as? JsonObject ?: continue
+                    val chains = o["chains"] as? JsonArray ?: continue
+                    if (chains.none { (it as? JsonPrimitive)?.contentOrNull == name }) continue
+                    val id = (o["id"] as? JsonPrimitive)?.contentOrNull ?: continue
+                    put(id, (o["download"] as? JsonPrimitive)?.longOrNull ?: 0L)
+                }
+            }
         }
     }.getOrNull()
 

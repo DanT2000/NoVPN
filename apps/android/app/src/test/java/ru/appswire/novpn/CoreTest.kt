@@ -8,6 +8,7 @@ import org.junit.Test
 import org.yaml.snakeyaml.Yaml
 import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.core.DomainRule
+import ru.appswire.novpn.core.Health
 import ru.appswire.novpn.core.ListsParser
 import ru.appswire.novpn.core.Meta
 import ru.appswire.novpn.core.Rules
@@ -138,6 +139,22 @@ class CoreTest {
         assertFalse(out.any { it.contains("gosuslugi.ru") })
         // Локальные подсети всё равно напрямую: домашняя сеть рваться не должна.
         assertTrue(out.any { it == "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve" })
+    }
+
+    @Test
+    fun `трафик через сервер виден по приросту принятых байт`() {
+        // Первый снимок: сравнивать не с чем — старое соединение ничего не доказывает.
+        assertFalse(Health.flowed(null, mapOf("a" to 5_000L)))
+        // Ничего не пришло — тишина (сервер мог залипнуть).
+        assertFalse(Health.flowed(mapOf("a" to 5_000L), mapOf("a" to 5_000L)))
+        // Старое соединение получило данные.
+        assertTrue(Health.flowed(mapOf("a" to 5_000L), mapOf("a" to 5_100L)))
+        // Новое соединение уже что-то получило.
+        assertTrue(Health.flowed(mapOf("a" to 5_000L), mapOf("a" to 5_000L, "b" to 300L)))
+        // Новое соединение без данных — ещё не доказательство.
+        assertFalse(Health.flowed(mapOf("a" to 5_000L), mapOf("b" to 0L)))
+        // Соединения закрылись — тишина, а не «работает».
+        assertFalse(Health.flowed(mapOf("a" to 5_000L), emptyMap()))
     }
 
     @Test

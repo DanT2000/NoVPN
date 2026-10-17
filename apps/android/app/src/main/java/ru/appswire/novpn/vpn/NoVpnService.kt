@@ -35,6 +35,7 @@ import kotlinx.coroutines.sync.withLock
 import ru.appswire.novpn.MainActivity
 import ru.appswire.novpn.R
 import ru.appswire.novpn.core.Config
+import ru.appswire.novpn.core.Health
 import ru.appswire.novpn.core.Sub
 import ru.appswire.novpn.data.Repo
 import ru.appswire.novpn.ui.Flags
@@ -184,6 +185,7 @@ class NoVpnService : VpnService() {
                 stopping = false
                 // Новая сессия по просьбе человека или системы — серия самоперезапусков с нуля.
                 selfHealStreak = 0
+                lastReserveMiss = 0L
                 if (!startForegroundSafely(notification("Подключаемся…", null))) {
                     // Без foreground система убьёт службу через минуты, а человек
                     // решит, что «VPN сам выключается». Честнее не подключаться.
@@ -571,6 +573,7 @@ class NoVpnService : VpnService() {
                         establishedTransport = curTransport
                         establishedNetwork = curNet
                         selfHealStreak = 0 // новая сеть — и серия самоперезапусков новая
+                        lastReserveMiss = 0L // и резерв в новой сети проверяем сразу
                         reestablishTunnel("Смена типа сети (опрос)")
                         continue
                     } else if (curNet != null && curNet != establishedNetwork) {
@@ -580,6 +583,7 @@ class NoVpnService : VpnService() {
                         establishedNetwork = curNet
                         if (!first) {
                             selfHealStreak = 0
+                            lastReserveMiss = 0L
                             moveToNetwork(curNet, "опрос")
                         }
                     }
@@ -604,7 +608,7 @@ class NoVpnService : VpnService() {
                         // Полноценный подбор запускаем только после двух подряд, чтобы
                         // не пугать человека ложным «резерв недоступен».
                         val cur = VpnBus.server.value
-                        if (cur != null && worksThrough(eng, cur)) {
+                        if (cur != null && (trafficFlowsVia(eng, cur) || worksThrough(eng, cur))) {
                             healthMisses = 0
                             // Связь есть — снимаем прежний диагноз (например «нет
                             // интернета», выставленный при пропаже сети). Иначе метка
@@ -633,6 +637,17 @@ class NoVpnService : VpnService() {
 
     @Volatile
     private var healthMisses = 0
+
+    /** Прошлый снимок соединений через сервер (id → полученные байты) — для [trafficFlowsVia]. */
+    @Volatile
+    private var lastVia: Map<String, Long> = emptyMap()
+
+    @Volatile
+    private var lastViaServer: String? = null
+
+    /** Когда полная проверка резерва последний раз ничего не нашла (см. evaluate). */
+    @Volatile
+    private var lastReserveMiss = 0L
 
     @Volatile
     private var lastWhitelistWatch = 0L
@@ -890,6 +905,21 @@ class NoVpnService : VpnService() {
     private data class Candidate(val name: String, val host: String, val reserve: Boolean)
 
     /** Реальный доступ ЧЕРЕЗ прокси: delay-тест к настоящему сайту (не ping, не порт). */
+    /**
+     * Идёт ли через сервер РЕАЛЬНЫЙ трафик: хоть одно соединение через него получило
+     * данные с прошлой проверки (снимок обновляется на каждом тике). Тест задержки на
+     * мобильной сети и под нагрузкой ложно «не проходит» (HTTP 504 за 3 с) при живом
+     * трафике — 17.10.2026 из-за этого телефон весь вечер гонял проверку сотни резервных
+     * серверов через тот же движок, и тормозило всё остальное (ChatGPT).
+     */
+    private fun trafficFlowsVia(eng: Engine, name: String): Boolean {
+        val now = eng.control.downloadsVia(name) ?: return false
+        val prev = if (lastViaServer == name) lastVia else null
+        lastVia = now
+        lastViaServer = name
+        return Health.flowed(prev, now)
+    }
+
     private fun worksThrough(eng: Engine, name: String): Boolean {
         for (url in HEALTH_URLS) {
             if (stopping || !eng.isAlive()) return false
@@ -1032,11 +1062,11 @@ class NoVpnService : VpnService() {
                 }
                 // Текущий резерв ещё жив — остаёмся на нём. Если сеть перед этим пропадала,
                 // снимаем «нет интернета»: иначе шторка так и показывала бы его.
-                if (current != null && worksThrough(eng, current)) {
+                if (current != null && (trafficFlowsVia(eng, current) || worksThrough(eng, current))) {
                     clearNoInternet()
                     return
                 }
-            } else if (current != null && worksThrough(eng, current)) {
+            } else if (current != null && (trafficFlowsVia(eng, current) || worksThrough(eng, current))) {
                 // Обычный сервер работает — всё хорошо (кроме белых списков: их отметку
                 // и предложение резерва снимает только сторож, см. markServerOk).
                 VpnBus.setReserve(null)
@@ -1092,10 +1122,19 @@ class NoVpnService : VpnService() {
                 selfHeal("сеть в порядке и сервер доступен, а через туннель трафик не шёл", gen)
                 return
             }
+            // Сеть в порядке и сервер достижим — резерв тут не нужен: он для белых списков
+            // (RESTRICTED) и неработающего сервера (SERVER_DOWN, после исчерпанных
+            // перезапусков). Раньше при каждом ложном «тест задержки не прошёл» телефон
+            // проверял сотню резервных серверов через тот же движок — и душил живой трафик.
+            if (d.diagnosis == NetDiagnosis.OK) return
             if (!repo.reserveAvailable()) {
                 repo.recordDiag("info", "Резервных серверов нет — восстановить нечем.")
                 return
             }
+
+            // Полная проверка резерва — это сотня серверов через тот же движок. Если она
+            // только что ничего не нашла, не повторяем её чаще RESERVE_RETRY_MS.
+            if (System.currentTimeMillis() - lastReserveMiss < RESERVE_RETRY_MS) return
 
             // Пробуем резерв с РЕАЛЬНОЙ проверкой ОБХОДА через него (§4): не «жив ли»,
             // а грузятся ли внешние сайты (YouTube и др.). Из сотни серверов реально
@@ -1128,6 +1167,7 @@ class NoVpnService : VpnService() {
             // уведомлением НЕ пугаем: про белые списки уже сообщили выше через
             // maybeNotifyDiagnosis, а состояние резерва человек видит в приложении.
             Log.w(TAG, "резерв не восстановил соединение")
+            lastReserveMiss = System.currentTimeMillis()
             repo.recordDiag("error", "Резерв проверен, но ни один сервер не заработал.")
             scope.launch { runCatching { repo.uploadDiag() } }
             VpnBus.setReserve(null)
@@ -1215,7 +1255,10 @@ class NoVpnService : VpnService() {
                 val prev = establishedTransport
                 // Сеть и правда другая (а не повтор колбэка после переустановки туннеля —
                 // он приходит с той же сетью): серия самоперезапусков начинается заново.
-                if (establishedNetwork != null && establishedNetwork != network) selfHealStreak = 0
+                if (establishedNetwork != null && establishedNetwork != network) {
+                    selfHealStreak = 0
+                    lastReserveMiss = 0L
+                }
                 // Запоминаем текущий тип ДО решения: первое событие после подключения
                 // задаёт базовую линию (prev было -1) и переустановку не вызывает; в
                 // переустановленном туннеле первый onAvailable снова придёт с тем же
@@ -1639,7 +1682,11 @@ class NoVpnService : VpnService() {
             "http://cp.cloudflare.com/generate_204",
             "http://www.google.com/generate_204",
         )
-        private const val HEALTH_TIMEOUT_MS = 3_000
+        // 5 с, а не 3: тест задержки делает два запроса через свежее соединение (unified-delay),
+        // и на мобильной сети 3 с не хватало — ложное «сервер не пропускает трафик».
+        private const val HEALTH_TIMEOUT_MS = 5_000
+        /** Пауза после полной проверки резерва, которая ничего не нашла. */
+        private const val RESERVE_RETRY_MS = 10 * 60_000L
 
         /**
          * Проверка реального ОБХОДА для аварийного пула: внешние сайты, которые в
