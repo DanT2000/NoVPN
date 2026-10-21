@@ -27,8 +27,8 @@ android {
         minSdk = 26
         // Google Play с 31.08.2026 принимает только targetSdk 36 (Android 16).
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.2.10"
+        versionCode = 13
+        versionName = "0.2.11"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {

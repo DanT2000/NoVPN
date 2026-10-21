@@ -27,6 +27,7 @@ import ru.appswire.novpn.core.RoutingLists
 import ru.appswire.novpn.core.Rules
 import ru.appswire.novpn.core.ServerEntry
 import ru.appswire.novpn.core.Sub
+import ru.appswire.novpn.core.ServerPolicy
 import ru.appswire.novpn.core.deniedHuman
 import ru.appswire.novpn.net.Http
 import ru.appswire.novpn.store.DiagEntry
@@ -332,6 +333,8 @@ class Repo(private val app: Context) {
         update { st ->
             val key = st.serverKey?.takeIf { k -> entries.any { it.key == k } }
                 ?: entries.firstOrNull { it.recommended }?.key
+                // По умолчанию — первый НЕ домашний: домашний (🏠) только для ручного выбора.
+                ?: entries.firstOrNull { !ServerPolicy.isManualOnly(it.name) }?.key
                 ?: entries.firstOrNull()?.key
             st.copy(servers = entries, serverKey = key)
         }

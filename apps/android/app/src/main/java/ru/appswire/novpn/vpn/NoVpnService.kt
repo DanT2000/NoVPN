@@ -36,6 +36,7 @@ import ru.appswire.novpn.MainActivity
 import ru.appswire.novpn.R
 import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.core.Health
+import ru.appswire.novpn.core.ServerPolicy
 import ru.appswire.novpn.core.Sub
 import ru.appswire.novpn.data.Repo
 import ru.appswire.novpn.ui.Flags
@@ -523,8 +524,9 @@ class NoVpnService : VpnService() {
      */
     private fun activeNormal(node: String): String {
         val cur = VpnBus.server.value
+        // Домашний (🏠) сам по себе не удерживаем: автоматически он выбираться не должен.
         val keepAuto = node == lastAppliedNode && cur != null && cur != node &&
-            repo.representatives().any { it.name == cur }
+            !ServerPolicy.isManualOnly(cur) && repo.representatives().any { it.name == cur }
         lastAppliedNode = node
         return if (keepAuto) cur!! else node
     }
@@ -975,8 +977,12 @@ class NoVpnService : VpnService() {
         return null
     }
 
+    /** Обычные серверы для автоподбора. Домашний (🏠) сюда не входит: он только для ручного
+     *  выбора, аварийным выходом быть не должен (просьба владельца, 21.10.2026). */
     private fun normalCandidates(): List<Candidate> =
-        repo.representatives().map { Candidate(it.name, it.host, false) }
+        repo.representatives()
+            .filterNot { ServerPolicy.isManualOnly(it.name) }
+            .map { Candidate(it.name, it.host, false) }
 
     /**
      * Кандидаты аварийного пула. Российские серверы исключаем: в подписках-резервах

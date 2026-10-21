@@ -9,6 +9,7 @@ import org.yaml.snakeyaml.Yaml
 import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.core.DomainRule
 import ru.appswire.novpn.core.Health
+import ru.appswire.novpn.core.ServerPolicy
 import ru.appswire.novpn.core.ListsParser
 import ru.appswire.novpn.core.Meta
 import ru.appswire.novpn.core.Rules
@@ -139,6 +140,15 @@ class CoreTest {
         assertFalse(out.any { it.contains("gosuslugi.ru") })
         // Локальные подсети всё равно напрямую: домашняя сеть рваться не должна.
         assertTrue(out.any { it == "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve" })
+    }
+
+    @Test
+    fun `домашний сервер со значком — только ручной выбор`() {
+        assertTrue(ServerPolicy.isManualOnly("🏠 HomeVPN"))
+        assertTrue(ServerPolicy.isManualOnly("  🏠 Дача"))
+        assertFalse(ServerPolicy.isManualOnly("🇳🇱🚀 Нидерланды"))
+        assertFalse(ServerPolicy.isManualOnly("HomeVPN"))
+        assertFalse(ServerPolicy.isManualOnly("Нидерланды 🏠"))
     }
 
     @Test
