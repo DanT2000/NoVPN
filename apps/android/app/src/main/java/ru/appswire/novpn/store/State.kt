@@ -34,9 +34,11 @@ data class Settings(
     /** Список «Недоступные ресурсы» включён — его домены идут через VPN. Отдельно от
      *  автообновления: выключить список не значит перестать его обновлять. */
     val listsEnabled: Boolean = true,
-    /** Локальная сеть напрямую: роутер, NAS, внутренние сайты мимо VPN.
-     *  Выключено по умолчанию — так же, как на десктопе. */
-    val bypassLocal: Boolean = false,
+    /** Локальная сеть напрямую: роутер, NAS, внутренние сайты и поиск устройств в сети
+     *  мимо VPN. Включено по умолчанию (просьба владельца, 25.10.2026): иначе приложения
+     *  вроде Mixing Station не находят устройство в той же Wi-Fi. Уже сохранённый выбор
+     *  (encodeDefaults) у прежних установок не меняется. */
+    val bypassLocal: Boolean = true,
     val customLocalDomains: List<String> = emptyList(),
     /** cloudflare | google | quad9 | custom. */
     val dnsProvider: String = "cloudflare",

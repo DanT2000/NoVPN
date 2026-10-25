@@ -261,6 +261,7 @@ class Repo(private val app: Context) {
                 val parsed = runCatching { Meta.parse(resp.body) }.getOrNull()
                     ?: return@withContext MetaResult(meta = meta, source = if (meta != null) "cache" else "none", networkError = "meta.json не разобран")
                 _denied.value = null
+                val prevMeta = meta
                 // Кэшируем только то, что поняли: непонятную версию не пишем.
                 if (!parsed.unsupported) {
                     store.saveMetaRaw(resp.body)
@@ -276,7 +277,10 @@ class Repo(private val app: Context) {
                 // Полный профиль могли отозвать, пока соединение живёт (контракт, §9.4).
                 // Тогда выбранная точка сменилась, и движку надо об этом сказать —
                 // иначе телефон продолжит гнать весь трафик в туннель до перезапуска.
-                if (ru.appswire.novpn.vpn.VpnBus.isRunning) {
+                // Только если ответ панели и правда изменился: meta спрашивается при каждом
+                // запуске приложения, и перезагрузка конфига без нужды срывала первую
+                // проверку сервера сразу после подключения (25.10.2026).
+                if (ru.appswire.novpn.vpn.VpnBus.isRunning && parsed != prevMeta) {
                     ru.appswire.novpn.vpn.NoVpnService.reload(app)
                 }
                 MetaResult(meta = parsed, source = "network", unsupported = parsed.unsupported)

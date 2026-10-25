@@ -159,6 +159,10 @@ class BackupTest {
         // Белые списки МТС (30.09.2026): соединение с нашим сервером ПРОХОДИТ, а зарубежное
         // закрыто. Это тоже белые списки, а не «всё в порядке».
         assertEquals(NetDiagnosis.RESTRICTED, Diag.classify(russiaUp = true, externalUp = false, novpnUp = true))
+        // Напрямую не открывается ничего, отвечает только TCP до нашего сервера (его бывает
+        // «открывает» посредник провайдера). Это нет интернета, а не «всё в порядке»: раньше
+        // по такому OK туннель перезапускался, хотя перезапуск сеть не вернёт.
+        assertEquals(NetDiagnosis.NO_INTERNET, Diag.classify(russiaUp = false, externalUp = false, novpnUp = true))
     }
 
     @Test

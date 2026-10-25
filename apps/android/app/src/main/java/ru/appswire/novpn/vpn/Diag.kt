@@ -127,14 +127,14 @@ object Diag {
      *  - внешние доступны и серверы NoVPN доступны → сеть в порядке;
      *  - внешние доступны, но серверы NoVPN нет → наши серверы недоступны;
      *  - внешних нет, но российские есть → похоже на ограниченный режим;
-     *  - крайние случаи трактуем осторожно.
+     *  - напрямую не открывается ничего → интернета нет, даже если TCP до нашего сервера
+     *    прошёл: его бывает «открывает» посредник провайдера, а по OK туннель
+     *    перезапускался впустую.
      */
     fun classify(russiaUp: Boolean, externalUp: Boolean, novpnUp: Boolean): NetDiagnosis = when {
-        !russiaUp && !externalUp && !novpnUp -> NetDiagnosis.NO_INTERNET
+        !russiaUp && !externalUp -> NetDiagnosis.NO_INTERNET
         externalUp && novpnUp -> NetDiagnosis.OK
         externalUp && !novpnUp -> NetDiagnosis.SERVER_DOWN
-        !externalUp && russiaUp -> NetDiagnosis.RESTRICTED
-        novpnUp -> NetDiagnosis.OK
         else -> NetDiagnosis.RESTRICTED
     }
 }

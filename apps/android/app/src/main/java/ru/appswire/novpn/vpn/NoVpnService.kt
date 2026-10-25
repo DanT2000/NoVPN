@@ -9,11 +9,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.IpPrefix
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -36,6 +40,8 @@ import ru.appswire.novpn.MainActivity
 import ru.appswire.novpn.R
 import ru.appswire.novpn.core.Config
 import ru.appswire.novpn.core.Health
+import ru.appswire.novpn.core.LanRoutes
+import ru.appswire.novpn.core.NetSwitch
 import ru.appswire.novpn.core.ServerPolicy
 import ru.appswire.novpn.core.Sub
 import ru.appswire.novpn.data.Repo
@@ -74,6 +80,13 @@ class NoVpnService : VpnService() {
 
     @Volatile
     private var netCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Поток сетевых колбэков (registerBestMatchingNetworkCallback требует Handler). */
+    private val netThreadLazy = lazy { HandlerThread("novpn-net").apply { start() } }
+    private val netThread by netThreadLazy
+
+    /** Решения о смене сети (колбэк и опрос) — по одному, см. [onUnderlying]. */
+    private val netLock = Any()
 
     @Volatile
     private var watchdog: Job? = null
@@ -285,6 +298,17 @@ class NoVpnService : VpnService() {
         lastUp = 0
         lastStatsAt = System.currentTimeMillis()
         lastDns = repo.systemDns()
+        healthMisses = 0
+
+        // Сеть, на которой поднят туннель, — точка отсчёта для колбэка и опроса. Без неё
+        // первое же событие после подключения считалось «переездом»: сброс всех
+        // соединений и перезагрузка конфига прямо во время первой проверки сервера.
+        val baseNet = currentUnderlyingNetwork()
+        synchronized(netLock) {
+            establishedNetwork = baseNet
+            establishedTransport = transportOf(baseNet)
+        }
+        baseNet?.let { runCatching { setUnderlyingNetworks(arrayOf(it)) } }
 
         // Новое подключение начинается как обычное: если прошлый сеанс завершился
         // в резервном режиме, сбрасываем его.
@@ -297,7 +321,13 @@ class NoVpnService : VpnService() {
         registerNetworkCallback()
         startWatchdog()
 
-        repo.recordDiag("info", "Подключено к серверу: ${node.name}")
+        // Версия и модель — чтобы на панели различать устройства под одной подпиской
+        // (25.10.2026 журнал владельца забивало старое приложение с планшета).
+        repo.recordDiag(
+            "info",
+            "Подключено к серверу: ${node.name} · Android ${ru.appswire.novpn.BuildConfig.VERSION_NAME}, " +
+                "${Build.MANUFACTURER} ${Build.MODEL}",
+        )
         repo.recordDiag("dns", repo.networksDiag())
 
         // Резервный пул обновляем в фоне, а затем сразу проверяем, что выбранный
@@ -316,7 +346,6 @@ class NoVpnService : VpnService() {
             .setSession(SESSION)
             .setMtu(Config.MTU)
             .addAddress("172.19.0.1", 30)
-            .addRoute("0.0.0.0", 0)
             // DNS внутри туннеля: движок перехватывает любой :53 (dns-hijack),
             // поэтому адрес нужен лишь как «куда системе слать запросы».
             .addDnsServer("172.19.0.2")
@@ -330,6 +359,19 @@ class NoVpnService : VpnService() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 ),
             )
+
+        // «Локальная сеть — напрямую»: локальные подсети в туннель не заводим вовсе (см.
+        // LanRoutes) — иначе поиск устройств широковещанием терялся в туннеле.
+        if (lanDirect(st)) {
+            for ((addr, len) in LanRoutes.ipv4WithoutLan()) builder.addRoute(addr, len)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                for ((addr, len) in LanRoutes.LAN_V6) {
+                    runCatching { builder.excludeRoute(IpPrefix(java.net.InetAddress.getByName(addr), len)) }
+                }
+            }
+        } else {
+            builder.addRoute("0.0.0.0", 0)
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
 
@@ -384,11 +426,61 @@ class NoVpnService : VpnService() {
     @Volatile
     private var establishedNetwork: Network? = null
 
-    /** Физическая сеть под туннелем: служба исключает себя из VPN, поэтому её «сеть по
-     *  умолчанию» — это реальная Wi-Fi/мобильная сеть, а не туннель. */
+    /** Физическая сеть под туннелем: служба исключает себя из VPN, поэтому её activeNetwork —
+     *  реальная Wi-Fi/мобильная сеть. Сеть самого туннеля на всякий случай отсекаем. */
     private fun currentUnderlyingNetwork(): Network? {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        return runCatching { cm.activeNetwork }.getOrNull()
+        return runCatching { cm.activeNetwork }.getOrNull()?.takeUnless { isVpnNetwork(it) }
+    }
+
+    private fun isVpnNetwork(network: Network): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return runCatching { cm.getNetworkCapabilities(network) }.getOrNull()
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
+
+    /**
+     * Под туннелем оказалась сеть [network] — решение одно и для колбэка системы, и для
+     * опроса сторожа (см. NetSwitch). 25.10.2026: колбэк «сети по умолчанию» отдавал
+     * VPN-приложению его СОБСТВЕННЫЙ туннель, а опрос — настоящий Wi-Fi; каждое
+     * подключение давало два лишних «переезда» со сбросом соединений и перезагрузкой
+     * конфига, а смена Wi-Fi ↔ мобильный — до четырёх переустановок туннеля подряд.
+     */
+    private fun onUnderlying(network: Network, source: String): NetSwitch.Action {
+        val transport = transportOf(network)
+        val action = synchronized(netLock) {
+            val action = NetSwitch.decide(
+                establishedNetwork?.networkHandle, establishedTransport, network.networkHandle, transport,
+            )
+            if (action != NetSwitch.Action.NONE) {
+                establishedNetwork = network
+                if (transport != -1) establishedTransport = transport
+            }
+            action
+        }
+        when (action) {
+            NetSwitch.Action.NONE -> Unit
+            NetSwitch.Action.BASELINE -> runCatching { setUnderlyingNetworks(arrayOf(network)) }
+            NetSwitch.Action.MOVE -> {
+                selfHealStreak = 0 // новая сеть — и серия самоперезапусков новая
+                lastReserveMiss = 0L // и резерв в новой сети проверяем сразу
+                moveToNetwork(network, source)
+            }
+            NetSwitch.Action.REESTABLISH -> {
+                selfHealStreak = 0
+                lastReserveMiss = 0L
+                // Почему не мягкой заменой underlying: на MIUI/HyperOS сеть, на которую
+                // перешли ПОСЛЕ поднятия туннеля, система не перепроверяет — в шторке
+                // остаётся Wi-Fi с «!» или пропадает «4G». Переустановка туннеля заставляет
+                // перепровалидировать сеть и перерисовать значок (как Amnezia).
+                runCatching { setUnderlyingNetworks(arrayOf(network)) }
+                val label = netLabel(network)
+                scope.launch {
+                    reestablishTunnel("Сеть → $label (смена типа" + (if (source.isNotEmpty()) ", $source" else "") + ")")
+                }
+            }
+        }
+        return action
     }
 
     /** Основной тип сети (transport). Только Wi-Fi/мобильный/Ethernet различаем —
@@ -430,9 +522,20 @@ class NoVpnService : VpnService() {
      * Смена сайтовых правил на отпечаток не влияет — их движок применяет на лету.
      */
     private fun tunAppsSignature(st: State): String {
-        if (!repo.effectiveSmart(st)) return "full"
-        return st.apps.filter { it.route == "direct" }.map { it.pkg }.sorted().joinToString(",")
+        // Маршруты туннеля тоже задаются только в establish(): включили «Локальная сеть —
+        // напрямую» или выбрали сервер с доступом в домашнюю сеть — поднимаем заново.
+        val lan = if (lanDirect(st)) "lan;" else ""
+        if (!repo.effectiveSmart(st)) return lan + "full"
+        return lan + st.apps.filter { it.route == "direct" }.map { it.pkg }.sorted().joinToString(",")
     }
+
+    /**
+     * Локальные подсети мимо туннеля — если человек включил «Локальная сеть — напрямую» и
+     * у выбранного сервера нет доступа в локальную сеть (lanAccess у домашнего сервера:
+     * через него, наоборот, ходят в домашнюю сеть 192.168.x.x извне).
+     */
+    private fun lanDirect(st: State): Boolean =
+        st.settings.bypassLocal && repo.nodeFor(st)?.lanAccess != true
 
     // ── перестройка правил без разрыва туннеля ──
 
@@ -560,36 +663,16 @@ class NoVpnService : VpnService() {
                     continue
                 }
 
-                // СМЕНА ТИПА СЕТИ опросом (Wi-Fi↔мобильный). На MIUI/HyperOS система душит
-                // сетевые колбэки VPN-службе (onAvailable приходит только первый раз),
-                // поэтому переустановку по колбэку ждать нельзя — опрашиваем текущую сеть
-                // сами. Если тип сменился — переустанавливаем туннель, иначе значок сети в
-                // шторке остаётся неверным (Wi-Fi с «!», пропадает «4G»). Опрос дешёвый.
+                // СМЕНА СЕТИ опросом — подстраховка колбэка. «onAvailable приходит только
+                // первый раз», которое раньше списывали на MIUI, оказалось колбэком на сеть
+                // самого туннеля (см. registerNetworkCallback), но фоновые колбэки оболочки
+                // и правда душат — опрос дешёвый. Решает onUnderlying, так же, как для
+                // колбэка: та же сеть — ничего, другая того же типа — переезд, другой тип —
+                // переустановка туннеля (иначе неверный значок сети в шторке).
                 val curNet = currentUnderlyingNetwork()
-                val curTransport = transportOf(curNet)
-                if (curTransport != -1) {
-                    if (establishedTransport == -1) {
-                        establishedTransport = curTransport
-                        establishedNetwork = curNet
-                    } else if (curTransport != establishedTransport) {
-                        establishedTransport = curTransport
-                        establishedNetwork = curNet
-                        selfHealStreak = 0 // новая сеть — и серия самоперезапусков новая
-                        lastReserveMiss = 0L // и резерв в новой сети проверяем сразу
-                        reestablishTunnel("Смена типа сети (опрос)")
-                        continue
-                    } else if (curNet != null && curNet != establishedNetwork) {
-                        // Тот же тип, но ДРУГАЯ сеть (сменили SIM, оператор переподнял
-                        // сессию), а колбэк система не прислала — переезжаем сами.
-                        val first = establishedNetwork == null
-                        establishedNetwork = curNet
-                        if (!first) {
-                            selfHealStreak = 0
-                            lastReserveMiss = 0L
-                            moveToNetwork(curNet, "опрос")
-                        }
-                    }
-                }
+                if (curNet != null && transportOf(curNet) != -1 &&
+                    onUnderlying(curNet, "опрос") == NetSwitch.Action.REESTABLISH
+                ) continue // туннель сейчас поднимется заново — проверять старый незачем
 
                 // Возврат с полного VPN на умный по таймеру сервера (контракт, 7).
                 checkFullTimeout()
@@ -733,6 +816,22 @@ class NoVpnService : VpnService() {
                 "но трафик через него не идёт — считаем его недоступным.",
         )
         return d.copy(diagnosis = NetDiagnosis.SERVER_DOWN)
+    }
+
+    /**
+     * Перед самоперезапуском проверяем текущий сервер ещё раз, через паузу. Одна неудачная
+     * проверка — не повод рвать все соединения: 25.10.2026 на эмуляторе её сорвала
+     * перезагрузка конфига после смены сети, и через 16 с после подключения пришло
+     * «Подключение перезапущено». Ожил — снимаем диагноз и туннель не трогаем.
+     */
+    private suspend fun stillStuck(eng: Engine, current: String?): Boolean {
+        if (current == null) return true
+        delay(HEAL_CONFIRM_MS)
+        if (stopping || !eng.isAlive()) return true
+        if (!trafficFlowsVia(eng, current) && !worksThrough(eng, current)) return true
+        repo.recordDiag("health", "Повторная проверка «$current» прошла — туннель не перезапускаем")
+        markServerOk()
+        return false
     }
 
     /**
@@ -1090,6 +1189,7 @@ class NoVpnService : VpnService() {
                 applyDiagnosis(d)
                 // Перезапуск туннеля — не смена сервера, поэтому делаем его и без автоматики.
                 if (d.diagnosis == NetDiagnosis.OK && selfHealDue()) {
+                    if (!stillStuck(eng, current) || stale()) return
                     selfHeal("сеть в порядке и сервер доступен, а через туннель трафик не шёл", gen)
                     return
                 }
@@ -1125,6 +1225,7 @@ class NoVpnService : VpnService() {
             // тот же залипший туннель. Не больше SELF_HEAL_MAX_STREAK раз подряд — дальше
             // diagnoseServers считает сервер недоступным, и очередь доходит до резерва.
             if (d.diagnosis == NetDiagnosis.OK && selfHealDue()) {
+                if (!stillStuck(eng, current) || stale()) return
                 selfHeal("сеть в порядке и сервер доступен, а через туннель трафик не шёл", gen)
                 return
             }
@@ -1245,52 +1346,22 @@ class NoVpnService : VpnService() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                // Привязываем туннель к новой сети: иначе после перехода
-                // Wi-Fi ↔ мобильный интернет движок продолжит слать пакеты в
-                // исчезнувший интерфейс, и соединение «висит».
-                runCatching { setUnderlyingNetworks(arrayOf(network)) }
-
-                // СМЕНА ТИПА СЕТИ (Wi-Fi ↔ мобильный) — переустанавливаем туннель, как
-                // это делает Amnezia. Почему не мягкой заменой underlying: на MIUI/HyperOS
-                // сеть, на которую перешли ПОСЛЕ поднятия туннеля, система не
-                // перепроверяет — в шторке остаётся Wi-Fi с «!» или пропадает «4G», хотя
-                // интернет есть. Полная переустановка туннеля заставляет систему
-                // перепровалидировать сеть и перерисовать значок. Тип-фильтр не даёт
-                // дёргать переустановку на мелких событиях (та же сеть, смена адреса).
-                val newTransport = transportOf(network)
-                val prev = establishedTransport
-                // Сеть и правда другая (а не повтор колбэка после переустановки туннеля —
-                // он приходит с той же сетью): серия самоперезапусков начинается заново.
-                if (establishedNetwork != null && establishedNetwork != network) {
-                    selfHealStreak = 0
-                    lastReserveMiss = 0L
-                }
-                // Запоминаем текущий тип ДО решения: первое событие после подключения
-                // задаёт базовую линию (prev было -1) и переустановку не вызывает; в
-                // переустановленном туннеле первый onAvailable снова придёт с тем же
-                // типом и совпадёт — цикла нет.
-                if (newTransport != -1) establishedTransport = newTransport
-                // И саму сеть: иначе опрос сочтёт её «новой» и переедет второй раз.
-                establishedNetwork = network
-                if (prev != -1 && newTransport != -1 && newTransport != prev &&
-                    !stopping && engine?.isAlive() == true
-                ) {
-                    val label = netLabel(network)
-                    scope.launch { reestablishTunnel("Сеть → $label (смена типа, колбэк)") }
-                    return
-                }
-
-                // Тот же тип сети (или первое событие после подключения): мягкий переезд.
-                moveToNetwork(network, "")
+                // Сеть самого туннеля сюда прийти не должна (запрос NOT_VPN), но на старых
+                // Android запасной путь — колбэк «сети по умолчанию», а он отдаёт её.
+                if (isVpnNetwork(network)) return
+                if (stopping || engine?.isAlive() != true) return
+                onUnderlying(network, "")
             }
 
             override fun onLost(network: Network) {
+                // Пропала не та сеть, на которой туннель (её уже сменила новая), — не наше дело.
+                if (network != establishedNetwork) return
                 runCatching { setUnderlyingNetworks(null) }
                 // Если заменяющей сети нет (выключили и Wi-Fi, и мобильный) —
                 // интернета сейчас нет вовсе. Показываем это сразу, чтобы на главной
                 // не висело «Подключено» при мёртвой сети. При переходе Wi-Fi ↔ LTE
                 // activeNetwork уже указывает на новую сеть, и мы сюда не заходим.
-                if (runCatching { cm.activeNetwork }.getOrNull() == null) {
+                if (currentUnderlyingNetwork() == null) {
                     setDiagnosis(NetDiagnosis.NO_INTERNET)
                     repo.recordDiag("network", "Сеть пропала — интернета нет")
                 }
@@ -1311,15 +1382,32 @@ class NoVpnService : VpnService() {
                 }
             }
         }
-        // Именно СЕТЬ ПО УМОЛЧАНИЮ: подписка на «любую сеть с интернетом» ловила бы
-        // и посторонние сети (оператор поднял мобильную на секунду при живом Wi-Fi),
-        // и мы бы врали системе о том, через что на самом деле идёт туннель.
-        val ok = runCatching { cm.registerDefaultNetworkCallback(cb) }.isSuccess
+        // Нужна ОДНА сеть — та, через которую система реально выходит в интернет, — и не
+        // «любая сеть с интернетом» (оператор поднял мобильную на секунду при живом Wi-Fi,
+        // и мы бы врали системе, через что идёт туннель). Колбэк «сети по умолчанию» для
+        // этого не годится: начиная с Android 9 VPN-приложению он отдаёт его собственный
+        // туннель (подтверждено 25.10.2026 на Android 16). Поэтому — лучшая сеть по
+        // запросу NOT_VPN, как в shadowsocks-android и sing-box.
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            .build()
+        val ok = runCatching {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+                    cm.registerBestMatchingNetworkCallback(request, cb, Handler(netThread.looper))
+                // До Android 12 лучшую сеть даёт только requestNetwork (заявка, не слушатель:
+                // слушатель получал бы ВСЕ подходящие сети). Нужен CHANGE_NETWORK_STATE.
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ->
+                    cm.requestNetwork(request, cb, Handler(netThread.looper))
+                else -> cm.registerDefaultNetworkCallback(cb, Handler(netThread.looper))
+            }
+        }.onFailure { Log.w(TAG, "подписка на смену сети: ${it.message}") }.isSuccess
         if (ok) {
             netCallback = cb
             // Подключились, когда сети уже нет: onAvailable не придёт, поэтому
             // выставляем диагноз сразу, иначе на главной висит «Подключено».
-            if (runCatching { cm.activeNetwork }.getOrNull() == null) {
+            if (currentUnderlyingNetwork() == null) {
                 setDiagnosis(NetDiagnosis.NO_INTERNET)
             }
         } else {
@@ -1339,7 +1427,14 @@ class NoVpnService : VpnService() {
         // Привязываем туннель к новой сети: иначе движок продолжит слать пакеты в
         // исчезнувший интерфейс, и соединение «висит».
         runCatching { setUnderlyingNetworks(arrayOf(network)) }
-        rebuild.trySend(Unit)
+        // От сети в конфиге зависит только DNS для прямых доменов. Пересобираем, лишь если
+        // он сменился: перезагрузка конфига обрывает проверки сервера, и после каждого
+        // переезда приходило ложное «трафик не шёл» с перезапуском туннеля.
+        val dns = repo.systemDns()
+        if (dns != lastDns) {
+            lastDns = dns
+            rebuild.trySend(Unit)
+        }
         val label = netLabel(network)
         scope.launch(Dispatchers.IO) {
             val dropped = engine?.takeIf { it.isAlive() }?.control?.closeConnections() ?: false
@@ -1442,6 +1537,7 @@ class NoVpnService : VpnService() {
         engine?.stop(wait = false)
         runCatching { tun?.close() }
         unregisterNetworkCallback()
+        if (netThreadLazy.isInitialized()) netThread.quitSafely()
         VpnBus.setState(ConnState.OFF)
         rebuild.close()
         failover.close()
@@ -1725,6 +1821,9 @@ class NoVpnService : VpnService() {
          *  бесполезных попыток подряд — больше не перезапускаем до смены сети или ожившего
          *  туннеля, сервер считаем недоступным (см. selfHealExhausted). */
         private const val SELF_HEAL_MIN_MS = 120_000L
+
+        /** Пауза перед повторной проверкой, после которой решаем о самоперезапуске. */
+        private const val HEAL_CONFIRM_MS = 5_000L
         private const val SELF_HEAL_MAX_STREAK = 3
         /** Как часто докладываем резервный расход на панель. */
         private const val RESERVE_REPORT_MS = 60_000L

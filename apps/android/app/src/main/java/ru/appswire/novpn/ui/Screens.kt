@@ -372,7 +372,7 @@ fun SettingsScreen(
             )
             ToggleItem(
                 title = "Локальная сеть — напрямую",
-                meta = "Роутер, NAS и внутренние сайты в обход VPN",
+                meta = "Роутер, NAS, внутренние сайты и поиск устройств в сети — в обход VPN",
                 checked = state.settings.bypassLocal,
                 onChange = { v ->
                     repo.update { it.copy(settings = it.settings.copy(bypassLocal = v)) }
