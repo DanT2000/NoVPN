@@ -16,6 +16,11 @@ import { getServerKeys } from './keyvault.js';
 export const REALITY_SNI = 'cdn.dodostatic.net';
 export const REALITY_FP = 'edge';
 export const REALITY_SPX = '/';
+/** Образ Xray — с ЗАКРЕПЛЁННОЙ версией. Без тега ставился latest, а Xray ≥ 26.9.8 отвергает
+ *  REALITY-клиентов с fingerprint edge (XTLS/Xray-core#7259) — 31.10.2026 перенос на новый
+ *  бокс поставил 26.10.29, и все Xray-устройства остались без связи. Обновлять — только
+ *  проверив edge-клиентом. */
+export const XRAY_IMAGE = 'teddysun/xray:26.7.28';
 
 /** Генератор server.json Xray при установке (python3; argv: SNI, privateKey, shortId).
  *  Вынесен в константу, чтобы тест прогнал его настоящим python и зафиксировал контракт
@@ -237,18 +242,18 @@ if [ "$WANT_XRAY" = "1" ]; then
   for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 1; done
   docker info >/dev/null 2>&1 || { echo "DOCKER_FAIL: демон не запустился"; exit 1; }
   mkdir -p /opt/amnezia/xray
-  docker pull -q teddysun/xray >/dev/null 2>&1 || true
+  docker pull -q ${XRAY_IMAGE} >/dev/null 2>&1 || true
   if [ -z "$REALITY_PRIV" ]; then
-    KP=$(docker run --rm teddysun/xray xray x25519)
+    KP=$(docker run --rm ${XRAY_IMAGE} xray x25519)
     REALITY_PRIV=$(echo "$KP" | grep -iE 'private' | grep -oE '[A-Za-z0-9_/+-]{40,}' | head -1)
   fi
-  REALITY_PUB=$(docker run --rm teddysun/xray xray x25519 -i "$REALITY_PRIV" | grep -iE 'public' | grep -oE '[A-Za-z0-9_/+-]{40,}' | head -1)
+  REALITY_PUB=$(docker run --rm ${XRAY_IMAGE} xray x25519 -i "$REALITY_PRIV" | grep -iE 'public' | grep -oE '[A-Za-z0-9_/+-]{40,}' | head -1)
   [ -z "$SHORT_ID" ] && SHORT_ID=$(openssl rand -hex 8)
   python3 - "$SNI" "$REALITY_PRIV" "$SHORT_ID" > /opt/amnezia/xray/server.json <<'PY'
 ${XRAY_SERVER_JSON_PY}
 PY
   docker rm -f amnezia-xray >/dev/null 2>&1 || true
-  docker run -d --name amnezia-xray --restart always -p ${xrayPort}:443 -v /opt/amnezia/xray:/opt/amnezia/xray teddysun/xray xray run -c /opt/amnezia/xray/server.json >/dev/null
+  docker run -d --name amnezia-xray --restart always -p ${xrayPort}:443 -v /opt/amnezia/xray:/opt/amnezia/xray ${XRAY_IMAGE} xray run -c /opt/amnezia/xray/server.json >/dev/null
   sleep 3
   docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null || { echo "XRAY_FAIL"; exit 1; }
   echo "REALITY_PRIV=$REALITY_PRIV"; echo "REALITY_PUB=$REALITY_PUB"; echo "SHORT_ID=$SHORT_ID"; echo "SNI=$SNI"

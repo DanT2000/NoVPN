@@ -14,7 +14,7 @@ process.env.ENCRYPTION_KEY = '0'.repeat(64);
 process.env.SESSION_SECRET = 'test';
 fs.mkdirSync(path.dirname(process.env.DATABASE_PATH), { recursive: true });
 
-const { XRAY_SERVER_JSON_PY } = await import('../src/services/sshServer.js');
+const { XRAY_SERVER_JSON_PY, XRAY_IMAGE } = await import('../src/services/sshServer.js');
 
 function pythonCmd(): string | null {
   for (const c of ['python3', 'python']) {
@@ -50,6 +50,18 @@ test('server.json: REALITY с minClientVer=1.8.2 (иначе Xray ≥ 26.7.11 о
   assert.deepEqual(rs.serverNames, ['cdn.dodostatic.net']);
   assert.deepEqual(rs.shortIds, ['5b82014c36d33322']);
   assert.equal(rs.privateKey, 'PRIVKEY');
+});
+
+// Регресс на 31.10.2026: перенос поставил latest (26.10.29), а Xray ≥ 26.9.8 отвергает
+// fingerprint edge — все Xray-устройства без связи. Образ — только с закреплённой версией.
+test('установка: образ Xray с закреплённой версией, без latest', () => {
+  assert.match(XRAY_IMAGE, /^teddysun\/xray:\d+\.\d+\.\d+$/);
+  const src = fs.readFileSync(new URL('../src/services/sshServer.ts', import.meta.url), 'utf8');
+  const bare = src.split('\n').filter((l) => {
+    const t = l.trim();
+    return !t.startsWith('#') && !t.startsWith('//') && !t.startsWith('*') && /teddysun\/xray(?!:)/.test(t);
+  });
+  assert.deepEqual(bare, [], 'образ teddysun/xray без тега');
 });
 
 test('server.json: api-inbound статистики и sniffing на месте', { skip: !PY }, () => {
