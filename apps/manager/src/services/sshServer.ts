@@ -731,7 +731,9 @@ sni=sys.argv[1]
 p='/opt/amnezia/xray/server.json'
 c=json.load(open(p))
 rs=c['inbounds'][0]['streamSettings']['realitySettings']
-if rs.get('serverNames')==[sni] and rs.get('dest')==sni+':443':
+# Имя уже принимается — сервер настроен. Свою маску (dest) не трогаем: её меняют руками,
+# когда сайт-маска с сервера недоступна (31.10.2026 у Роберта рвался cdn.dodostatic.net).
+if sni in (rs.get('serverNames') or []):
     print('ALREADY'); sys.exit(0)
 rs['serverNames']=[sni]
 rs['dest']=sni+':443'
