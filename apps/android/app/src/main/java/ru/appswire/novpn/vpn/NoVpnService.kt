@@ -1094,7 +1094,7 @@ class NoVpnService : VpnService() {
             .map { Candidate(it.name, it.map["server"]?.toString().orEmpty(), true) }
 
     /** Адреса серверов для диагностики — с РЕАЛЬНЫМ портом точки (см. Sub.endpointsOf). */
-    private fun serverAddrs(): List<Pair<String, Int>> =
+    private fun serverAddrs(): List<Sub.Endpoint> =
         repo.parsedSub()?.let { Sub.endpointsOf(it) }.orEmpty()
 
     private suspend fun applySelection(eng: Engine, c: Candidate) = selection.withLock {

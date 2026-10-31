@@ -683,7 +683,7 @@ class CoreTest {
         // 443 давал ложный novpn=- → SERVER_DOWN, и самовосстановление не срабатывало.
         val links = "vless://u1@x.example:8443#A\nvless://u2@x.example:8443#B\nvless://u3@y.example#C"
         assertEquals(
-            listOf("x.example" to 8443, "y.example" to 443),
+            listOf(Sub.Endpoint("x.example", 8443), Sub.Endpoint("y.example", 443)),
             Sub.endpointsOf(Sub.parse(links)),
         )
         val yaml = """
@@ -694,8 +694,25 @@ class CoreTest {
         """.trimIndent()
         // Порт строкой понимается; UDP-протоколы в TCP-пробу не идут; без порта — 443.
         assertEquals(
-            listOf("a.example" to 2053, "n.example" to 443),
+            listOf(Sub.Endpoint("a.example", 2053), Sub.Endpoint("n.example", 443)),
             Sub.endpointsOf(Sub.parse(yaml)),
+        )
+    }
+
+    @Test
+    fun `у REALITY-сервера диагностика берёт SNI — проверка рукопожатием, а не TCP`() {
+        // TCP к заблокированному адресу мобильный оператор принимает сам — нужен ответ TLS.
+        val links = "vless://u1@1.vpn.example:443?type=tcp&security=reality&pbk=K&sid=ab&sni=cdn.dodostatic.net" +
+            "&fp=edge&flow=xtls-rprx-vision#R\n" +
+            "vless://u2@t.example:8443?security=tls#T\n" +
+            "vless://u3@p.example:80#P"
+        assertEquals(
+            listOf(
+                Sub.Endpoint("1.vpn.example", 443, "cdn.dodostatic.net"),
+                Sub.Endpoint("t.example", 8443, "t.example"), // TLS без sni — по имени сервера
+                Sub.Endpoint("p.example", 80, null), // без TLS — остаётся TCP-проба
+            ),
+            Sub.endpointsOf(Sub.parse(links)),
         )
     }
 

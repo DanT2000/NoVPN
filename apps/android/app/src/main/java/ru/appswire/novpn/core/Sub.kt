@@ -110,13 +110,16 @@ object Sub {
     /** Типы, которые ходят по UDP: TCP-проба до их порта ничего не говорит о сервере. */
     private val UDP_TYPES = setOf("wireguard", "hysteria", "hysteria2", "tuic")
 
+    /** Точка для диагностики. `sni` — у TLS/REALITY-серверов: их проверяем рукопожатием. */
+    data class Endpoint(val host: String, val port: Int, val sni: String? = null)
+
     /**
      * Адрес и ПОРТ серверов — для диагностики «наш сервер достижим». Порт берём из
      * точки: панель ставит Xray и на нестандартный порт (443 бывает занят), у чужих
      * провайдеров 8443/2053 — обычное дело. Стук на жёсткий 443 давал ложный novpn=-
      * (SERVER_DOWN), и самовосстановление залипшего туннеля не срабатывало никогда.
      */
-    fun endpointsOf(parsed: Parsed): List<Pair<String, Int>> {
+    fun endpointsOf(parsed: Parsed): List<Endpoint> {
         val maps: List<Map<*, *>> = when (parsed) {
             is Parsed.Nodes -> parsed.nodes.map { it.map }
             is Parsed.Clash -> (parsed.root["proxies"] as? List<*>).orEmpty().mapNotNull { it as? Map<*, *> }
@@ -127,7 +130,9 @@ object Sub {
             if (host.isEmpty()) return@mapNotNull null
             // В чужом YAML порт бывает и числом, и строкой.
             val p = m["port"]?.toString()?.trim()?.toIntOrNull()
-            host to (if (p != null && p in 1..65535) p else 443)
+            val tls = m["tls"] == true || m["tls"]?.toString() == "true"
+            val sni = if (tls) m["servername"]?.toString()?.trim()?.ifEmpty { null } ?: host else null
+            Endpoint(host, if (p != null && p in 1..65535) p else 443, sni)
         }.distinct() // у умного и полного профиля один и тот же сервер
     }
 

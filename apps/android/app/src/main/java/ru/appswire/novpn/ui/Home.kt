@@ -206,7 +206,14 @@ fun HomeScreen(
                     borderColor = c.amberNoticeBorder,
                 ) {
                     TName("Обычные серверы недоступны", color = c.amberFg)
-                    TNote("Похоже, сеть работает в ограниченном режиме.", modifier = Modifier.padding(top = 6.dp))
+                    // Причину называем по диагнозу: раньше «ограниченный режим» писался и тогда,
+                    // когда интернет в порядке, а лежит сам сервер (31.10.2026, блок «Нидерландов»).
+                    val why = when (diagnosis) {
+                        NetDiagnosis.RESTRICTED -> "Похоже, сеть работает в ограниченном режиме."
+                        NetDiagnosis.SERVER_DOWN -> "Интернет работает, но сервер VPN не отвечает."
+                        else -> "Через обычные серверы сейчас не идёт трафик."
+                    }
+                    TNote(why, modifier = Modifier.padding(top = 6.dp))
                     Btn(
                         "Перейти на резерв",
                         onClick = { NoVpnService.useReserve(context) },

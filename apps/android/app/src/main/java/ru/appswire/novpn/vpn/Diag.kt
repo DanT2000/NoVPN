@@ -6,9 +6,15 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import ru.appswire.novpn.core.Sub
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SNIHostName
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509TrustManager
 
 /**
  * Диагностика сети по СОВОКУПНОСТИ признаков, а не по одному ping или одному сайту.
@@ -68,19 +74,45 @@ object Diag {
         }.any { it.await() }
     }
 
-    /** TCP-достижимость хотя бы одного сервера NoVPN (по адресу и порту). */
-    private suspend fun anyServerUp(servers: List<Pair<String, Int>>): Boolean = coroutineScope {
+    /**
+     * Достижим ли хоть один сервер NoVPN. TLS/REALITY-сервер — по рукопожатию: TCP-соединение
+     * мобильный оператор «принимает» сам даже к заблокированному адресу (31.10.2026 «Нидерланды»
+     * под блоком давали novpn=+ → диагноз OK → три бесполезных перезапуска туннеля, 6–8 минут
+     * до резерва). Ответ TLS посредник не подделает: REALITY без нашего ключа отдаёт рукопожатие
+     * сайта-маски, а заблокированный адрес молчит.
+     */
+    private suspend fun anyServerUp(servers: List<Sub.Endpoint>): Boolean = coroutineScope {
         if (servers.isEmpty()) return@coroutineScope false
-        servers.take(4).map { (host, port) ->
+        servers.take(4).map { e ->
             async(Dispatchers.IO) {
-                runCatching {
-                    Socket().use { s ->
-                        s.connect(InetSocketAddress(host, port), 4000)
-                        s.isConnected
-                    }
-                }.getOrDefault(false)
+                if (e.sni != null) tlsReachable(e.host, e.port, e.sni) else tcpReachable(e.host, e.port)
             }
         }.any { it.await() }
+    }
+
+    internal fun tcpReachable(host: String, port: Int, timeoutMs: Int = 4000): Boolean = runCatching {
+        Socket().use { s ->
+            s.connect(InetSocketAddress(host, port), timeoutMs)
+            s.isConnected
+        }
+    }.getOrDefault(false)
+
+    /** Завершилось ли TLS-рукопожатие. Сертификат не проверяем: данных не шлём, важен сам ответ. */
+    internal fun tlsReachable(host: String, port: Int, sni: String, timeoutMs: Int = 4000): Boolean = runCatching {
+        val ctx = SSLContext.getInstance("TLS").apply { init(null, arrayOf(TRUST_ANY), null) }
+        (ctx.socketFactory.createSocket() as SSLSocket).use { s ->
+            s.connect(InetSocketAddress(host, port), timeoutMs)
+            s.soTimeout = timeoutMs
+            s.sslParameters = s.sslParameters.apply { serverNames = listOf(SNIHostName(sni)) }
+            s.startHandshake()
+            true
+        }
+    }.getOrDefault(false)
+
+    private val TRUST_ANY = object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     }
 
     /** Открылся ли хоть один URL — ПО ОЧЕРЕДИ до первого успеха: в обычной сети это
@@ -98,7 +130,7 @@ object Diag {
      * переиспользуется). Не открылось → полная диагностика, чтобы отличить белые списки
      * от «интернета нет вовсе».
      */
-    suspend fun whitelistCheck(servers: List<Pair<String, Int>>): Result? = withContext(Dispatchers.IO) {
+    suspend fun whitelistCheck(servers: List<Sub.Endpoint>): Result? = withContext(Dispatchers.IO) {
         if (firstReachable(EXTERNAL)) null else diagnose(servers)
     }
 
@@ -111,10 +143,10 @@ object Diag {
     suspend fun externalUp(): Boolean = withContext(Dispatchers.IO) { anyReachable(EXTERNAL) }
 
     /**
-     * Полная диагностика. `servers` — адреса обычных серверов NoVPN (host, port),
+     * Полная диагностика. `servers` — точки обычных серверов NoVPN (адрес, порт, SNI),
      * чтобы отличить «наши серверы недоступны» от «интернета нет вовсе».
      */
-    suspend fun diagnose(servers: List<Pair<String, Int>>): Result = withContext(Dispatchers.IO) {
+    suspend fun diagnose(servers: List<Sub.Endpoint>): Result = withContext(Dispatchers.IO) {
         val russia = anyReachable(RUSSIA)
         val external = anyReachable(EXTERNAL)
         val novpn = anyServerUp(servers)
