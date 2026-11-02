@@ -35,6 +35,12 @@ export interface LegacyPort {
   since: string;
 }
 
+/** Прежняя маска Reality, которую сервер ещё принимает после смены (переходный период). */
+export interface LegacyMask {
+  sni: string;
+  since: string;
+}
+
 export interface Server {
   id: string;
   name: string;
@@ -44,6 +50,9 @@ export interface Server {
   ports?: ServerPorts;
   /** Старые порты, оставленные для совместимости с ранее выданными конфигами. */
   legacyPorts?: LegacyPort[];
+  /** Маска Reality (сайт, под который сервер маскируется) и прежние маски, которые
+   *  ещё принимаются, пока приложения не обновили подписку. */
+  realityMask?: { sni: string | null; legacy: LegacyMask[] };
   /** Физический сервер отвязан: endpoint (домен/порты/ключи/конфиги) сохранён, SSH нет. */
   detached?: boolean;
   /** SSH-вход по ключу настроен (пароль отключён после hardening). */

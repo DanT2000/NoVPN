@@ -508,6 +508,9 @@ for (const stmt of [
   // Legacy-алиасы портов: [{proto,'port',since}] — старый порт продолжает вести на
   // новый (iptables), чтобы уже выданные конфиги оставались живыми после смены порта.
   "ALTER TABLE server_keys ADD COLUMN legacy_ports TEXT NOT NULL DEFAULT '[]'",
+  // Прежние маски Reality: [{sni, since}] — после смены маски сервер ещё принимает их,
+  // чтобы приложения со старой подпиской не отвалились, пока не обновят её.
+  "ALTER TABLE server_keys ADD COLUMN legacy_snis TEXT NOT NULL DEFAULT '[]'",
   // Сервер «отвязан»: физическая машина удалена/недоступна, но endpoint (домен, порты,
   // ключи, связь с выданными конфигами) сохранён — серый статус, sync пропускает.
   'ALTER TABLE servers ADD COLUMN detached INTEGER NOT NULL DEFAULT 0',

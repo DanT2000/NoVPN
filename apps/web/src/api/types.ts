@@ -289,6 +289,9 @@ export interface ApiClient {
   saveEndpointConfig(id: string, patch: Partial<EndpointConfigView>): Promise<{ ok: boolean; config: EndpointConfigView }>;
   changeServerPort(id: string, component: 'xray' | 'awg', port: number, keepLegacy: boolean): Promise<{ ok: boolean; oldPort?: number; newPort?: number; legacyKept?: boolean }>;
   disableLegacyPort(id: string, proto: 'xray' | 'awg', port: number): Promise<Ok>;
+  /** Сменить маску Reality; keepLegacy — прежняя ещё принимается, пока приложения не обновят подписку. */
+  changeServerMask(id: string, sni: string, keepLegacy: boolean): Promise<{ ok: boolean; unchanged?: boolean; sni: string; links?: number }>;
+  disableLegacyMask(id: string, sni: string): Promise<Ok>;
   hardenServerSsh(id: string, privateKey: string): Promise<{ ok: boolean; publicKey?: string }>;
 
   // ── admin: telegram ──

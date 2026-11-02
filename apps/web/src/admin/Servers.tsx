@@ -331,6 +331,89 @@ function SshHardenPanel({ server }: { server: Server }) {
   );
 }
 
+/* Маска Reality — сайт, под который сервер маскируется (его имя видно в каждом подключении,
+   а при проверке сервера отвечает настоящий сайт). Проверенные 03.11.2026 с серверов в
+   Финляндии и Франции: TLS 1.3 + HTTP/2, нет в списках РКН. Лучше разные маски на разных
+   серверах. Российские сайты на зарубежном сервере выглядят подозрительно. */
+const MASK_PRESETS = ['www.lenovo.com', 'www.asus.com', 'www.samsung.com', 'www.lg.com', 'www.hp.com', 'www.dell.com', 'www.ikea.com', 'www.bosch.com'];
+
+function MaskPanel({ server }: { server: Server }) {
+  const { showToast, showConfirm, reload } = useApp();
+  const mask = server.realityMask;
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!mask?.sni) return null;
+  const next = value.trim().toLowerCase();
+
+  function change() {
+    showConfirm({
+      title: 'Сменить маску?',
+      text: `Сервер «${server.name}» будет маскироваться под ${next}. Прежняя маска ${mask!.sni} останется рабочей, пока приложения не обновят подписку (Happ — раз в 12 часов, приложение NoVPN — при запуске). Отключите её через неделю.`,
+      confirmLabel: 'Сменить',
+      onConfirm: async () => {
+        setBusy(true);
+        try {
+          const r = await api.changeServerMask(server.id, next, true);
+          showToast(r.unchanged ? 'Маска уже такая' : `Маска: ${r.sni}${r.links ? ` · обновлено ссылок: ${r.links}` : ''}`);
+          setValue('');
+          await reload();
+        } catch (e) {
+          showToast(e instanceof Error ? e.message : 'Не удалось сменить маску');
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
+  }
+
+  return (
+    <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+      <span className="field-label">Маска (сайт, под который маскируется сервер)</span>
+      <div className="body small mono">Сейчас: <b>{mask.sni}</b></div>
+      {mask.legacy.map((m) => (
+        <div key={m.sni} className="body small muted" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+          <span>
+            Ещё принимается прежняя: <span className="mono">{m.sni}</span> (с {fmtAt(m.since)})
+          </span>
+          <button
+            className="btn btn-outline btn-sm"
+            disabled={busy}
+            onClick={() =>
+              showConfirm({
+                title: 'Отключить прежнюю маску?',
+                text: `Приложения, которые ещё не обновили подписку, перестанут подключаться к «${server.name}». Обычно хватает недели после смены маски.`,
+                confirmLabel: 'Отключить',
+                onConfirm: async () => {
+                  await api.disableLegacyMask(server.id, m.sni);
+                  showToast(`Прежняя маска ${m.sni} отключена`);
+                  await reload();
+                },
+              })
+            }
+          >
+            Отключить
+          </button>
+        </div>
+      ))}
+      <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+        <input className="input mono" style={{ maxWidth: 240 }} placeholder="www.asus.com" value={value} onChange={(e) => setValue(e.target.value)} />
+        <button className="btn btn-secondary btn-sm" disabled={busy || !next || next === mask.sni} onClick={change}>
+          {busy ? 'Проверяем сайт и меняем…' : 'Сменить маску'}
+        </button>
+      </div>
+      <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+        {MASK_PRESETS.filter((p) => p !== mask.sni).map((p) => (
+          <button key={p} className="btn btn-outline btn-sm mono" onClick={() => setValue(p)}>{p}</button>
+        ))}
+      </div>
+      <div className="body small muted" style={{ marginTop: 6 }}>
+        Панель сначала проверит с сервера, что сайт открывается по TLS 1.3 и HTTP/2. Ключи и выданные
+        конфиги не меняются, люди ничего не нажимают. Лучше разные маски на разных серверах.
+      </div>
+    </div>
+  );
+}
+
 const fmtMbps = (v: number): string => (v >= 1000 ? `${(v / 1000).toFixed(2)} Гбит/с` : `${Math.round(v)} Мбит/с`);
 const fmtAt = (iso: string): string =>
   new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -879,6 +962,9 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
           </div>
         </div>
       ) : null}
+
+      {/* Маска Reality: смена с переходным периодом */}
+      <MaskPanel server={server} />
 
       {/* SSH hardening: перевод на вход по ключу */}
       <SshHardenPanel server={server} />

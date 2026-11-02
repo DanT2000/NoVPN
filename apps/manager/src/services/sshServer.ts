@@ -760,6 +760,98 @@ fi`;
   throw new Error('Не удалось сменить SNI на сервере: ' + out.slice(-200));
 }
 
+/** Порт «развода по имени» внутри контейнера Xray (только 127.0.0.1). */
+export const MASK_ROUTER_PORT = 4431;
+
+/** Правка server.json под маску Reality (python3; argv: путь, маска, прежние маски через
+ *  запятую). Пишет <путь>.tmp и печатает WRITTEN, либо SAME, если менять нечего.
+ *
+ *  Без прежних масок — как при установке: dest = сайт-маска, serverNames = [маска].
+ *  С прежними — переходный период (03.11.2026): Reality-сервер не может вести разные имена
+ *  на разные сайты, а чужой сайт отвергает рукопожатие с не своим именем — проверено на
+ *  испытательном сервере: клиент со старой маской cdn.dodostatic.net при dest www.asus.com
+ *  получал «tls: handshake failure». Поэтому dest ведёт на локальный dokodemo, который по
+ *  SNI отправляет соединение на настоящий сайт ТОЙ маски, с которой пришёл клиент;
+ *  чужие имена — в blackhole (не превращаемся в открытый SNI-прокси). Свои теги
+ *  mask-router/mask-direct/mask-block — ничего чужого в конфиге не трогаем, vless-inbound
+ *  остаётся первым (на inbounds[0] опираются выпуск/отзыв/ресинк). */
+export const XRAY_MASK_PY = `import json,sys
+p,sni=sys.argv[1],sys.argv[2]
+legacy=[x for x in dict.fromkeys((sys.argv[3] if len(sys.argv)>3 else '').split(',')) if x and x!=sni]
+PORT=${MASK_ROUTER_PORT}
+c=json.load(open(p))
+before=json.dumps(c,sort_keys=True)
+ib=next((i for i in c['inbounds'] if i.get('tag')=='vless-reality'),c['inbounds'][0])
+rs=ib['streamSettings']['realitySettings']
+c['inbounds']=[i for i in c['inbounds'] if i.get('tag')!='mask-router']
+c['outbounds']=[o for o in c.get('outbounds',[]) if o.get('tag') not in ('mask-direct','mask-block')]
+rt=c.setdefault('routing',{})
+rt['rules']=[r for r in rt.get('rules',[]) if 'mask-router' not in (r.get('inboundTag') or [])]
+if legacy:
+    names=[sni]+legacy
+    rs['dest']='127.0.0.1:%d'%PORT
+    rs['serverNames']=names
+    c['inbounds'].append({"listen":"127.0.0.1","port":PORT,"protocol":"dokodemo-door","tag":"mask-router",
+      "settings":{"address":sni,"port":443,"network":"tcp"},
+      "sniffing":{"enabled":True,"destOverride":["tls"],"routeOnly":False}})
+    c['outbounds'].append({"protocol":"freedom","tag":"mask-direct"})
+    c['outbounds'].append({"protocol":"blackhole","tag":"mask-block"})
+    rt['rules']=[{"type":"field","inboundTag":["mask-router"],"domain":["full:"+n for n in names],"outboundTag":"mask-direct"},
+                 {"type":"field","inboundTag":["mask-router"],"outboundTag":"mask-block"}]+rt['rules']
+else:
+    rs['dest']=sni+':443'
+    rs['serverNames']=[sni]
+if json.dumps(c,sort_keys=True)==before:
+    print('SAME')
+else:
+    json.dump(c,open(p+'.tmp','w'),indent=2)
+    print('WRITTEN')`;
+
+const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+export function isValidMask(sni: string): boolean {
+  return HOSTNAME_RE.test(sni);
+}
+
+/** Применить маску Reality на сервере: новая основная + прежние, которые ещё принимаются.
+ *  Перед сменой проверяет с самого сервера, что НОВЫЙ сайт-маска отвечает по TLS 1.3 +
+ *  HTTP/2: иначе Reality оборвёт всех клиентов (прежние не проверяем — их недоступность
+ *  не повод запрещать уход с них). Ключи и UUID не трогаем. Идемпотентна (без
+ *  рестарта, если конфиг уже такой). Возвращает true, если реально применила. */
+export async function sshApplyXrayMask(server: Server, sni: string, legacy: string[] = []): Promise<boolean> {
+  const names = [sni, ...legacy];
+  for (const n of names) if (!isValidMask(n)) throw new Error(`Некорректное имя маски: ${n}`);
+  const out = await withServerLock(server.id, () => {
+    const script = `set -e
+for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
+P=/opt/amnezia/xray/server.json
+for n in ${sni}; do
+  if command -v curl >/dev/null 2>&1; then
+    V=$(curl -sS -o /dev/null -m 12 --tlsv1.3 --http2 -w '%{http_version}' "https://$n/" 2>/dev/null || true)
+    [ "$V" = "2" ] || { echo "MASK_SITE_FAIL $n $V"; exit 0; }
+  fi
+done
+rm -f $P.tmp
+R=$(python3 - $P '${sni}' '${legacy.join(',')}' <<'PY'
+${XRAY_MASK_PY}
+PY
+)
+if [ "$R" = "WRITTEN" ]; then
+  docker exec amnezia-xray xray -test -config $P.tmp >/dev/null
+  mv $P.tmp $P
+  docker restart amnezia-xray >/dev/null
+  echo MASK_SET
+else
+  echo MASK_SAME
+fi`;
+    return runScript(creds(server.id), script, 180000);
+  });
+  const fail = /MASK_SITE_FAIL (\S+)/.exec(out);
+  if (fail) throw new Error(`Сайт ${fail[1]} не открывается с сервера по TLS 1.3/HTTP2 — такая маска оборвёт подключения. Выберите другой сайт.`);
+  if (/MASK_SET/.test(out)) return true;
+  if (/MASK_SAME/.test(out)) return false;
+  throw new Error('Не удалось сменить маску на сервере: ' + out.slice(-200));
+}
+
 export async function sshCreateAwg(
   server: Server,
   deviceName: string,

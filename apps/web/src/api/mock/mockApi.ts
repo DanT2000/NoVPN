@@ -565,6 +565,23 @@ export const mockApi: ApiClient = {
     if (s) s.legacyPorts = (s.legacyPorts ?? []).filter((l) => !(l.proto === proto && l.port === port));
     return { ok: true };
   },
+  async changeServerMask(id: string, sni: string, keepLegacy: boolean) {
+    await wait(300);
+    const s = state.servers.find((x) => x.id === id);
+    if (s) {
+      const old = s.realityMask?.sni ?? 'cdn.dodostatic.net';
+      const legacy = (s.realityMask?.legacy ?? []).filter((m) => m.sni !== sni);
+      if (keepLegacy && old !== sni && !legacy.some((m) => m.sni === old)) legacy.push({ sni: old, since: new Date().toISOString() });
+      s.realityMask = { sni, legacy };
+    }
+    return { ok: true, sni, links: 0 };
+  },
+  async disableLegacyMask(id: string, sni: string): Promise<Ok> {
+    await wait(200);
+    const s = state.servers.find((x) => x.id === id);
+    if (s?.realityMask) s.realityMask = { ...s.realityMask, legacy: s.realityMask.legacy.filter((m) => m.sni !== sni) };
+    return { ok: true };
+  },
   async hardenServerSsh(id: string, _privateKey: string) {
     await wait(500);
     const s = state.servers.find((x) => x.id === id);

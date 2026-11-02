@@ -18,6 +18,7 @@ import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
+import { sshApplyXrayMask, isValidMask } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
 import { normCount, normGb, normExpiry } from './lib/validate.js';
@@ -1595,6 +1596,17 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
       }));
       if (devs.length) await sshResyncDevices(s, devs);
     }
+    // Переходный период маски: установка пишет server.json только с основной маской, а
+    // приложения со старой подпиской ещё ходят с прежней — возвращаем её приём.
+    const legacyMasks = repo.getLegacyMasks(s.host).map((m) => m.sni);
+    const curMask = getServerKeys(s.host)?.xraySni;
+    if (want.xray && restoring && legacyMasks.length && curMask) {
+      try {
+        await sshApplyXrayMask(s, curMask, legacyMasks);
+      } catch (e) {
+        repo.addJobError(s.name, `Прежняя маска не восстановлена: ${e instanceof Error ? e.message : 'ошибка'}`);
+      }
+    }
     const proto = new Set(comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)));
     // Не сбрасываем уже установленные прокси, если их не трогали в этой установке.
     // ИСКЛЮЧЕНИЕ — перенос на новый бокс (restoring): на нём стоит ровно то, что
@@ -1700,6 +1712,52 @@ router.post('/api/admin/servers/:id/reality-sni', requireAdmin, async (req, res)
     res.json({ ok: true, sni: REALITY_SNI });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось сменить SNI.'));
+  }
+});
+
+// Смена маски Reality (сайта, под который маскируется сервер) без переустановки.
+// keepLegacy (по умолчанию) — прежняя маска ещё принимается, пока приложения не обновят
+// подписку; её отключают вручную, как старый порт. Ключи и UUID не меняются.
+router.post('/api/admin/servers/:id/mask', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const sni = String(req.body?.sni ?? '').trim().toLowerCase();
+  // Без выданных Xray-устройств (новый сервер) держать прежнюю маску незачем.
+  const keepLegacy = req.body?.keepLegacy !== false && repo.hasActiveXrayDevices(s.id);
+  if (!isValidMask(sni)) return res.status(400).json(err('validation', 'Укажите домен сайта, например www.asus.com.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  const old = getServerKeys(s.host)?.xraySni ?? null;
+  if (!old) return res.status(400).json(err('state', 'На сервере не установлен Xray.'));
+  if (old === sni) return res.json({ ok: true, unchanged: true, sni });
+  const prevLegacy = repo.getLegacyMasks(s.host).filter((m) => m.sni !== sni);
+  const legacy = keepLegacy && !prevLegacy.some((m) => m.sni === old) ? [...prevLegacy, { sni: old, since: repo.nowIso() }] : prevLegacy;
+  try {
+    await sshApplyXrayMask(s, sni, legacy.map((m) => m.sni));
+    saveServerKeys(s.host, { xraySni: sni });
+    repo.setLegacyMasks(s.host, legacy);
+    const links = repo.retargetXrayLinksSni(s.id, sni);
+    repo.addLog(`Сервер «${s.name}»: маска ${old} → ${sni}${legacy.length ? ` (прежние ещё принимаются: ${legacy.map((m) => m.sni).join(', ')})` : ''}; ссылок обновлено ${links}`);
+    res.json({ ok: true, sni, legacy, links });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось сменить маску.'));
+  }
+});
+
+// Перестать принимать прежнюю маску (когда приложения уже обновили подписку).
+router.post('/api/admin/servers/:id/mask/disable-legacy', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  const drop = String(req.body?.sni ?? '').trim().toLowerCase();
+  const cur = getServerKeys(s.host)?.xraySni;
+  if (!cur) return res.status(400).json(err('state', 'На сервере не установлен Xray.'));
+  const legacy = repo.getLegacyMasks(s.host).filter((m) => m.sni !== drop);
+  try {
+    await sshApplyXrayMask(s, cur, legacy.map((m) => m.sni));
+    repo.setLegacyMasks(s.host, legacy);
+    repo.addLog(`Сервер «${s.name}»: прежняя маска ${drop} больше не принимается`);
+    res.json({ ok: true, legacy });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка.'));
   }
 });
 

@@ -12,6 +12,7 @@ import type {
   ProxyEndpoint,
   ProxyType,
   LegacyPort,
+  LegacyMask,
   PublicBootstrapData,
   PublicUserView,
   RoutingFileMeta,
@@ -804,6 +805,43 @@ export function retargetLegacyPorts(rawHost: string, proto: LegacyPort['proto'],
   const list = getLegacyPorts(host).map((l) => (l.proto === proto ? { ...l, target: newTarget } : l));
   db.prepare('UPDATE server_keys SET legacy_ports = ? WHERE domain = ?').run(JSON.stringify(list), host);
 }
+/** Прежние маски Reality, которые сервер ещё принимает (переходный период после смены). */
+export function getLegacyMasks(rawHost: string): LegacyMask[] {
+  const host = domainKey(rawHost);
+  const r = db.prepare('SELECT legacy_snis FROM server_keys WHERE domain = ?').get(host) as { legacy_snis?: string } | undefined;
+  try {
+    const arr = JSON.parse(r?.legacy_snis || '[]');
+    return Array.isArray(arr) ? arr.filter((m) => m && typeof m.sni === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+export function setLegacyMasks(rawHost: string, list: LegacyMask[]): void {
+  const host = domainKey(rawHost);
+  db.prepare('INSERT INTO server_keys(domain, updated_at) VALUES(?, ?) ON CONFLICT(domain) DO NOTHING').run(host, nowIso());
+  db.prepare('UPDATE server_keys SET legacy_snis = ?, updated_at = ? WHERE domain = ?').run(JSON.stringify(list), nowIso(), host);
+}
+/** Новая маска в уже выданных Xray-ссылках сервера (uuid/ключи не трогаем): подписка
+ *  отдаёт ссылки из БД, и приложения подхватят маску при следующем обновлении подписки. */
+export function retargetXrayLinksSni(serverId: string, sni: string): number {
+  const rows = db.prepare("SELECT id, link FROM devices WHERE server_id = ? AND protocol = 'xray' AND link IS NOT NULL").all(serverId) as Array<{ id: string; link: string }>;
+  const upd = db.prepare('UPDATE devices SET link = ? WHERE id = ?');
+  let n = 0;
+  db.transaction(() => {
+    for (const r of rows) {
+      const next = r.link.replace(/([?&]sni=)[^&#]*/, `$1${encodeURIComponent(sni)}`);
+      if (next !== r.link) {
+        upd.run(next, r.id);
+        n++;
+      }
+    }
+  })();
+  return n;
+}
+/** Есть ли на сервере выданные Xray-устройства (без них переходный период маски не нужен). */
+export function hasActiveXrayDevices(serverId: string): boolean {
+  return !!db.prepare("SELECT 1 FROM devices WHERE server_id = ? AND protocol = 'xray' AND revoked_at IS NULL LIMIT 1").get(serverId);
+}
 /** Профиль endpoint'а для мастера: есть ли сохранённые ключи/порты по этому домену. */
 export function getEndpointProfile(rawHost: string): { exists: boolean; ports: ServerPorts; legacyPorts: LegacyPort[]; hasXrayKeys: boolean; hasAwgKeys: boolean; updatedAt: string | null } {
   const host = domainKey(rawHost);
@@ -921,6 +959,8 @@ export function setEndpointConfig(
 function withEndpoint(s: Server): Server {
   s.ports = getEndpointPorts(s.host);
   s.legacyPorts = getLegacyPorts(s.host);
+  const sniRow = db.prepare('SELECT xray_sni FROM server_keys WHERE domain = ?').get(domainKey(s.host)) as { xray_sni?: string | null } | undefined;
+  s.realityMask = { sni: sniRow?.xray_sni ?? null, legacy: getLegacyMasks(s.host) };
   // «Свои исключения» считаем по ЯВНО заданному списку сервера: getEndpointConfig
   // подставляет глобальный, когда своего нет, и по нему счётчик был бы враньём.
   const own = db.prepare('SELECT whitelist_domains FROM server_keys WHERE domain = ?').get(domainKey(s.host)) as
