@@ -90,6 +90,15 @@ export function formatTimeoutHours(hours: number | null | undefined): string {
 
 /** Пер-серверные настройки генерации конфига (маршрутизация НА УСТРОЙСТВЕ). У каждого
  *  сервера могут быть свои обход-домены, LAN-доступ и набор запасных прокси. */
+/** Пояснение по наведению: длинные объяснения не загромождают форму (просьба владельца 03.11.2026). */
+function Info({ text }: { text: string }) {
+  return (
+    <span title={text} aria-label={text} style={{ cursor: 'help', color: 'var(--text-muted-2, #888)', marginLeft: 4 }}>
+      ⓘ
+    </span>
+  );
+}
+
 function EndpointConfigPanel({ server }: { server: Server }) {
   const { showToast } = useApp();
   const [cfg, setCfg] = useState<EndpointConfigView | null>(null);
@@ -136,14 +145,12 @@ function EndpointConfigPanel({ server }: { server: Server }) {
 
   return (
     <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
-      <span className="field-label">Настройки конфига (этот сервер)</span>
-      <div className="body small muted" style={{ marginBottom: 10 }}>
-        Это параметры, которые уходят <b>в конфиг на устройство</b> пользователя (маршрутизация
-        для стабильного соединения) — не серверная служба. У каждого сервера свои: например,
-        в одной стране один список обхода, в другой — другой.
-      </div>
+      <span className="field-label">
+        Маршрутизация на устройствах людей
+        <Info text="Уходит в конфиг на устройство человека, а не в службу на сервере. У каждого сервера своя: в одной стране один список обхода, в другой — другой." />
+      </span>
 
-      <div className="body small muted" style={{ margin: '0 0 4px' }}>Что получает пользователь этого сервера:</div>
+      <div className="body small muted" style={{ margin: '0 0 4px' }}>Профили</div>
       <div className="chip-row" style={{ marginBottom: 6 }}>
         <Chip label="Умный профиль + полный VPN" active={cfg.profiles === 'both'} disabled={busy} onClick={() => void save({ profiles: 'both' })} />
         <Chip label="Только полный VPN" active={cfg.profiles === 'full'} disabled={busy} onClick={() => void save({ profiles: 'full' })} />
@@ -151,15 +158,19 @@ function EndpointConfigPanel({ server }: { server: Server }) {
       </div>
       <div className="body small muted" style={{ marginBottom: 10 }}>
         {cfg.profiles === 'both'
-          ? 'Два профиля: умный первым (рекомендуемый — что не работает в России идёт через VPN, остальное напрямую) и полный VPN вторым (весь трафик в туннель). Выбирает сам человек; лишний трафик — его лимиты.'
+          ? 'Умный — первым, полный — по выбору человека.'
           : cfg.profiles === 'smart'
-            ? 'Один профиль — умный. Полный VPN человек получить не сможет: весь трафик через туннель этот сервер не отдаёт.'
-            : 'Один профиль: весь трафик через VPN без исключений. Список доменов ниже не применяется.'}
+            ? 'Только умный: полного VPN у человека не будет.'
+            : 'Весь трафик через VPN; список доменов не применяется.'}
+        <Info text="Умный (рекомендуемый): что не работает в России — через VPN, остальное напрямую. Полный: весь трафик в туннель; лишний трафик идёт в лимиты человека." />
       </div>
 
       {cfg.profiles === 'both' ? (
         <div className="field" style={{ marginBottom: 10 }}>
-          <span className="field-label">Авто-сброс на умную маршрутизацию</span>
+          <span className="field-label">
+            Возврат с полного на умный через
+            <Info text="Не лимит сессии, а напоминание: включил полный VPN «на разок» и забыл — приложение само вернёт умный профиль через это время. Работает в приложении NoVPN; Happ и v2rayNG выбирают профиль сами." />
+          </span>
           <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <input
               className="input"
@@ -178,28 +189,16 @@ function EndpointConfigPanel({ server }: { server: Server }) {
             />
             <span className="small muted">
               {parseTimeoutHours(timeoutText) > 0
-                ? `= ${formatTimeoutHours(parseTimeoutHours(timeoutText))} (ч:мм) · 0 — не сбрасывать`
-                : '0 — не сбрасывать (человек сам решает)'}
+                ? `= ${formatTimeoutHours(parseTimeoutHours(timeoutText))} (ч:мм)`
+                : '(0 — не возвращать; 1:30 — полтора часа; 2 — два часа)'}
             </span>
-          </div>
-          <div className="body small muted" style={{ marginTop: 6 }}>
-            Это <b>не лимит сессии</b>, а напоминание: если человек включил полный VPN «на разок»
-            и забыл, приложение само вернёт его на умную маршрутизацию через это время (умная —
-            рекомендуемый режим). <b>0 — таймер не запускается</b>: переключаться между умной и
-            полной можно сколько угодно.
-            <br />
-            Любой разделитель = часы·минуты: <b>1:30</b>, <b>1 30</b>, <b>1.30</b>, <b>1,30</b> —
-            всё это час тридцать; <b>2</b> — два часа. Показываем как <b>ч:мм</b>.
-            <br />
-            <b>Работает в приложении NoVPN</b>: другие клиенты (Happ, v2rayNG) выбирают профиль
-            сами, заставить их сервер не может.
           </div>
         </div>
       ) : null}
 
       {cfg.profiles !== 'full' ? (
         <>
-          <div className="body small muted" style={{ margin: '6px 0 4px' }}>Как работает умный профиль:</div>
+          <div className="body small muted" style={{ margin: '6px 0 4px' }}>Умный профиль</div>
           <div className="chip-row" style={{ marginBottom: 4 }}>
             <Chip
               label="Умная маршрутизация: база AutoRoute → в VPN, остальное напрямую"
@@ -216,33 +215,32 @@ function EndpointConfigPanel({ server }: { server: Server }) {
           </div>
           <div className="body small muted" style={{ marginBottom: 10 }}>
             {cfg.smartDirection === 'match-direct'
-              ? 'Через VPN идёт всё, кроме списка ниже: он остаётся напрямую. Подходит, когда проще перечислить исключения, чем то, что нужно туннелировать.'
-              : 'Основной режим. База собирается в разделе AutoRoute, свои домены ниже дополняют её.'}
+              ? 'Всё через VPN, кроме списка ниже.'
+              : 'Основной режим: база из AutoRoute + свои домены ниже.'}
           </div>
         </>
       ) : null}
 
       <div className="chip-row" style={{ marginBottom: 6 }}>
-        <Chip label={cfg.lanAccess ? 'Доступ в локалку: вкл' : 'Доступ в локалку: выкл'} active={cfg.lanAccess} disabled={busy} onClick={() => void save({ lanAccess: !cfg.lanAccess })} />
+        <Chip label={<span title="Через VPN открывается локальная сеть за сервером (например, у домашнего сервера).">{cfg.lanAccess ? 'Локальная сеть сервера: вкл' : 'Локальная сеть сервера: выкл'}</span>} active={cfg.lanAccess} disabled={busy} onClick={() => void save({ lanAccess: !cfg.lanAccess })} />
         {cfg.profiles !== 'full' ? (
-          <Chip label={cfg.fakeDns ? 'Подмена DNS: вкл' : 'Подмена DNS: выкл'} active={cfg.fakeDns} disabled={busy} onClick={() => void save({ fakeDns: !cfg.fakeDns })} />
+          <Chip label={<span title="Обычно не нужна. Помогает, когда имени сайта в трафике не видно (ECH, не-HTTP): без неё такие соединения распределяются только по IP. Приложения со своим DNS-over-HTTPS её обходят.">{cfg.fakeDns ? 'Подмена DNS: вкл' : 'Подмена DNS: выкл'}</span>} active={cfg.fakeDns} disabled={busy} onClick={() => void save({ fakeDns: !cfg.fakeDns })} />
         ) : null}
       </div>
       {cfg.profiles !== 'full' ? (
-        <div className="body small muted" style={{ marginBottom: 10 }}>
-          По умолчанию выключена и в обычной ситуации не нужна. Нужна там, где домена в трафике не видно: TLS
-          с зашифрованным именем сайта (ECH) и не-HTTP протоколы — без неё такие соединения распределяются только
-          по IP. Имена продолжает разрешать DNS самого устройства, подменённые адреса живут 1 секунду и в кэшах
-          не оседают. Приложения со своим DNS-over-HTTPS подмену обходят. Полного VPN не касается: там весь трафик
-          и так в туннеле.
-        </div>
+        <div className="body small muted" style={{ marginBottom: 10 }}>Подмена DNS обычно не нужна — наведите на неё, чтобы узнать когда.</div>
       ) : null}
 
-      <div className="body small muted" style={{ margin: '10px 0 4px' }}>Запасные каналы (если Xray заблокируют) — только то, что реально работает на этом сервере:</div>
+      <div className="body small muted" style={{ margin: '10px 0 4px' }}>
+        Запасные каналы, если Xray заблокируют
+        <Info text="Прокси этого сервера, на которые приложение переключится при блокировке Xray. Работают только установленные на сервере прокси." />
+      </div>
       <div className="chip-row" style={{ marginBottom: 6 }}>
         {FB_TYPES.map((t) => {
-          const on = !fb || fb.includes(t.v);
-          return <Chip key={t.v} label={t.label} size="sm" active={on} disabled={busy} onClick={() => toggleFb(t.v)} />;
+          // Прокси нет на сервере — канал не работает, и «вкл» на нём вводило в заблуждение.
+          const installed = (server.protocols as string[]).includes(t.v === 'socks' ? 'socks5' : t.v);
+          const on = installed && (!fb || fb.includes(t.v));
+          return <Chip key={t.v} label={installed ? t.label : `${t.label} — не установлен`} size="sm" active={on} disabled={busy || !installed} onClick={() => toggleFb(t.v)} />;
         })}
       </div>
 
@@ -414,7 +412,10 @@ function MaskPanel({ server }: { server: Server }) {
 
   return (
     <div className="card" style={{ padding: '10px 14px' }}>
-      <span className="field-label">Маска (сайт, под который маскируется сервер)</span>
+      <span className="field-label">
+        Маска
+        <Info text="Сайт, под который маскируется сервер: его имя видно в каждом подключении, а при проверке сервера отвечает настоящий сайт. Лучше разные маски на разных серверах; российский сайт на зарубежном сервере выглядит подозрительно." />
+      </span>
       <div className="body small mono">Сейчас: <b>{mask.sni}</b></div>
       {mask.legacy.map((m) => (
         <div key={m.sni} className="body small muted" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
@@ -442,7 +443,8 @@ function MaskPanel({ server }: { server: Server }) {
         </div>
       ))}
       <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-        <input className="input mono" style={{ maxWidth: 240 }} placeholder="www.asus.com" value={value} onChange={(e) => setValue(e.target.value)} />
+        {/* Не логин: без этого браузер вставлял сюда сохранённое имя «admin» (ниже поле пароля SSH). */}
+        <input className="input mono" style={{ maxWidth: 240 }} placeholder="www.asus.com" name="reality-mask" autoComplete="off" spellCheck={false} value={value} onChange={(e) => setValue(e.target.value)} />
         <button className="btn btn-secondary btn-sm" disabled={busy || !next || next === mask.sni} onClick={change}>
           {busy ? 'Проверяем сайт и меняем…' : 'Сменить маску'}
         </button>
@@ -452,10 +454,7 @@ function MaskPanel({ server }: { server: Server }) {
           <button key={p} className="btn btn-outline btn-sm mono" onClick={() => setValue(p)}>{p}</button>
         ))}
       </div>
-      <div className="body small muted" style={{ marginTop: 6 }}>
-        Панель сначала проверит с сервера, что сайт открывается по TLS 1.3 и HTTP/2. Ключи и выданные
-        конфиги не меняются, люди ничего не нажимают. Лучше разные маски на разных серверах.
-      </div>
+      <div className="body small muted" style={{ marginTop: 6 }}>Ключи и конфиги не меняются, людям ничего нажимать не нужно.</div>
     </div>
   );
 }
@@ -881,7 +880,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
       <div className="grid-2" style={{ marginTop: 10 }}>
         <Field label="Домен или IP (VPN-endpoint)"><input className="input mono" value={vpnHost} onChange={(e) => setVpnHost(e.target.value)} /></Field>
         <Field label="SSH-порт"><input className="input" inputMode="numeric" value={sshPort} onChange={(e) => setSshPort(e.target.value.replace(/\D/g, ''))} /></Field>
-        <Field label="SSH-пользователь"><input className="input" value={sshUser} onChange={(e) => setSshUser(e.target.value)} /></Field>
+        <Field label="SSH-пользователь"><input className="input" name="ssh-user" autoComplete="off" value={sshUser} onChange={(e) => setSshUser(e.target.value)} /></Field>
         <Field label="Способ входа по SSH">
           <div className="chip-row">
             <Chip label="Пароль" size="sm" active={sshAuth === 'password'} onClick={() => setSshAuth('password')} />
@@ -893,7 +892,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         {sshAuth === 'key' ? (
           <textarea className="textarea mono" rows={4} value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
         ) : (
-          <input className="input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••" />
+          <input className="input" type="password" name="ssh-password" autoComplete="new-password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••" />
         )}
       </Field>
 
@@ -997,10 +996,7 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
         </div>
         {provBusy === 'install' && provMsg ? <div className="body small" style={{ marginTop: 6 }}>⏳ {provMsg}</div> : null}
         <InstallCheckView server={server} disabled={!!provBusy} />
-        <span className="small muted">
-          Ставит xray + AmneziaWG (+ отмеченные прокси) прямо на сервер. Если ключи домена сохранены — переустановка
-          восстанавливает их, и ранее выданные конфиги продолжают работать.
-        </span>
+        <span className="small muted">Переустановка сохраняет ключи — выданные конфиги продолжают работать.</span>
       </div>
 
       {/* Публичные порты endpoint'а */}

@@ -18,6 +18,7 @@ import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
+import { ensureXrayOnAllowedServers } from './services/issue.js';
 import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray } from './services/sshServer.js';
 import type { InstallCheck } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
@@ -230,6 +231,8 @@ router.get('/sub/:token', (req, res) => {
   // ниже и перестанет подключаться). Раньше подписка продолжала слать конфиги
   // даже при превышении лимита трафика.
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
+  // Разрешённый сервер без Xray-конфига — выдаём фоном (появится при следующем обновлении).
+  if (!overQuota) void ensureXrayOnAllowedServers(u).catch(() => {});
   // Одна подписка = ОДИН Xray-конфиг на сервер (дедуп на чтении — см. repo).
   const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id);
 
@@ -458,6 +461,7 @@ router.get('/sub/:token/full', (req, res) => {
   if (!u || !u.isActive) return res.status(404).send('');
   if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
   const overQuota = u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb;
+  if (!overQuota) void ensureXrayOnAllowedServers(u).catch(() => {});
   // Старейший конфиг первым: у уже подключённых людей первый профиль в приложении
   // остаётся их исходным сервером (entries идут новые-первыми — разворачиваем).
   const entries = (overQuota ? [] : repo.subscriptionXrayEntries(u.id)).reverse();
@@ -519,6 +523,7 @@ router.get('/sub/:token/meta.json', (req, res) => {
     return res.status(403).json(err('expired', 'Срок действия доступа истёк.'));
   if (u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb)
     return res.status(403).json(err('traffic', 'Лимит трафика исчерпан.'));
+  void ensureXrayOnAllowedServers(u).catch(() => {});
   const origin = reqOrigin(req as never);
   const token = String(req.params.token);
   // Профили — 1:1 с конфигами агрегированной подписки /sub/<t>/full, в том же порядке:

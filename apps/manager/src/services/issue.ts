@@ -6,6 +6,7 @@ import * as repo from '../repo.js';
 import { encryptSecret } from '../lib/crypto.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshAddProxyUser, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser } from './sshServer.js';
 import { vpnLinkFromConf } from './amneziaLink.js';
+import { getServerKeys } from './keyvault.js';
 
 const NO_SSH =
   'Для сервера не задан SSH-доступ — панель не может выпустить рабочий конфиг. ' +
@@ -32,6 +33,43 @@ export function withUserIssueLock<T>(userId: string, fn: () => Promise<T>): Prom
   const run = prev.then(fn, fn); // ждём предыдущую выдачу (успех/ошибку — неважно)
   userIssueLocks.set(userId, run.then(() => {}, () => {})); // одна запись на пользователя (не растёт)
   return run;
+}
+
+/** Xray на ВСЕХ разрешённых человеку серверах. 03.11.2026 владелец разрешил себе Францию,
+ *  нажал «Обновить» — а Франции нет: конфиг на сервер выдавался только по кнопке, и
+ *  «разрешён» в карточке ничего не давал. Теперь при обновлении подписки недостающий Xray
+ *  выдаётся фоном (подписка уходит как есть, сервер появится при следующем обновлении).
+ *  Только тем, кто уже ходит через Xray, и только на серверы с самовыдачей и ключами.
+ *  Сбой — в «Ошибки» с именем человека и сервера, а не молча. */
+const autoIssueAt = new Map<string, number>();
+const AUTO_ISSUE_GAP_MS = 10 * 60_000;
+export function ensureXrayOnAllowedServers(user: User): Promise<number> {
+  const now = Date.now();
+  if (now - (autoIssueAt.get(user.id) ?? 0) < AUTO_ISSUE_GAP_MS) return Promise.resolve(0);
+  autoIssueAt.set(user.id, now);
+  if (autoIssueAt.size > 5000) autoIssueAt.clear();
+  if (!user.allowedProtocols.includes('xray')) return Promise.resolve(0);
+  const mine = repo.listDevicesOfUser(user.id).filter((d) => d.protocol === 'xray' && d.isActive);
+  if (!mine.length) return Promise.resolve(0);
+  const name = mine[mine.length - 1]!.name || 'Подписка';
+  const missing = user.allowedServers
+    .map((id) => repo.getServer(id))
+    .filter((s): s is Server => !!s && !s.detached && s.autoIssue && s.protocols.includes('xray'))
+    .filter((s) => !!getServerKeys(s.host)?.xrayRealityPubKey && !repo.findActiveXrayDevice(user.id, s.id));
+  // По очереди: по SSH-сессии на сервер, без шквала при одновременном обновлении.
+  return missing.reduce<Promise<number>>(
+    (p, s) =>
+      p.then((n) =>
+        issueForUser(user, name, s.id, 'xray').then(
+          () => n + 1,
+          (e) => {
+            repo.addJobError(s.name, `Автовыдача Xray для «${user.name}»: ${e instanceof Error ? e.message : 'ошибка'}`);
+            return n;
+          },
+        ),
+      ),
+    Promise.resolve(0),
+  );
 }
 
 export function issueForUser(
