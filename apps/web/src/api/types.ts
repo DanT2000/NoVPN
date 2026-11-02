@@ -151,6 +151,8 @@ export interface SaveTelegramInput {
   proxyOn: boolean;
   proxySource?: 'server' | 'manual';
   proxyServerId?: string | null;
+  /** Серверы-прокси по порядку: не отвечает один — бот берёт следующий. */
+  proxyServerIds?: string[];
   proxyType: 'http' | 'https' | 'socks5';
   proxyHost: string;
   proxyPort: string;

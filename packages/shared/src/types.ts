@@ -312,7 +312,10 @@ export interface TelegramSettings {
   proxyOn: boolean;
   /** Источник прокси: взять адрес выбранного сервера или указать вручную. */
   proxySource?: 'server' | 'manual';
+  /** Устарело: один сервер. Читается, если proxyServerIds пуст. */
   proxyServerId?: string | null;
+  /** Серверы-прокси по порядку: не отвечает один — бот берёт следующий. */
+  proxyServerIds?: string[];
   proxyType: ProxyType;
   proxyHost: string;
   proxyPort: string;

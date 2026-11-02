@@ -299,8 +299,13 @@ if [ "$WANT_AWG" = "1" ]; then
       rm -rf /tmp/awg-go
       git clone --depth=1 https://github.com/amnezia-vpn/amneziawg-go /tmp/awg-go >/tmp/awggo.log 2>&1 && \
         ( cd /tmp/awg-go && make >>/tmp/awggo.log 2>&1 && install -m755 amneziawg-go /usr/bin/amneziawg-go ) || true
+      # 02.11.2026 Франция: go из репы старше нужного, а свежий Go (toolchain) proxy.golang.org
+      # этому адресу отдавал 403 — сборка падала. Повтор через зеркала (| — дальше на любой ошибке).
+      command -v amneziawg-go >/dev/null 2>&1 || ( cd /tmp/awg-go && \
+        GOPROXY='https://goproxy.cn|https://goproxy.io|https://proxy.golang.org|direct' make >>/tmp/awggo.log 2>&1 && \
+        install -m755 amneziawg-go /usr/bin/amneziawg-go ) || true
     fi
-    command -v amneziawg-go >/dev/null 2>&1 || { echo "AWG_FAIL: ни модуль ядра, ни userspace"; tail -12 /tmp/awggo.log 2>/dev/null; exit 1; }
+    command -v amneziawg-go >/dev/null 2>&1 || { echo "AWG_FAIL: ни модуль ядра, ни userspace" >&2; tail -12 /tmp/awggo.log >&2 2>/dev/null; exit 1; }
     AWG_USERSPACE=1
   fi
   [ -z "$AWG_PRIV" ] && AWG_PRIV=$(awg genkey)

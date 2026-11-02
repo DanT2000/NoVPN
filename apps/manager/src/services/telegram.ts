@@ -20,20 +20,50 @@ function getToken(): string {
   }
 }
 
-/** URL прокси для запросов к Telegram (сервер или ручной). */
-export function resolveTgProxyUrl(): string | null {
+/** Серверы-прокси бота по порядку (галочки; прежний одиночный выбор — как список из одного). */
+export function tgProxyServerIds(tg: { proxyServerIds?: string[]; proxyServerId?: string | null }): string[] {
+  if (tg.proxyServerIds?.length) return [...new Set(tg.proxyServerIds)];
+  return tg.proxyServerId ? [tg.proxyServerId] : [];
+}
+
+/** Прокси для Telegram по порядку попыток. 02.11.2026 бот ходил через прокси одного
+ *  сервера, и когда Ригу заблокировали, оповещения админу молча не уходили. Теперь —
+ *  все отмеченные серверы: не отвечает один, бот берёт следующий. */
+export function resolveTgProxyUrls(): string[] {
   const tg = repo.getTelegram();
-  if (!tg?.proxyOn) return null;
+  if (!tg?.proxyOn) return [];
   const enc = encodeURIComponent;
-  if (tg.proxySource === 'server' && tg.proxyServerId) {
-    const srv = repo.getServer(tg.proxyServerId);
-    if (!srv) return null;
-    const p = getServerProxy(srv.host);
-    if (!p) return null;
-    if (p.httpsPort && p.httpsHost) return `https://${enc(p.user)}:${enc(p.pass)}@${p.httpsHost}:${p.httpsPort}`;
-    if (p.httpPort) return `http://${enc(p.user)}:${enc(p.pass)}@${srv.host}:${p.httpPort}`;
-    return null;
+  if (tg.proxySource === 'server') {
+    const out: string[] = [];
+    for (const id of tgProxyServerIds(tg)) {
+      const srv = repo.getServer(id);
+      if (!srv || srv.detached) continue;
+      const p = getServerProxy(srv.host);
+      if (!p) continue;
+      if (p.httpsPort && p.httpsHost) out.push(`https://${enc(p.user)}:${enc(p.pass)}@${p.httpsHost}:${p.httpsPort}`);
+      if (p.httpPort) out.push(`http://${enc(p.user)}:${enc(p.pass)}@${srv.host}:${p.httpPort}`);
+    }
+    return out;
   }
+  const manual = manualTgProxyUrl(tg);
+  return manual ? [manual] : [];
+}
+
+/** Последний прокси, через который Telegram ответил: с него начинаем следующую попытку. */
+let preferredTgProxy: string | null = null;
+
+/** Порядок попыток: сначала последний сработавший, затем остальные по списку. */
+export function orderTgProxies(list: string[], preferred: string | null): string[] {
+  return preferred && list.includes(preferred) ? [preferred, ...list.filter((u) => u !== preferred)] : list;
+}
+
+/** Прокси, через который сейчас стоит идти (для разовых запросов вроде загрузки файла). */
+export function resolveTgProxyUrl(): string | null {
+  return orderTgProxies(resolveTgProxyUrls(), preferredTgProxy)[0] ?? null;
+}
+
+function manualTgProxyUrl(tg: ReturnType<typeof repo.getTelegram>): string | null {
+  const enc = encodeURIComponent;
   if (tg.proxyHost && tg.proxyPort && (tg.proxyType === 'http' || tg.proxyType === 'https')) {
     const encPass = (tg as unknown as { proxyPassEnc?: string }).proxyPassEnc;
     // decryptSecret бросает на нечитаемом шифртексте (сменился/потерялся
@@ -55,21 +85,28 @@ export function resolveTgProxyUrl(): string | null {
 
 // Пул соединений с прокси переиспользуем: раньше на КАЖДЫЙ вызов создавался
 // новый ProxyAgent и не закрывался (~агент/25с при polling + по агенту на каждого
-// получателя рассылки) — утечка сокетов вплоть до EMFILE. Держим один агент на URL.
-let cachedProxyUrl: string | null = null;
-let cachedAgent: ProxyAgent | null = null;
+// получателя рассылки) — утечка сокетов вплоть до EMFILE. Держим по агенту на URL
+// (их несколько — по одному на отмеченный сервер); выпавшие из списка закрываем.
+const agents = new Map<string, ProxyAgent>();
 function dispatcherFor(proxyUrl: string | null): ProxyAgent | undefined {
   if (!proxyUrl) return undefined;
-  if (proxyUrl !== cachedProxyUrl) {
+  let a = agents.get(proxyUrl);
+  if (!a) {
+    a = new ProxyAgent(proxyUrl);
+    agents.set(proxyUrl, a);
+  }
+  return a;
+}
+function pruneAgents(keep: string[]): void {
+  for (const [url, a] of agents) {
+    if (keep.includes(url)) continue;
     try {
-      void cachedAgent?.close();
+      void a.close();
     } catch {
       /* игнор */
     }
-    cachedAgent = new ProxyAgent(proxyUrl);
-    cachedProxyUrl = proxyUrl;
+    agents.delete(url);
   }
-  return cachedAgent ?? undefined;
 }
 
 /** Код ошибки Telegram (429 и т.п.) и retry_after — для корректного backoff. */
@@ -88,27 +125,43 @@ export async function tgApi<T = any>(
 ): Promise<T> {
   const token = tokenOverride ?? getToken();
   if (!token) throw new Error('Токен бота не задан.');
-  const proxyUrl = resolveTgProxyUrl();
+  const list = resolveTgProxyUrls();
+  pruneAgents(list);
+  // Прокси по очереди: первым — последний сработавший. Не отвечает (сервер лёг или
+  // заблокирован) — берём следующий отмеченный, а не молчим.
+  const tries: Array<string | null> = list.length ? orderTgProxies(list, preferredTgProxy) : [null];
   const waitS = typeof params.timeout === 'number' ? params.timeout : 0;
-  const timeout = AbortSignal.timeout((waitS + 15) * 1000);
-  const opts: RequestInit & { dispatcher?: ProxyAgent } = {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(params),
-    signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
-  };
-  const disp = dispatcherFor(proxyUrl);
-  if (disp) opts.dispatcher = disp;
-  const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, opts);
-  const d = (await r.json()) as {
-    ok: boolean;
-    result?: T;
-    description?: string;
-    error_code?: number;
-    parameters?: { retry_after?: number };
-  };
-  if (!d.ok) throw new TgApiError(d.description ?? 'Telegram error', d.error_code, d.parameters?.retry_after);
-  return d.result as T;
+  let lastErr: unknown = null;
+  for (const proxyUrl of tries) {
+    const timeout = AbortSignal.timeout((waitS + 15) * 1000);
+    const opts: RequestInit & { dispatcher?: ProxyAgent } = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(params),
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+    };
+    const disp = dispatcherFor(proxyUrl);
+    if (disp) opts.dispatcher = disp;
+    let r: Response;
+    try {
+      r = await fetch(`https://api.telegram.org/bot${token}/${method}`, opts);
+    } catch (e) {
+      if (signal?.aborted) throw e; // бота остановили — перебирать незачем
+      lastErr = e;
+      continue;
+    }
+    if (proxyUrl) preferredTgProxy = proxyUrl;
+    const d = (await r.json()) as {
+      ok: boolean;
+      result?: T;
+      description?: string;
+      error_code?: number;
+      parameters?: { retry_after?: number };
+    };
+    if (!d.ok) throw new TgApiError(d.description ?? 'Telegram error', d.error_code, d.parameters?.retry_after);
+    return d.result as T;
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Telegram недоступен ни через один прокси.');
 }
 
 // Защита от перебора кодов через бота: не более N попыток на чат за окно.

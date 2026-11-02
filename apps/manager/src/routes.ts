@@ -1607,6 +1607,15 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
         repo.addJobError(s.name, `Прежняя маска не восстановлена: ${e instanceof Error ? e.message : 'ошибка'}`);
       }
     }
+    // Тест скорости: на новом боксе его нет, а в панели он числится установленным — ссылка
+    // вела в пустоту (03.11.2026, Финляндия после переноса). Ставим заново с теми же настройками.
+    if (restoring && s.speedtest?.port) {
+      try {
+        await sshInstallSpeedtest(s, s.speedtest.port, s.speedtest.allow ?? []);
+      } catch (e) {
+        repo.addJobError(s.name, `Тест скорости после переноса: ${e instanceof Error ? e.message : 'ошибка'}`);
+      }
+    }
     const proto = new Set(comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)));
     // Не сбрасываем уже установленные прокси, если их не трогали в этой установке.
     // ИСКЛЮЧЕНИЕ — перенос на новый бокс (restoring): на нём стоит ровно то, что
@@ -2111,7 +2120,12 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
     mode: b.mode === 'webhook' ? 'webhook' : 'polling',
     proxyOn: !!b.proxyOn,
     proxySource: b.proxySource === 'server' ? 'server' : 'manual',
-    proxyServerId: b.proxyServerId ?? null,
+    // Несколько серверов по порядку (не отвечает один — бот берёт следующий). Старый
+    // одиночный proxyServerId — первый из списка, для совместимости.
+    proxyServerIds: Array.isArray(b.proxyServerIds)
+      ? [...new Set((b.proxyServerIds as unknown[]).filter((x): x is string => typeof x === 'string' && !!x))].slice(0, 20)
+      : b.proxyServerId ? [String(b.proxyServerId)] : [],
+    proxyServerId: Array.isArray(b.proxyServerIds) ? (b.proxyServerIds.find((x: unknown) => typeof x === 'string' && x) ?? null) : (b.proxyServerId ?? null),
     // socks5 undici ProxyAgent не умеет — раньше он молча сохранялся, а прокси
     // отключался (прямой заблокированный коннект). Сводим к рабочему http.
     proxyType: b.proxyType === 'https' ? 'https' : 'http',

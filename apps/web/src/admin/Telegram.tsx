@@ -7,6 +7,12 @@ import { api } from '../api';
 import type { SaveTelegramInput } from '../api/types';
 import { Chip, Field, Panel, Toggle } from '../components/ui';
 
+/** Отмеченные серверы-прокси бота (прежний одиночный выбор — как список из одного). */
+function savedProxyIds(tg: { proxyServerIds?: string[]; proxyServerId?: string | null } | null | undefined): string[] {
+  if (tg?.proxyServerIds?.length) return tg.proxyServerIds;
+  return tg?.proxyServerId ? [tg.proxyServerId] : [];
+}
+
 export function Telegram() {
   const { data, goAdmin, saveTelegram, showToast } = useApp();
   const tg = data?.telegram;
@@ -15,7 +21,7 @@ export function Telegram() {
   const [token, setToken] = useState('');
   const [proxyOn, setProxyOn] = useState(tg?.proxyOn ?? false);
   const [proxySource, setProxySource] = useState<'server' | 'manual'>(tg?.proxySource ?? 'manual');
-  const [proxyServerId, setProxyServerId] = useState<string | null>(tg?.proxyServerId ?? null);
+  const [proxyServerIds, setProxyServerIds] = useState<string[]>(savedProxyIds(tg));
   // socks5 больше не поддерживается (undici ProxyAgent его не умеет) — если был
   // сохранён раньше, показываем как http, чтобы выбор был из рабочих вариантов.
   const [proxyType, setProxyType] = useState<ProxyType>(
@@ -36,14 +42,14 @@ export function Telegram() {
   // пустыми, и «Сохранить» затирало реальные настройки (бот выкл, прокси/шаблон
   // стёрты). Пересобираем локальный стейт при каждом изменении сохранённых настроек.
   const tgSig = tg
-    ? JSON.stringify([tg.enabled, tg.proxyOn, tg.proxySource, tg.proxyServerId, tg.proxyType, tg.proxyHost, tg.proxyPort, tg.proxyLogin, tg.template, tg.tokenMasked])
+    ? JSON.stringify([tg.enabled, tg.proxyOn, tg.proxySource, tg.proxyServerId, tg.proxyServerIds, tg.proxyType, tg.proxyHost, tg.proxyPort, tg.proxyLogin, tg.template, tg.tokenMasked])
     : '';
   useEffect(() => {
     if (!tg) return;
     setEnabled(tg.enabled ?? false);
     setProxyOn(tg.proxyOn ?? false);
     setProxySource(tg.proxySource ?? 'manual');
-    setProxyServerId(tg.proxyServerId ?? null);
+    setProxyServerIds(savedProxyIds(tg));
     setProxyType(tg.proxyType === 'https' ? 'https' : 'http');
     setProxyHost(tg.proxyHost ?? '');
     setProxyPort(tg.proxyPort ?? '');
@@ -69,7 +75,8 @@ export function Telegram() {
         mode: 'polling', // webhook не реализован — всегда long-polling
         proxyOn,
         proxySource,
-        proxyServerId: proxySource === 'server' ? proxyServerId : null,
+        proxyServerIds: proxySource === 'server' ? proxyServerIds : [],
+        proxyServerId: proxySource === 'server' ? (proxyServerIds[0] ?? null) : null,
         proxyType,
         proxyHost,
         proxyPort,
@@ -168,32 +175,44 @@ export function Telegram() {
               </Field>
 
               {proxySource === 'server' ? (
-                <Field label="Сервер-прокси">
+                <Field label="Серверы-прокси">
                   {data.servers.length === 0 ? (
                     <span className="small muted">Серверов пока нет — добавьте сервер или укажите прокси вручную.</span>
                   ) : (
-                    <select
-                      className="select"
-                      value={proxyServerId ?? ''}
-                      onChange={(e) => setProxyServerId(e.target.value || null)}
-                    >
-                      <option value="">— выберите сервер —</option>
-                      {data.servers.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}{s.country ? ` ${s.country}` : ''} · {s.host}
-                        </option>
-                      ))}
-                    </select>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {data.servers.map((s) => {
+                        const on = proxyServerIds.includes(s.id);
+                        const hasProxy = (s.protocols as string[]).some((p) => ['http', 'https'].includes(p));
+                        return (
+                          <label key={s.id} className="row" style={{ gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={() => setProxyServerIds(on ? proxyServerIds.filter((x) => x !== s.id) : [...proxyServerIds, s.id])}
+                            />
+                            <span>
+                              {s.name}{s.country ? ` ${s.country}` : ''} · <span className="mono">{s.host}</span>
+                              {on ? <span className="small muted"> · {proxyServerIds.indexOf(s.id) + 1}-й по очереди</span> : null}
+                              {!hasProxy ? <span className="small" style={{ color: 'var(--warn-fg, #b7791f)' }}> · нет HTTP-прокси</span> : null}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   )}
-                  <span className="small muted">Адрес прокси возьмётся с этого сервера (порт по типу прокси).</span>
+                  <span className="small muted">
+                    Бот ходит в Telegram через первый отмеченный сервер. Не отвечает (лёг или заблокирован) — сам
+                    переходит к следующему, поэтому оповещения доходят, пока жив хоть один. Отметьте все серверы.
+                  </span>
                   {(() => {
-                    const srv = data.servers.find((s) => s.id === proxyServerId);
-                    const hasProxy = srv && (srv.protocols as string[]).some((p) => ['http', 'https', 'socks5'].includes(p));
-                    if (srv && !hasProxy)
+                    const noProxy = data.servers.filter(
+                      (s) => proxyServerIds.includes(s.id) && !(s.protocols as string[]).some((p) => ['http', 'https'].includes(p)),
+                    );
+                    if (noProxy.length)
                       return (
                         <div className="notice notice-amber small" style={{ marginTop: 6 }}>
-                          На «{srv.name}» ещё не установлены прокси. Откройте раздел «Серверы» → «Изменить» → «Установить прокси»
-                          (для бота обычно нужен HTTP или HTTPS), иначе бот не сможет ходить в Telegram.
+                          На {noProxy.map((s) => `«${s.name}»`).join(', ')} не установлен HTTP-прокси. Откройте «Серверы» → «Изменить» →
+                          «Установить прокси», иначе бот через этот сервер не пройдёт.
                         </div>
                       );
                     return null;

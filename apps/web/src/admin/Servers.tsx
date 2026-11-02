@@ -342,13 +342,19 @@ function MaskPanel({ server }: { server: Server }) {
   const mask = server.realityMask;
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
-  if (!mask?.sni) return null;
+  if (!mask?.sni)
+    return (
+      <div className="card" style={{ padding: '10px 14px' }}>
+        <span className="field-label">Маска (сайт, под который маскируется сервер)</span>
+        <div className="body small muted">Появится после установки Xray на сервер.</div>
+      </div>
+    );
   const next = value.trim().toLowerCase();
 
   function change() {
     showConfirm({
-      title: 'Сменить маску?',
-      text: `Сервер «${server.name}» будет маскироваться под ${next}. Прежняя маска ${mask!.sni} останется рабочей, пока приложения не обновят подписку (Happ — раз в 12 часов, приложение NoVPN — при запуске). Отключите её через неделю.`,
+      title: `Сменить маску на ${next}?`,
+      text: `Было: ${mask!.sni} → станет: ${next}. Нажмите «Сменить» — панель проверит сайт с сервера и переключит. Прежняя маска ещё поработает, пока приложения не обновят подписку (Happ — раз в 12 часов, приложение NoVPN — при запуске); отключите её кнопкой через неделю.`,
       confirmLabel: 'Сменить',
       onConfirm: async () => {
         setBusy(true);
@@ -367,7 +373,7 @@ function MaskPanel({ server }: { server: Server }) {
   }
 
   return (
-    <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+    <div className="card" style={{ padding: '10px 14px' }}>
       <span className="field-label">Маска (сайт, под который маскируется сервер)</span>
       <div className="body small mono">Сейчас: <b>{mask.sni}</b></div>
       {mask.legacy.map((m) => (
@@ -814,6 +820,9 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
       {/* Маршрутизация — то, ради чего открывают сервер: сразу под названием, без прокрутки. */}
       <EndpointConfigPanel server={server} />
 
+      {/* Маска Reality — на виду: её меняют, когда сервер начинают блокировать. */}
+      <MaskPanel server={server} />
+
       {/* Техническая часть — свёрнута: домен и SSH, протоколы, ключи, прокси, установка ПО,
           порты. Меняется редко; всё, что нужно каждый день, выше. */}
       <details className="card" style={{ padding: '10px 14px' }}>
@@ -962,9 +971,6 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
           </div>
         </div>
       ) : null}
-
-      {/* Маска Reality: смена с переходным периодом */}
-      <MaskPanel server={server} />
 
       {/* SSH hardening: перевод на вход по ключу */}
       <SshHardenPanel server={server} />
