@@ -273,6 +273,46 @@ function EndpointConfigPanel({ server }: { server: Server }) {
 
 /** Безопасный перевод сервера на вход по SSH-ключу: ставим ключ → тест-вход → только
  *  потом отключаем пароль (никогда не отключаем пароль до подтверждённого входа ключом). */
+/* Итог самопроверки установки + проверка по кнопке: что реально работает на сервере.
+   02.11.2026 установка Франции встала наполовину, а сервер в списке выглядел исправным. */
+function InstallCheckView({ server, disabled }: { server: Server; disabled: boolean }) {
+  const { showToast, reload } = useApp();
+  const [busy, setBusy] = useState(false);
+  const c = server.installCheck;
+  return (
+    <div style={{ marginTop: 8 }}>
+      {c ? (
+        <div
+          className={`notice small ${c.ok ? '' : 'notice-amber'}`}
+          style={{ marginBottom: 6, color: c.ok ? 'var(--ok-fg, #2a9d3c)' : undefined }}
+        >
+          {c.ok ? '✓ Всё установлено: ' : '⚠ Установлено не всё: '}
+          {c.error ? `установка оборвалась — ${c.error}` : c.summary}
+          <span className="muted"> · проверено {fmtAt(c.at)}</span>
+        </div>
+      ) : null}
+      <button
+        className="btn btn-outline btn-sm"
+        disabled={disabled || busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            const r = await api.verifyInstall(server.id);
+            showToast(r.ok ? `Всё работает: ${r.summary}` : `Не всё работает: ${r.summary}`);
+            await reload();
+          } catch (e) {
+            showToast(e instanceof Error ? e.message : 'Не удалось проверить сервер');
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? 'Проверяем…' : 'Проверить установку'}
+      </button>
+    </div>
+  );
+}
+
 function SshHardenPanel({ server }: { server: Server }) {
   const { showToast, reload } = useApp();
   const [open, setOpen] = useState(false);
@@ -630,6 +670,8 @@ function SpeedtestPanel({ server }: { server: Server }) {
 function ServerEditForm({ server, onClose }: { server: Server; onClose: () => void }) {
   const { editServer, showToast, reload, showConfirm, deleteServer } = useApp();
   const [provBusy, setProvBusy] = useState<string | null>(null);
+  // Текущий шаг установки («Шаг 2 из 4: …») — чтобы долгая установка не выглядела зависшей.
+  const [provMsg, setProvMsg] = useState<string | null>(null);
 
   function reinstall() {
     showConfirm({
@@ -643,26 +685,33 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
   }
   async function runReinstall() {
     setProvBusy('install');
+    setProvMsg('Запуск установки…');
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {
       const comps = server.protocols.length ? (server.protocols as string[]) : ['xray', 'amneziawg'];
       await api.provisionServer(server.id, comps);
       const started = Date.now();
       for (;;) {
-        await sleep(5000);
-        if (Date.now() - started > 8 * 60 * 1000) throw new Error('Установка заняла слишком долго.');
+        await sleep(4000);
+        // Сборка AmneziaWG из исходников на слабом сервере идёт минутами — ждём с запасом.
+        if (Date.now() - started > 20 * 60 * 1000) throw new Error('Установка заняла слишком долго — проверьте сервер кнопкой «Проверить установку».');
         const st = await api.provisionStatus(server.id);
+        if (st.message) setProvMsg(st.message);
         if (st.state === 'done') {
           await reload();
-          showToast(st.restored ? 'Переустановлено, ключи восстановлены' : 'Установка завершена');
+          showToast(st.message || (st.restored ? 'Переустановлено, ключи восстановлены' : 'Установка завершена'));
           return;
         }
-        if (st.state === 'error') throw new Error(st.message);
+        if (st.state === 'error') {
+          await reload();
+          throw new Error(st.message);
+        }
       }
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Ошибка установки');
     } finally {
       setProvBusy(null);
+      setProvMsg(null);
     }
   }
   function uninstall(purge: boolean) {
@@ -946,6 +995,8 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
             {provBusy === 'resync' ? 'Синхронизирую…' : 'Синхронизировать конфиги'}
           </button>
         </div>
+        {provBusy === 'install' && provMsg ? <div className="body small" style={{ marginTop: 6 }}>⏳ {provMsg}</div> : null}
+        <InstallCheckView server={server} disabled={!!provBusy} />
         <span className="small muted">
           Ставит xray + AmneziaWG (+ отмеченные прокси) прямо на сервер. Если ключи домена сохранены — переустановка
           восстанавливает их, и ранее выданные конфиги продолжают работать.
@@ -1086,6 +1137,15 @@ export function Servers() {
                   <div className="row" style={{ gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
                     <Dot color={dotColor} />
                     <span style={{ fontWeight: 700, fontSize: 15 }}>{s.flagEmoji ? `${s.flagEmoji} ` : ''}{title}</span>
+                    {s.installCheck && !s.installCheck.ok ? (
+                      <span
+                        className="badge"
+                        style={{ background: 'var(--warn-bg, #fff3cd)', color: 'var(--warn-fg, #8a5a00)' }}
+                        title={s.installCheck.error ? `Установка оборвалась: ${s.installCheck.error}` : `Самопроверка: ${s.installCheck.summary}`}
+                      >
+                        установлено не всё
+                      </span>
+                    ) : null}
                     {s.detached ? <span className="badge" style={{ background: 'var(--surface-btn-2, #333)', color: 'var(--text-muted-2)' }} title="Физический сервер отвязан. Endpoint (домен/порты/ключи/конфиги) сохранён — подключите новый сервер на тот же домен.">endpoint сохранён</span> : null}
                   </div>
                   <span

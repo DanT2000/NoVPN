@@ -13,6 +13,7 @@ import type {
   ProxyType,
   LegacyPort,
   LegacyMask,
+  InstallCheckResult,
   PublicBootstrapData,
   PublicUserView,
   RoutingFileMeta,
@@ -837,6 +838,10 @@ export function retargetXrayLinksSni(serverId: string, sni: string): number {
     }
   })();
   return n;
+}
+/** Итог самопроверки установки сервера (null — снять). */
+export function setInstallCheck(serverId: string, check: InstallCheckResult | null): void {
+  db.prepare('UPDATE servers SET install_check = ? WHERE id = ?').run(check ? JSON.stringify(check) : null, serverId);
 }
 /** Есть ли на сервере выданные Xray-устройства (без них переходный период маски не нужен). */
 export function hasActiveXrayDevices(serverId: string): boolean {

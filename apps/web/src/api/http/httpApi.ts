@@ -157,6 +157,7 @@ export const httpApi: ApiClient = {
     req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports, ...(opts?.migrate ? { migrate: true } : {}) }),
   provisionStatus: (id: string) =>
     req<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>('GET', `/api/admin/servers/${id}/provision-status`),
+  verifyInstall: (id: string) => req<import('@novpn/shared').InstallCheckResult>('POST', `/api/admin/servers/${id}/verify-install`),
   resyncDevices: (id: string) =>
     req<{ ok: boolean; xray: number; awg: number; message?: string }>('POST', `/api/admin/servers/${id}/resync-devices`),
   dnsCheck: (id: string) =>

@@ -18,7 +18,8 @@ import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
-import { sshApplyXrayMask, isValidMask } from './services/sshServer.js';
+import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray } from './services/sshServer.js';
+import type { InstallCheck } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
 import { normCount, normGb, normExpiry } from './lib/validate.js';
@@ -1502,7 +1503,7 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
   try {
     const prev = getServerKeys(s.host);
     const restoring = !!(prev?.xrayRealityPrivKey || prev?.awgServerPrivKey);
-    provisionStatus.set(serverId, { state: 'running', message: restoring ? 'Переустановка с восстановлением…' : 'Устанавливаем VPN…', at: Date.now() });
+    provisionStatus.set(serverId, { state: 'running', message: `Шаг 1 из 4: подготовка${restoring ? ' (ключи сервера восстанавливаются)' : ''}…`, at: Date.now() });
 
     // Параметры обфускации AmneziaWG — уникальны для сервера.
     // Приоритет: 1) сохранённые в keyvault → 2) уже стоящие на сервере (старые
@@ -1538,6 +1539,10 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     if (restoring && explicit.xray == null) { const p = repo.xrayPortFromDevice(s.id); if (p) savedPorts.xray = p; }
     const reqPortXray = Number(req_portXray);
     const reqPortAwg = Number(req_portAwg);
+    // Свежая установка (ключей в панели нет): контейнер amnezia-xray от прошлой оборванной
+    // попытки держит 443, и Xray уходил на случайный порт (02.11.2026 Франция — 47265).
+    // Установщик всё равно пересоздаёт контейнер — убираем его до выбора порта.
+    if (!restoring && want.xray) await sshRemoveOwnXray(s).catch(() => {});
     let portXray = restoring ? savedPorts.xray : 443;
     let portAwg = restoring ? savedPorts.awg : 51820;
     if (Number.isInteger(reqPortXray) && reqPortXray >= 1 && reqPortXray <= 65535) portXray = reqPortXray;
@@ -1566,6 +1571,7 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
       throw new Error(`Порт AmneziaWG ${portAwg} уже занят на сервере — выберите другой.`);
     }
 
+    provisionStatus.set(serverId, { state: 'running', message: 'Шаг 2 из 4: ставим Xray и AmneziaWG — до 3–5 минут, если AmneziaWG собирается из исходников…', at: Date.now() });
     const installed = want.xray || want.awg
       ? await sshInstallServer(s, {
           xray: want.xray, awg: want.awg,
@@ -1578,6 +1584,7 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
         })
       : {};
     repo.saveEndpointPorts(s.host, { xray: portXray, awg: portAwg, http: portHttp, socks: portSocks, https: portHttps });
+    provisionStatus.set(serverId, { state: 'running', message: 'Шаг 3 из 4: конфиги людей, прокси, тест скорости…', at: Date.now() });
     saveServerKeys(s.host, {
       xrayRealityPrivKey: installed.realityPriv, xrayRealityPubKey: installed.realityPub,
       xrayShortId: installed.shortId, xraySni: installed.sni,
@@ -1585,7 +1592,7 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
       awgParams: JSON.stringify(awgParams),
     });
     if (want.http || want.https || want.socks) {
-      provisionStatus.set(serverId, { state: 'running', message: 'Устанавливаем прокси…', at: Date.now() });
+      provisionStatus.set(serverId, { state: 'running', message: 'Шаг 3 из 4: ставим прокси…', at: Date.now() });
       const proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks, httpPort: portHttp, socksPort: portSocks, httpsPort: portHttps });
       saveServerProxy(s.host, proxy);
     }
@@ -1627,11 +1634,35 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     // Иначе после «успешного» переноса sync его пропускал, подписки исключали (404),
     // а бот считал нерабочим — при зелёном статусе в UI.
     repo.updateServerFields(s.id, { protocols: JSON.stringify(protocols), agent: 'online', endpoint_ok: 1, detached: 0, last_sync_at: repo.nowIso() });
-    repo.addLog(`${restoring ? 'Переустановлен' : 'Установлен'} сервер «${s.name}» (${protocols.join(', ')})`);
-    provisionStatus.set(serverId, { state: 'done', message: 'Установка завершена.', restored: restoring, at: Date.now() });
+    // Самопроверка: что РЕАЛЬНО работает (02.11.2026 Франция встала наполовину, а сервер
+    // выглядел в админке исправным). Итог хранится у сервера и виден в списке.
+    provisionStatus.set(serverId, { state: 'running', message: 'Шаг 4 из 4: проверяем, что всё работает…', at: Date.now() });
+    const warnings: string[] = [];
+    const checks = await sshVerifyInstall(
+      s,
+      { xray: want.xray, awg: want.awg, http: want.http, socks: want.socks, https: want.https },
+      { xray: portXray, awg: portAwg, http: portHttp, socks: portSocks, https: portHttps },
+    ).catch((e): InstallCheck[] => {
+      warnings.push(`самопроверка не выполнилась (${e instanceof Error ? e.message : 'ошибка'})`);
+      return [];
+    });
+    const summary = formatInstallCheck(checks);
+    const vpnBad = checks.filter((c) => !c.ok && (c.key === 'xray' || c.key === 'awg'));
+    for (const c of checks) if (!c.ok && c.key !== 'xray' && c.key !== 'awg') warnings.push(`${c.name} не работает (${c.detail})`);
+    repo.setInstallCheck(s.id, { at: repo.nowIso(), ok: checks.every((c) => c.ok), summary, error: null, checks });
+    repo.addLog(`${restoring ? 'Переустановлен' : 'Установлен'} сервер «${s.name}» (${protocols.join(', ')})${summary ? `; проверка: ${summary}` : ''}${warnings.length ? `; внимание: ${warnings.join('; ')}` : ''}`);
+    if (vpnBad.length) {
+      const message = `Установлено не всё: ${summary}.`;
+      repo.addJobError(s.name, message);
+      provisionStatus.set(serverId, { state: 'error', message, at: Date.now() });
+      return;
+    }
+    const message = `Установка завершена${summary ? `. Проверка: ${summary}` : ''}${warnings.length ? `. Внимание: ${warnings.join('; ')}` : ''}.`;
+    provisionStatus.set(serverId, { state: 'done', message, restored: restoring, at: Date.now() });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Ошибка установки.';
     repo.addJobError(s.name, `Установка: ${msg}`); // видно на «Обзоре»
+    repo.setInstallCheck(s.id, { at: repo.nowIso(), ok: false, summary: '', error: msg, checks: [] });
     provisionStatus.set(serverId, { state: 'error', message: msg, at: Date.now() });
   }
 }
@@ -1721,6 +1752,26 @@ router.post('/api/admin/servers/:id/reality-sni', requireAdmin, async (req, res)
     res.json({ ok: true, sni: REALITY_SNI });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось сменить SNI.'));
+  }
+});
+
+// Самопроверка установки по кнопке: что реально работает на сервере сейчас.
+router.post('/api/admin/servers/:id/verify-install', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (!(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  const p = s.protocols as string[];
+  try {
+    const checks = await sshVerifyInstall(
+      s,
+      { xray: p.includes('xray'), awg: p.includes('amneziawg'), http: p.includes('http'), socks: p.includes('socks5'), https: p.includes('https') },
+      repo.getEndpointPorts(s.host),
+    );
+    const result = { at: repo.nowIso(), ok: checks.every((c) => c.ok), summary: formatInstallCheck(checks) || 'проверять нечего', error: null, checks };
+    repo.setInstallCheck(s.id, result);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось проверить сервер.'));
   }
 });
 

@@ -496,6 +496,13 @@ export const mockApi: ApiClient = {
     await wait(150);
     return { state: 'done' as const, message: 'Установка завершена.', restored: false };
   },
+  async verifyInstall(id: string) {
+    await wait(300);
+    const s = state.servers.find((x) => x.id === id);
+    const r = { at: new Date().toISOString(), ok: true, summary: 'Xray ✓, AmneziaWG ✓', error: null, checks: [] };
+    if (s) s.installCheck = r;
+    return r;
+  },
   async resyncDevices(_id: string) {
     await wait(400);
     return { ok: true, xray: 3, awg: 5 };

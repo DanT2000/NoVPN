@@ -41,6 +41,17 @@ export interface LegacyMask {
   since: string;
 }
 
+/** Самопроверка установки сервера (после установки и по кнопке «Проверить установку»). */
+export interface InstallCheckResult {
+  at: string;
+  ok: boolean;
+  /** «Xray ✓, AmneziaWG ✗ (нет интерфейса awg0)». */
+  summary: string;
+  /** Ошибка установки, если она оборвалась. */
+  error?: string | null;
+  checks: Array<{ key: string; name: string; ok: boolean; detail: string }>;
+}
+
 export interface Server {
   id: string;
   name: string;
@@ -53,6 +64,8 @@ export interface Server {
   /** Маска Reality (сайт, под который сервер маскируется) и прежние маски, которые
    *  ещё принимаются, пока приложения не обновили подписку. */
   realityMask?: { sni: string | null; legacy: LegacyMask[] };
+  /** Итог последней установки/самопроверки: что реально работает на сервере. */
+  installCheck?: InstallCheckResult | null;
   /** Физический сервер отвязан: endpoint (домен/порты/ключи/конфиги) сохранён, SSH нет. */
   detached?: boolean;
   /** SSH-вход по ключу настроен (пароль отключён после hardening). */

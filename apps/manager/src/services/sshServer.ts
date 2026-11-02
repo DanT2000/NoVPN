@@ -4,7 +4,7 @@
 
 import { Client } from 'ssh2';
 import ssh2 from 'ssh2';
-import type { Server } from '@novpn/shared';
+import type { Server, ServerPorts } from '@novpn/shared';
 import { decryptSecret, encryptSecret } from '../lib/crypto.js';
 import { getServerSsh, setServerSshKey, disableServerSshPassword } from '../repo.js';
 import { getServerKeys } from './keyvault.js';
@@ -493,6 +493,78 @@ export async function sshIsPortFree(server: Server, proto: 'tcp' | 'udp', port: 
   const flag = proto === 'udp' ? '-uln' : '-tln';
   const out = await runScript(creds(server.id), `ss ${flag} 2>/dev/null | grep -qE "[:.]${port} " && echo BUSY || echo FREE`, 15000).catch(() => 'FREE');
   return /FREE/.test(out) && !/BUSY/.test(out);
+}
+
+/** Самопроверка установки: что РЕАЛЬНО работает на сервере. 02.11.2026 установка Франции
+ *  встала наполовину (Xray есть, AmneziaWG нет), а панель сказала лишь «SSH exit 1». */
+export interface InstallCheck {
+  key: 'xray' | 'awg' | 'http' | 'socks' | 'https';
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+export interface InstallCheckWant {
+  xray?: boolean;
+  awg?: boolean;
+  http?: boolean;
+  socks?: boolean;
+  https?: boolean;
+}
+const CHECK_NAMES: Record<InstallCheck['key'], string> = {
+  xray: 'Xray', awg: 'AmneziaWG', http: 'HTTP-прокси', socks: 'SOCKS5-прокси', https: 'HTTPS-прокси',
+};
+const okPort = (v: unknown): number => (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 65535 ? (v as number) : 0);
+
+/** Скрипт самопроверки (без SSH) — отдельно, чтобы тест проверил его без сервера. Строки
+ *  «CHK <ключ> OK|FAIL <пояснение>». */
+export function installCheckScript(want: InstallCheckWant, ports: Partial<ServerPorts>): string {
+  const tcp = (key: string, port: number) =>
+    `if ss -ltn 2>/dev/null | grep -qE "[:.]${port} "; then echo "CHK ${key} OK порт ${port}"; else echo "CHK ${key} FAIL не слушает TCP ${port}"; fi`;
+  const lines: string[] = [];
+  if (want.xray) {
+    const p = okPort(ports.xray) || 443;
+    lines.push(`S=$(docker ps --filter name=^amnezia-xray$ --format '{{.Status}}' 2>/dev/null | head -1)
+if ! printf '%s' "$S" | grep -q '^Up'; then echo "CHK xray FAIL контейнер не запущен\${S:+ ($S)}"
+elif ss -ltn 2>/dev/null | grep -qE "[:.]${p} "; then echo "CHK xray OK порт ${p}"
+else echo "CHK xray FAIL не слушает TCP ${p}"; fi`);
+  }
+  if (want.awg) {
+    const p = okPort(ports.awg) || 51820;
+    lines.push(`if ! ip link show awg0 >/dev/null 2>&1; then echo "CHK awg FAIL нет интерфейса awg0"
+elif ss -uln 2>/dev/null | grep -qE "[:.]${p} "; then echo "CHK awg OK UDP ${p}"
+else echo "CHK awg FAIL не слушает UDP ${p}"; fi`);
+  }
+  if (want.http) lines.push(tcp('http', okPort(ports.http) || 8080));
+  if (want.socks) lines.push(tcp('socks', okPort(ports.socks) || 1080));
+  if (want.https) lines.push(tcp('https', okPort(ports.https) || 8443));
+  return lines.join('\n');
+}
+
+export function parseInstallCheck(out: string): InstallCheck[] {
+  const res: InstallCheck[] = [];
+  for (const m of out.matchAll(/^CHK (xray|awg|http|socks|https) (OK|FAIL) ?(.*)$/gm)) {
+    const key = m[1] as InstallCheck['key'];
+    res.push({ key, name: CHECK_NAMES[key], ok: m[2] === 'OK', detail: (m[3] ?? '').trim() });
+  }
+  return res;
+}
+
+/** «Xray ✓, AmneziaWG ✗ (нет интерфейса awg0)» — для сообщения об установке. */
+export function formatInstallCheck(checks: InstallCheck[]): string {
+  return checks.map((c) => `${c.name} ${c.ok ? '✓' : `✗ (${c.detail})`}`).join(', ');
+}
+
+/** Убрать свой контейнер Xray перед СВЕЖЕЙ установкой (ключей в панели нет): иначе он от
+ *  прошлой оборванной попытки держит 443, и новый Xray уходит на случайный порт. */
+export async function sshRemoveOwnXray(server: Server): Promise<void> {
+  await runScript(creds(server.id), 'docker rm -f amnezia-xray >/dev/null 2>&1 || true; echo OK', 60000);
+}
+
+export async function sshVerifyInstall(server: Server, want: InstallCheckWant, ports: Partial<ServerPorts>): Promise<InstallCheck[]> {
+  const script = installCheckScript(want, ports);
+  if (!script) return [];
+  const out = await runScript(creds(server.id), script, 30000);
+  return parseInstallCheck(out);
 }
 
 /** Настроить/снять алиас старого публичного порта на новый (для совместимости со
