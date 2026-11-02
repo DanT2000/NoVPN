@@ -150,3 +150,14 @@ test('новая маска попадает в уже выданные ссыл
   assert.deepEqual(repo.getLegacyMasks(a.host).map((m) => m.sni), ['cdn.dodostatic.net']);
   assert.deepEqual(repo.getLegacyMasks(b.host), []);
 });
+
+// 03.11.2026: смена маски на Финляндии отвергалась — Xray узнаёт формат конфига по
+// расширению, а проверяли «server.json.tmp» («Failed to get format»). Застрявший tmp ещё и
+// валил каждую автосверку маски («SSH exit 23»). Проверять — только файл с расширением .json.
+test('Xray проверяет конфиг только под именем .json', () => {
+  const src = fs.readFileSync(new URL('../src/services/sshServer.ts', import.meta.url), 'utf8');
+  const tests = [...src.matchAll(/xray -test -config (\S+)/g)].map((m) => m[1]!);
+  assert.ok(tests.length >= 4);
+  for (const t of tests) assert.doesNotMatch(t, /\.tmp\b/, `проверка ${t}`);
+  assert.match(src, /N=\/opt\/amnezia\/xray\/server\.next\.json/);
+});

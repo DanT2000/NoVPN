@@ -807,6 +807,8 @@ export async function sshSetXraySni(server: Server, sni: string = REALITY_SNI): 
   const out = await withServerLock(server.id, () => {
     const script = `set -e
 for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
+# Остатки прерванной правки: иначе каждая сверка проверяла старый tmp и падала.
+rm -f /opt/amnezia/xray/server.json.tmp /opt/amnezia/xray/server.next.json
 python3 - '${sni}' <<'PY'
 import json,sys
 sni=sys.argv[1]
@@ -823,8 +825,10 @@ json.dump(c,open(p+'.tmp','w'),indent=2)
 print('WRITTEN')
 PY
 if [ -f /opt/amnezia/xray/server.json.tmp ]; then
-  docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json.tmp >/dev/null
-  mv /opt/amnezia/xray/server.json.tmp /opt/amnezia/xray/server.json
+  # Xray узнаёт формат конфига по расширению: «.json.tmp» он отвергал («Failed to get format»).
+  mv /opt/amnezia/xray/server.json.tmp /opt/amnezia/xray/server.next.json
+  docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.next.json >/dev/null
+  mv /opt/amnezia/xray/server.next.json /opt/amnezia/xray/server.json
   docker restart amnezia-xray >/dev/null
   echo SNI_SET
 else
@@ -907,14 +911,18 @@ for n in ${sni}; do
     [ "$V" = "2" ] || { echo "MASK_SITE_FAIL $n $V"; exit 0; }
   fi
 done
-rm -f $P.tmp
+N=/opt/amnezia/xray/server.next.json
+rm -f $P.tmp $N
 R=$(python3 - $P '${sni}' '${legacy.join(',')}' <<'PY'
 ${XRAY_MASK_PY}
 PY
 )
 if [ "$R" = "WRITTEN" ]; then
-  docker exec amnezia-xray xray -test -config $P.tmp >/dev/null
-  mv $P.tmp $P
+  # Проверка — под именем .json: формат Xray определяет по расширению (03.11.2026 смена
+  # маски на Финляндии отвергалась «Failed to get format of server.json.tmp»).
+  mv $P.tmp $N
+  docker exec amnezia-xray xray -test -config $N >/dev/null
+  mv $N $P
   docker restart amnezia-xray >/dev/null
   echo MASK_SET
 else
