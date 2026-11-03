@@ -19,7 +19,7 @@ import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { ensureXrayOnAllowedServers } from './services/issue.js';
-import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray } from './services/sshServer.js';
+import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray, sshAddProxyUser } from './services/sshServer.js';
 import type { InstallCheck } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -1496,6 +1496,24 @@ router.patch('/api/admin/servers/:id', requireAdmin, (req, res) => {
 // Статус установки в памяти (установка длится минуты — делаем асинхронно, edge рвёт долгие запросы).
 const provisionStatus = new Map<string, { state: 'running' | 'done' | 'error'; message: string; restored?: boolean; at: number }>();
 
+/** Вернуть на сервер прокси-логины людей. Установка прокси переписывает конфиг 3proxy, и
+ *  личные логины пропадали (03.11.2026 — Финляндия и Франция после «Установить прокси»):
+ *  запасной канал у людей молча переставал работать. */
+async function resyncProxyLogins(s: NonNullable<ReturnType<typeof repo.getServer>>): Promise<{ ok: number; failed: number }> {
+  let ok = 0;
+  let failed = 0;
+  for (const a of repo.listServerProxyAccounts(s.id)) {
+    if ((a as { quota_blocked?: number | null }).quota_blocked) continue; // снят по квоте — не возвращаем
+    try {
+      await sshAddProxyUser(s, a.login, decryptSecret(a.pass_enc));
+      ok++;
+    } catch {
+      failed++;
+    }
+  }
+  return { ok, failed };
+}
+
 async function runProvision(serverId: string, comps: string[], ports: { xray?: number; awg?: number } = {}): Promise<void> {
   const req_portXray = ports.xray;
   const req_portAwg = ports.awg;
@@ -1600,6 +1618,8 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
       provisionStatus.set(serverId, { state: 'running', message: 'Шаг 3 из 4: ставим прокси…', at: Date.now() });
       const proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks, httpPort: portHttp, socksPort: portSocks, httpsPort: portHttps });
       saveServerProxy(s.host, proxy);
+      const back = await resyncProxyLogins(repo.getServer(s.id) ?? s);
+      if (back.failed) repo.addJobError(s.name, `Прокси-логины людей: не вернулись ${back.failed} — нажмите «Установить прокси» ещё раз`);
     }
     if (restoring) {
       const devs = repo.getServerDevicesForResync(s.id).map((d) => ({
@@ -1860,7 +1880,18 @@ router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, 
     if (want.https) cur.add('https');
     if (want.socks) cur.add('socks5');
     repo.updateServerFields(s.id, { protocols: JSON.stringify([...cur]) });
-    repo.addLog(`Установлены прокси на «${s.name}»`);
+    const fresh = repo.getServer(s.id) ?? s;
+    const back = await resyncProxyLogins(fresh);
+    if (back.failed) repo.addJobError(s.name, `Прокси-логины людей: не вернулись ${back.failed} из ${back.ok + back.failed}`);
+    // Самопроверка сразу — иначе в карточке висел прежний «HTTPS-прокси ✗».
+    const pr = fresh.protocols as string[];
+    const checks = await sshVerifyInstall(
+      fresh,
+      { xray: pr.includes('xray'), awg: pr.includes('amneziawg'), http: pr.includes('http'), socks: pr.includes('socks5'), https: pr.includes('https') },
+      repo.getEndpointPorts(fresh.host),
+    ).catch((): InstallCheck[] => []);
+    if (checks.length) repo.setInstallCheck(s.id, { at: repo.nowIso(), ok: checks.every((c) => c.ok), summary: formatInstallCheck(checks), error: null, checks });
+    repo.addLog(`Установлены прокси на «${s.name}»${back.ok ? `; прокси-логинов людей возвращено: ${back.ok}` : ''}`);
     res.json({ ok: true, proxy: p, server: repo.getServer(s.id) });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки прокси.'));
@@ -2207,9 +2238,10 @@ router.put('/api/admin/telegram', requireAdmin, (req, res) => {
   next.status = next.enabled ? (next.tokenMasked ? 'running' : 'stopped') : 'stopped';
   repo.saveTelegramRaw(next);
   restartBot(); // применяем новые настройки к боту (вкл/выкл, токен, прокси)
-  // Ответ без секретных полей.
-  const { tokenEnc: _t, proxyPassEnc: _p, ...safe } = next as TelegramSettings & { tokenEnc?: string; proxyPassEnc?: string };
-  res.json(safe);
+  // Ответ — как при загрузке страницы: без секретов и с НАСТОЯЩИМ списком привязанных.
+  // Раньше отдавалась сохранённая копия, где linkedUserIds всегда пуст, и после «Сохранить»
+  // админ видел «никто не привязан» (03.11.2026).
+  res.json(repo.getTelegramSafe());
 });
 
 router.post('/api/admin/telegram/test', requireAdmin, async (req, res) => {
