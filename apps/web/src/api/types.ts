@@ -278,7 +278,7 @@ export interface ApiClient {
    *  переспросит сервер, если сама видит только локальный адрес (общая локалка). */
   myIp(serverId?: string): Promise<{ ip: string | null; source: 'request' | 'server' | null }>;
   getServerProxy(id: string): Promise<{ proxy: ServerProxyConfig | null; host: string }>;
-  provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }): Promise<{ ok: boolean; running: boolean }>;
+  provisionServer(id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean; sshGuard?: { bruteforce: boolean; allow: string[] } }): Promise<{ ok: boolean; running: boolean }>;
   provisionStatus(id: string): Promise<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>;
   /** Самопроверка: что реально работает на сервере (Xray, AmneziaWG, прокси). */
   verifyInstall(id: string): Promise<import('@novpn/shared').InstallCheckResult>;
@@ -297,6 +297,8 @@ export interface ApiClient {
   changeServerMask(id: string, sni: string, keepLegacy: boolean): Promise<{ ok: boolean; unchanged?: boolean; sni: string; links?: number }>;
   disableLegacyMask(id: string, sni: string): Promise<Ok>;
   hardenServerSsh(id: string, privateKey: string): Promise<{ ok: boolean; publicKey?: string }>;
+  /** Защита SSH: блокировка подбора пароля и (по желанию) вход только с адресов. */
+  setSshGuard(id: string, spec: { bruteforce: boolean; allow: string[] }): Promise<{ ok: boolean; panelIp: string | null; server: Server }>;
 
   // ── admin: telegram ──
   saveTelegram(input: SaveTelegramInput): Promise<TelegramSettings>;

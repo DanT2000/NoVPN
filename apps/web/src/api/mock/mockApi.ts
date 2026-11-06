@@ -448,6 +448,13 @@ export const mockApi: ApiClient = {
     if (s.speedtest) s.speedtest = { ...s.speedtest, allow };
     return { ok: true, server: clone(s) };
   },
+  async setSshGuard(id: string, spec: { bruteforce: boolean; allow: string[] }) {
+    await wait(400);
+    const s = state.servers.find((x) => x.id === id)!;
+    const panelIp = '203.0.113.9';
+    s.sshGuard = spec.bruteforce || spec.allow.length ? { ...spec, panelIp, appliedAt: new Date().toISOString() } : null;
+    return { ok: true, panelIp, server: clone(s) };
+  },
   async speedtestOpen(id: string) {
     await wait(300);
     const s = state.servers.find((x) => x.id === id)!;
@@ -484,7 +491,7 @@ export const mockApi: ApiClient = {
     const s = state.servers.find((x) => x.id === id)!;
     return { proxy: null, host: s.host };
   },
-  async provisionServer(id: string, components: string[], _ports?: { portXray?: number; portAwg?: number }, _opts?: { migrate?: boolean }) {
+  async provisionServer(id: string, components: string[], _ports?: { portXray?: number; portAwg?: number }, _opts?: { migrate?: boolean; sshGuard?: { bruteforce: boolean; allow: string[] } }) {
     await wait(600);
     const s = state.servers.find((x) => x.id === id)!;
     s.protocols = components.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)) as Server['protocols'];

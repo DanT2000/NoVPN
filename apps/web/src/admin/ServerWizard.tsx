@@ -9,6 +9,7 @@ import { api } from '../api';
 import type { AddServerInput } from '../api/types';
 import { Chip, Field, ProgressBar, ScreenHeader } from '../components/ui';
 import { COUNTRIES, countryValue } from '../lib/countries';
+import { isAllowEntry, parseAllowList } from '../lib/allowlist';
 
 type AuthMethod = 'key' | 'password';
 type Component = 'xray' | 'amneziawg' | 'http' | 'https' | 'socks5';
@@ -86,6 +87,11 @@ export function ServerWizard() {
   // Порты: пусто = авто (Xray → 443 если свободен, иначе случайный; AWG → случайный UDP).
   const [portXray, setPortXray] = useState('');
   const [portAwg, setPortAwg] = useState('');
+  // Защита SSH — по желанию, по умолчанию выключена.
+  const [guardBf, setGuardBf] = useState(false);
+  const [guardAllow, setGuardAllow] = useState('');
+  const guardList = parseAllowList(guardAllow);
+  const guardBad = guardList.filter((a) => !isAllowEntry(a));
   // Найден сохранённый endpoint по этому домену (порты/ключи восстановятся).
   const [epFound, setEpFound] = useState<null | { xray: number; awg: number }>(null);
 
@@ -153,7 +159,8 @@ export function ServerWizard() {
           createdIdRef.current = srv.id;
           srvId = srv.id;
         }
-        await api.provisionServer(srvId, components(), { portXray: Number(portXray) || undefined, portAwg: Number(portAwg) || undefined }); // запуск (асинхронно на сервере)
+        const sshGuard = guardBf || guardList.length ? { bruteforce: guardBf, allow: guardList } : undefined;
+        await api.provisionServer(srvId, components(), { portXray: Number(portXray) || undefined, portAwg: Number(portAwg) || undefined }, { sshGuard }); // запуск (асинхронно на сервере)
         const started = Date.now();
         let lastMsg = '';
         for (;;) {
@@ -418,7 +425,25 @@ export function ServerWizard() {
             </div>
           ) : null}
 
-          <button className="btn btn-primary" onClick={() => setStep(4)}>
+          <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+            <span className="field-label">Защита SSH (по желанию)</span>
+            <CheckRow
+              checked={guardBf}
+              title="Блокировать подбор пароля"
+              sub="3 неверных пароля за 10 минут — адрес блокируется на сутки. Адрес панели не блокируется никогда."
+              onToggle={() => setGuardBf((v) => !v)}
+            />
+            <Field
+              label="Входить по SSH только с адресов (необязательно)"
+              hint="Только если у вас постоянный (статический) IP: у большинства домашних и мобильных подключений адрес меняется, и тогда вы сами по SSH не войдёте. Адрес панели добавится сам. Пусто — с любых адресов."
+            >
+              <input className="input mono" name="ssh-allow" autoComplete="off" spellCheck={false} placeholder="пусто — с любых адресов" value={guardAllow} onChange={(e) => setGuardAllow(e.target.value)} />
+            </Field>
+            {guardBad.length ? <div className="notice notice-red small">Не адрес: {guardBad.join(', ')}. Нужен IPv4 (203.0.113.7) или подсеть (203.0.113.0/24).</div> : null}
+            <span className="small muted">Включить, изменить или выключить можно и потом — в настройках сервера.</span>
+          </div>
+
+          <button className="btn btn-primary" disabled={guardBad.length > 0} onClick={() => setStep(4)}>
             Начать установку
           </button>
         </div>

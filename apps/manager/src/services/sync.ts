@@ -26,16 +26,55 @@ const lastSyncErrAt = new Map<string, number>();
 const UNREACHABLE_RE = /timed out|handshake|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|таймаут/i;
 function logSyncError(serverName: string, serverId: string, op: string, e: unknown): void {
   const msg = e instanceof Error ? e.message : 'сервер недоступен';
-  const unreachable = UNREACHABLE_RE.test(msg);
-  const key = unreachable ? `${serverId}|__unreachable__` : `${serverId}|${op}`;
+  // «Недоступен» — не сразу: решение в конце прохода (settleUnreachable).
+  if (UNREACHABLE_RE.test(msg)) return noteUnreachable(serverId, msg);
+  const key = `${serverId}|${op}`;
   const now = Date.now();
   if (now - (lastSyncErrAt.get(key) ?? 0) < 30 * 60 * 1000) return;
   lastSyncErrAt.set(key, now);
-  repo.addJobError(serverName, unreachable ? `Сервер недоступен: ${msg}` : `${op}: ${msg}`);
+  repo.addJobError(serverName, `${op}: ${msg}`);
 }
+
+// Одна неудача — ещё не «недоступен». 06.11.2026 одно соединение панели из ~70 не дошло
+// до Франции (короткая потеря пакетов в пути, повтор через 30 с прошёл), а уведомление
+// пришло. Теперь «Сервер недоступен» пишем (и шлём уведомление), только если связи не
+// было UNREACHABLE_STREAK проходов подряд. Проход с хоть одной сорвавшейся операцией
+// считается неудачным; полностью успешный — обнуляет счёт.
+export const UNREACHABLE_STREAK = 2;
+const cycleUnreachable = new Map<string, string>();
+const unreachableStreak = new Map<string, number>();
+export function noteUnreachable(serverId: string, msg: string): void {
+  if (!cycleUnreachable.has(serverId)) cycleUnreachable.set(serverId, msg);
+}
+/** Итог прохода по серверу: подряд неудачных проходов. Пишет «недоступен» на втором. */
+export function settleUnreachable(serverName: string, serverId: string): number {
+  const msg = cycleUnreachable.get(serverId);
+  cycleUnreachable.delete(serverId);
+  const key = `${serverId}|__unreachable__`;
+  if (msg === undefined) {
+    // Проход целиком успешный — снимаем и «недоступен» (новый сбой сообщим заново).
+    // Не в clearSyncErr: при частичном сбое (одна операция прошла, другая нет) уведомление
+    // повторялось бы каждый проход.
+    unreachableStreak.delete(serverId);
+    lastSyncErrAt.delete(key);
+    return 0;
+  }
+  const n = (unreachableStreak.get(serverId) ?? 0) + 1;
+  unreachableStreak.set(serverId, n);
+  if (n < UNREACHABLE_STREAK) return n;
+  const now = Date.now();
+  if (now - (lastSyncErrAt.get(key) ?? 0) < 30 * 60 * 1000) return n;
+  lastSyncErrAt.set(key, now);
+  repo.addJobError(serverName, `Сервер недоступен: ${msg} (нет связи ${n} ${passes(n)} подряд)`);
+  return n;
+}
+const passes = (n: number): string => {
+  const a = n % 100;
+  const b = n % 10;
+  return a > 10 && a < 20 ? 'проходов' : b === 1 ? 'проход' : b >= 2 && b <= 4 ? 'прохода' : 'проходов';
+};
 function clearSyncErr(serverId: string, op: string): void {
   lastSyncErrAt.delete(`${serverId}|${op}`);
-  lastSyncErrAt.delete(`${serverId}|__unreachable__`); // сервер ответил — снимаем и «недоступен»
 }
 
 // Нагрузку снимаем раз в минуту: реже — и пики сетевой скорости (нужны, чтобы понять,
@@ -307,6 +346,7 @@ export async function syncAllServers(): Promise<void> {
           /* offline ниже */
         }
       }
+      settleUnreachable(s.name, s.id);
 
       if (reachable) {
         repo.updateServerFields(s.id, {

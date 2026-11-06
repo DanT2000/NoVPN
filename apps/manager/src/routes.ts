@@ -19,7 +19,7 @@ import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { ensureXrayOnAllowedServers } from './services/issue.js';
-import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray, sshAddProxyUser } from './services/sshServer.js';
+import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray, sshAddProxyUser, sshApplySshGuard } from './services/sshServer.js';
 import type { InstallCheck } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -1514,7 +1514,27 @@ async function resyncProxyLogins(s: NonNullable<ReturnType<typeof repo.getServer
   return { ok, failed };
 }
 
-async function runProvision(serverId: string, comps: string[], ports: { xray?: number; awg?: number } = {}): Promise<void> {
+/** Что проверять у защиты SSH: включена в панели — должна стоять на сервере. */
+function sshGuardWant(s: { id: string; sshGuard?: { bruteforce: boolean; allow: string[] } | null }) {
+  const g = s.sshGuard;
+  if (!g || (!g.bruteforce && !g.allow.length)) return null;
+  return { bruteforce: g.bruteforce, allow: g.allow.length > 0, port: repo.getServerSsh(s.id)?.port ?? 22 };
+}
+
+/** Применить защиту SSH на сервере и запомнить в панели (выключено целиком — NULL). */
+async function applySshGuard(s: NonNullable<ReturnType<typeof repo.getServer>>, spec: { bruteforce: boolean; allow: string[] }): Promise<string | null> {
+  const r = await sshApplySshGuard(s, spec);
+  const on = spec.bruteforce || spec.allow.length > 0;
+  repo.updateServerFields(s.id, { ssh_guard: on ? JSON.stringify({ ...spec, panelIp: r.panelIp, appliedAt: repo.nowIso() }) : null });
+  return r.panelIp;
+}
+
+async function runProvision(
+  serverId: string,
+  comps: string[],
+  ports: { xray?: number; awg?: number } = {},
+  guard?: { bruteforce: boolean; allow: string[] } | null,
+): Promise<void> {
   const req_portXray = ports.xray;
   const req_portAwg = ports.awg;
   const s = repo.getServer(serverId);
@@ -1607,7 +1627,7 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
         })
       : {};
     repo.saveEndpointPorts(s.host, { xray: portXray, awg: portAwg, http: portHttp, socks: portSocks, https: portHttps });
-    provisionStatus.set(serverId, { state: 'running', message: 'Шаг 3 из 4: конфиги людей, прокси, тест скорости…', at: Date.now() });
+    provisionStatus.set(serverId, { state: 'running', message: 'Шаг 3 из 4: конфиги людей, прокси, тест скорости, защита SSH…', at: Date.now() });
     saveServerKeys(s.host, {
       xrayRealityPrivKey: installed.realityPriv, xrayRealityPubKey: installed.realityPub,
       xrayShortId: installed.shortId, xraySni: installed.sni,
@@ -1648,6 +1668,16 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
         repo.addJobError(s.name, `Тест скорости после переноса: ${e instanceof Error ? e.message : 'ошибка'}`);
       }
     }
+    const guardWarnings: string[] = [];
+    const g = guard ?? (restoring ? s.sshGuard : null);
+    if (g && (g.bruteforce || g.allow.length)) {
+      provisionStatus.set(serverId, { state: 'running', message: 'Шаг 3 из 4: защита SSH…', at: Date.now() });
+      try {
+        await applySshGuard(s, { bruteforce: g.bruteforce, allow: g.allow });
+      } catch (e) {
+        guardWarnings.push(`защита SSH не включена (${e instanceof Error ? e.message : 'ошибка'})`);
+      }
+    }
     const proto = new Set(comps.filter((p) => ['xray', 'amneziawg', 'http', 'https', 'socks5'].includes(p)));
     // Не сбрасываем уже установленные прокси, если их не трогали в этой установке.
     // ИСКЛЮЧЕНИЕ — перенос на новый бокс (restoring): на нём стоит ровно то, что
@@ -1662,10 +1692,10 @@ async function runProvision(serverId: string, comps: string[], ports: { xray?: n
     // Самопроверка: что РЕАЛЬНО работает (02.11.2026 Франция встала наполовину, а сервер
     // выглядел в админке исправным). Итог хранится у сервера и виден в списке.
     provisionStatus.set(serverId, { state: 'running', message: 'Шаг 4 из 4: проверяем, что всё работает…', at: Date.now() });
-    const warnings: string[] = [];
+    const warnings: string[] = [...guardWarnings];
     const checks = await sshVerifyInstall(
       s,
-      { xray: want.xray, awg: want.awg, http: want.http, socks: want.socks, https: want.https },
+      { xray: want.xray, awg: want.awg, http: want.http, socks: want.socks, https: want.https, sshGuard: sshGuardWant(repo.getServer(s.id) ?? s) },
       { xray: portXray, awg: portAwg, http: portHttp, socks: portSocks, https: portHttps },
     ).catch((e): InstallCheck[] => {
       warnings.push(`самопроверка не выполнилась (${e instanceof Error ? e.message : 'ошибка'})`);
@@ -1710,8 +1740,15 @@ router.post('/api/admin/servers/:id/provision', requireAdmin, async (req, res) =
   const comps: string[] = Array.isArray(req.body?.components) ? req.body.components : ['xray', 'amneziawg'];
   // Явные порты из формы (режим «Вручную»). Пусто → auto/сохранённые в runProvision.
   const ports = { xray: Number(req.body?.portXray) || undefined, awg: Number(req.body?.portAwg) || undefined };
+  // Защита SSH из мастера — только если её отметили. Без неё установка защиту не трогает.
+  let guard: { bruteforce: boolean; allow: string[] } | null = null;
+  if (req.body?.sshGuard) {
+    const allow = normalizeAllow(req.body.sshGuard.allow ?? []);
+    if (!allow) return res.status(400).json(err('validation', 'Адреса для входа по SSH — только IPv4 (1.2.3.4) или подсети (1.2.3.0/24).'));
+    guard = { bruteforce: req.body.sshGuard.bruteforce === true, allow };
+  }
   provisionStatus.set(s.id, { state: 'running', message: 'Запуск установки…', at: Date.now() });
-  void runProvision(s.id, comps, ports); // не ждём — статус опрашивается отдельно
+  void runProvision(s.id, comps, ports, guard); // не ждём — статус опрашивается отдельно
   res.json({ ok: true, running: true });
 });
 
@@ -1789,7 +1826,7 @@ router.post('/api/admin/servers/:id/verify-install', requireAdmin, async (req, r
   try {
     const checks = await sshVerifyInstall(
       s,
-      { xray: p.includes('xray'), awg: p.includes('amneziawg'), http: p.includes('http'), socks: p.includes('socks5'), https: p.includes('https') },
+      { xray: p.includes('xray'), awg: p.includes('amneziawg'), http: p.includes('http'), socks: p.includes('socks5'), https: p.includes('https'), sshGuard: sshGuardWant(s) },
       repo.getEndpointPorts(s.host),
     );
     const result = { at: repo.nowIso(), ok: checks.every((c) => c.ok), summary: formatInstallCheck(checks) || 'проверять нечего', error: null, checks };
@@ -1887,7 +1924,7 @@ router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, 
     const pr = fresh.protocols as string[];
     const checks = await sshVerifyInstall(
       fresh,
-      { xray: pr.includes('xray'), awg: pr.includes('amneziawg'), http: pr.includes('http'), socks: pr.includes('socks5'), https: pr.includes('https') },
+      { xray: pr.includes('xray'), awg: pr.includes('amneziawg'), http: pr.includes('http'), socks: pr.includes('socks5'), https: pr.includes('https'), sshGuard: sshGuardWant(fresh) },
       repo.getEndpointPorts(fresh.host),
     ).catch((): InstallCheck[] => []);
     if (checks.length) repo.setInstallCheck(s.id, { at: repo.nowIso(), ok: checks.every((c) => c.ok), summary: formatInstallCheck(checks), error: null, checks });
@@ -1895,6 +1932,27 @@ router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, 
     res.json({ ok: true, proxy: p, server: repo.getServer(s.id) });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки прокси.'));
+  }
+});
+
+// ── Защита SSH (по желанию владельца сервера) ──
+// Блокировка подбора пароля и, по желанию, вход по SSH только с адресов. Применяется со
+// страховкой: если после изменения панель не войдёт заново, сервер через 10 минут сам
+// снимет защиту. Адрес панели всегда разрешён и не блокируется.
+router.put('/api/admin/servers/:id/ssh-guard', requireAdmin, async (req, res) => {
+  const s = repo.getServer(req.params.id!);
+  if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  if (s.detached || !(await sshHasSshAccess(s.id))) return res.status(400).json(err('ssh', 'Для сервера не задан SSH-доступ.'));
+  const allow = normalizeAllow(req.body?.allow ?? []);
+  if (!allow) return res.status(400).json(err('validation', 'Адреса — только IPv4 (1.2.3.4) или подсети (1.2.3.0/24).'));
+  const spec = { bruteforce: req.body?.bruteforce === true, allow };
+  try {
+    const panelIp = await applySshGuard(s, spec);
+    const what = [spec.bruteforce ? 'блокировка подбора пароля' : '', allow.length ? `вход только с ${allow.join(', ')} и адреса панели` : ''].filter(Boolean).join('; ');
+    repo.addLog(`Защита SSH на «${s.name}»: ${what || 'выключена'}`);
+    res.json({ ok: true, panelIp, server: repo.getServer(s.id) });
+  } catch (e) {
+    res.status(400).json(err('server', e instanceof Error ? e.message : 'Не удалось изменить защиту SSH.'));
   }
 });
 

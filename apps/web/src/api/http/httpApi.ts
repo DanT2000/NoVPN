@@ -150,11 +150,13 @@ export const httpApi: ApiClient = {
   speedtestOpen: (id: string) =>
     req<{ ok: boolean; url: string; ip: string; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/open`, {}),
   speedtestRemove: (id: string) => req<{ ok: boolean; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/remove`, {}),
+  setSshGuard: (id: string, spec: { bruteforce: boolean; allow: string[] }) =>
+    req<{ ok: boolean; panelIp: string | null; server: Server }>('PUT', `/api/admin/servers/${id}/ssh-guard`, spec),
   myIp: (serverId?: string) =>
     req<{ ip: string | null; source: 'request' | 'server' | null }>('GET', `/api/admin/my-ip${serverId ? `?server=${encodeURIComponent(serverId)}` : ''}`),
   getServerProxy: (id: string) => req<{ proxy: ServerProxyConfig | null; host: string }>('GET', `/api/admin/servers/${id}/proxy`),
-  provisionServer: (id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean }) =>
-    req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports, ...(opts?.migrate ? { migrate: true } : {}) }),
+  provisionServer: (id: string, components: string[], ports?: { portXray?: number; portAwg?: number }, opts?: { migrate?: boolean; sshGuard?: { bruteforce: boolean; allow: string[] } }) =>
+    req<{ ok: boolean; running: boolean }>('POST', `/api/admin/servers/${id}/provision`, { components, ...ports, ...(opts?.migrate ? { migrate: true } : {}), ...(opts?.sshGuard ? { sshGuard: opts.sshGuard } : {}) }),
   provisionStatus: (id: string) =>
     req<{ state: 'idle' | 'running' | 'done' | 'error'; message: string; restored?: boolean }>('GET', `/api/admin/servers/${id}/provision-status`),
   verifyInstall: (id: string) => req<import('@novpn/shared').InstallCheckResult>('POST', `/api/admin/servers/${id}/verify-install`),

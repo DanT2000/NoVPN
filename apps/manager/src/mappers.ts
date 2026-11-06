@@ -82,6 +82,7 @@ export function rowToServer(r: any): Server {
     sshKeyAuth: !!r.ssh_key_enc,
     flagEmoji: r.flag_emoji ?? null,
     speedtest: j<Server['speedtest']>(r.speedtest, null),
+    sshGuard: j<Server['sshGuard']>(r.ssh_guard, null),
     installCheck: j<Server['installCheck']>(r.install_check, null),
     selfTests: j<Server['selfTests']>(r.selftest, []),
   };

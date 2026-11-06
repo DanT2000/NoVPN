@@ -93,6 +93,8 @@ export interface Server {
   routing?: ServerRoutingSummary;
   /** Тест скорости на сервере (OpenSpeedTest в Docker). null/нет — не установлен. */
   speedtest?: ServerSpeedtest | null;
+  /** Защита SSH (включает владелец сервера, по умолчанию выключена). null/нет — не включалась. */
+  sshGuard?: ServerSshGuard | null;
   /** Самотесты сервера (его собственный канал до узла Speedtest), новые первыми, до 10. */
   selfTests?: ServerSelfTest[];
 }
@@ -113,6 +115,17 @@ export interface ServerSelfTest {
   cpuPct?: number | null;
   /** Расшифровка: сколько дал каждый источник и коды ответов. */
   note?: string | null;
+}
+
+/** Защита SSH: блокировка подбора пароля (fail2ban + лимиты sshd) и, по желанию, вход по
+ *  SSH только с перечисленных адресов. Адрес панели разрешён всегда и не блокируется. */
+export interface ServerSshGuard {
+  bruteforce: boolean;
+  /** IPv4-адреса или подсети (CIDR), с которых можно входить по SSH. Пусто = с любых. */
+  allow: string[];
+  /** С какого адреса заходит сама панель (сервер видит его в SSH-соединении). */
+  panelIp?: string | null;
+  appliedAt: string;
 }
 
 /** Тест скорости на сервере: меряет реальный канал между браузером админа и сервером. */

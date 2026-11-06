@@ -12,6 +12,7 @@ import { Chip, Dot, EmptyState, Field, ScreenHeader, Toggle } from '../component
 import { serverAgentView, serverEndpointView } from '../lib/status';
 import { gb, plural, rel } from '../lib/format';
 import { COUNTRIES, countryValue } from '../lib/countries';
+import { isAllowEntry, parseAllowList } from '../lib/allowlist';
 
 type Proto = 'xray' | 'amneziawg' | 'http' | 'https' | 'socks5';
 
@@ -365,6 +366,88 @@ function SshHardenPanel({ server }: { server: Server }) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/* Защита SSH — по желанию владельца сервера (по умолчанию выключена). Боты круглые сутки
+   подбирают пароли ко всем серверам в интернете и занимают места до входа — тогда sshd
+   сбрасывает и саму панель (05.11.2026: ложное «сервер недоступен»). */
+function SshGuardPanel({ server }: { server: Server }) {
+  const { showToast, showConfirm, reload } = useApp();
+  const g = server.sshGuard ?? null;
+  const key = `${g?.bruteforce ? 1 : 0}|${(g?.allow ?? []).join(',')}`;
+  const [bf, setBf] = useState(!!g?.bruteforce);
+  const [allowText, setAllowText] = useState((g?.allow ?? []).join(', '));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setBf(!!g?.bruteforce);
+    setAllowText((g?.allow ?? []).join(', '));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server.id, key]);
+  const allow = parseAllowList(allowText);
+  const bad = allow.filter((a) => !isAllowEntry(a));
+  const changed = bf !== !!g?.bruteforce || allow.join(',') !== (g?.allow ?? []).join(',');
+
+  async function apply() {
+    setBusy(true);
+    try {
+      const r = await api.setSshGuard(server.id, { bruteforce: bf, allow });
+      await reload();
+      showToast(bf || allow.length ? `Защита SSH включена${r.panelIp ? ` · адрес панели ${r.panelIp} разрешён` : ''}` : 'Защита SSH выключена');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось изменить защиту SSH');
+    } finally {
+      setBusy(false);
+    }
+  }
+  function confirmApply() {
+    if (!allow.length) return void apply();
+    showConfirm({
+      title: 'Входить по SSH только с этих адресов?',
+      text: `С других адресов войти по SSH будет нельзя — только через панель или веб-консоль хостера. Адрес панели добавится сам. Если ваш адрес сменится, вы сами по SSH не войдёте.`,
+      confirmLabel: 'Включить',
+      onConfirm: () => void apply(),
+    });
+  }
+
+  return (
+    <div className="field" style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 12 }}>
+      <span className="field-label">
+        Защита SSH
+        <Info text="Боты круглые сутки подбирают пароли ко всем серверам в интернете. Адрес панели не блокируется никогда. Если после применения панель не сможет войти на сервер, через 10 минут сервер сам снимет защиту." />
+      </span>
+      {g ? (
+        <div className="body small" style={{ color: 'var(--ok-fg, #2a9d3c)', marginBottom: 6 }}>
+          ✓ {[g.bruteforce ? 'подбор пароля блокируется' : '', g.allow.length ? `вход только с ${g.allow.length} ${plural(g.allow.length, 'адреса', 'адресов', 'адресов')} и адреса панели` : ''].filter(Boolean).join(' · ')}
+          <span className="muted"> · с {fmtAt(g.appliedAt)}</span>
+        </div>
+      ) : null}
+      <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+        <Toggle on={bf} onChange={setBf} ariaLabel="Блокировать подбор пароля" />
+        <span className="body small">Блокировать подбор пароля</span>
+      </div>
+      <div className="body small muted" style={{ margin: '4px 0 8px' }}>3 неверных пароля за 10 минут — адрес блокируется на сутки.</div>
+      <span className="small" style={{ fontWeight: 600 }}>
+        Входить по SSH только с адресов
+        <Info text="Необязательно. Только если у вас постоянный (статический) IP: у большинства домашних и мобильных подключений адрес меняется, и тогда вы сами по SSH не войдёте. Адрес панели добавляется сам — она доступ не потеряет. Пусто — входить можно с любых адресов." />
+      </span>
+      <input
+        className="input mono"
+        style={{ marginTop: 4 }}
+        name="ssh-allow"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="пусто — с любых адресов"
+        value={allowText}
+        onChange={(e) => setAllowText(e.target.value)}
+      />
+      {bad.length ? <div className="notice notice-red small" style={{ marginTop: 6 }}>Не адрес: {bad.join(', ')}. Нужен IPv4 (203.0.113.7) или подсеть (203.0.113.0/24).</div> : null}
+      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <button className="btn btn-secondary btn-sm" disabled={busy || !changed || bad.length > 0} onClick={confirmApply}>
+          {busy ? 'Применяем и проверяем вход…' : 'Применить'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1021,6 +1104,9 @@ function ServerEditForm({ server, onClose }: { server: Server; onClose: () => vo
 
       {/* SSH hardening: перевод на вход по ключу */}
       <SshHardenPanel server={server} />
+
+      {/* Защита SSH: блокировка подбора пароля, вход только с адресов */}
+      <SshGuardPanel server={server} />
 
       {/* Тест скорости между админом и этим сервером */}
       <SpeedtestPanel server={server} />

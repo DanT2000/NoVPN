@@ -498,7 +498,7 @@ export async function sshIsPortFree(server: Server, proto: 'tcp' | 'udp', port: 
 /** Самопроверка установки: что РЕАЛЬНО работает на сервере. 02.11.2026 установка Франции
  *  встала наполовину (Xray есть, AmneziaWG нет), а панель сказала лишь «SSH exit 1». */
 export interface InstallCheck {
-  key: 'xray' | 'awg' | 'http' | 'socks' | 'https';
+  key: 'xray' | 'awg' | 'http' | 'socks' | 'https' | 'sshguard';
   name: string;
   ok: boolean;
   detail: string;
@@ -509,9 +509,11 @@ export interface InstallCheckWant {
   http?: boolean;
   socks?: boolean;
   https?: boolean;
+  /** Защита SSH включена в панели — проверить, что она на месте. */
+  sshGuard?: { bruteforce: boolean; allow: boolean; port: number } | null;
 }
 const CHECK_NAMES: Record<InstallCheck['key'], string> = {
-  xray: 'Xray', awg: 'AmneziaWG', http: 'HTTP-прокси', socks: 'SOCKS5-прокси', https: 'HTTPS-прокси',
+  xray: 'Xray', awg: 'AmneziaWG', http: 'HTTP-прокси', socks: 'SOCKS5-прокси', https: 'HTTPS-прокси', sshguard: 'Защита SSH',
 };
 const okPort = (v: unknown): number => (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 65535 ? (v as number) : 0);
 
@@ -537,12 +539,22 @@ else echo "CHK awg FAIL не слушает UDP ${p}"; fi`);
   if (want.http) lines.push(tcp('http', okPort(ports.http) || 8080));
   if (want.socks) lines.push(tcp('socks', okPort(ports.socks) || 1080));
   if (want.https) lines.push(tcp('https', okPort(ports.https) || 8443));
+  const g = want.sshGuard;
+  if (g && (g.bruteforce || g.allow)) {
+    const parts = ['G_OK=1; G_D=""'];
+    if (g.bruteforce)
+      parts.push(`if systemctl is-active --quiet fail2ban 2>/dev/null && [ -f ${GUARD_JAIL} ]; then G_D="подбор пароля блокируется"; else G_OK=0; G_D="fail2ban не работает"; fi`);
+    if (g.allow)
+      parts.push(`if iptables -C INPUT -p tcp --dport ${okPort(g.port) || 22} -j NOVPN_SSH 2>/dev/null; then G_D="\${G_D:+$G_D, }вход только с разрешённых адресов"; else G_OK=0; G_D="\${G_D:+$G_D, }нет правила «вход только с адресов»"; fi`);
+    parts.push('if [ "$G_OK" = 1 ]; then echo "CHK sshguard OK $G_D"; else echo "CHK sshguard FAIL $G_D"; fi');
+    lines.push(parts.join('\n'));
+  }
   return lines.join('\n');
 }
 
 export function parseInstallCheck(out: string): InstallCheck[] {
   const res: InstallCheck[] = [];
-  for (const m of out.matchAll(/^CHK (xray|awg|http|socks|https) (OK|FAIL) ?(.*)$/gm)) {
+  for (const m of out.matchAll(/^CHK (xray|awg|http|socks|https|sshguard) (OK|FAIL) ?(.*)$/gm)) {
     const key = m[1] as InstallCheck['key'];
     res.push({ key, name: CHECK_NAMES[key], ok: m[2] === 'OK', detail: (m[3] ?? '').trim() });
   }
@@ -1475,6 +1487,188 @@ export async function sshPeerIp(server: Server): Promise<string | null> {
   const out = await runScript(creds(server.id), 'echo "PEER=$(echo "$SSH_CONNECTION" | cut -d" " -f1)"', 20000);
   const ip = grab(out, 'PEER');
   return ip && isAllowEntry(ip) ? ip : null;
+}
+
+// ── Защита SSH (по желанию владельца сервера) ───────────────────────────────
+// 05.11.2026: боты подбирали пароль root (6–8 тыс. попыток в сутки) и занимали все места
+// до входа (MaxStartups 10) — sshd сбрасывал саму панель, приходило ложное «сервер
+// недоступен». Защита ВЫКЛЮЧЕНА по умолчанию: включает владелец сервера галочкой.
+// Адрес панели (keep) всегда разрешён и никогда не банится — иначе панель заперла бы себя.
+export interface SshGuardSpec {
+  bruteforce: boolean;
+  allow: string[];
+}
+const GUARD_SSHD = '/etc/ssh/sshd_config.d/10-novpn-bruteforce.conf';
+const GUARD_JAIL = '/etc/fail2ban/jail.d/novpn.local';
+const GUARD_TIMER = '/run/novpn-ssh-guard-rollback';
+
+const sshPortOf = (port: number): number => (Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 22);
+const guardIps = (list: string[]): string[] => [...new Set(list.map((x) => x.trim()).filter(isAllowEntry))];
+// fail2ban, настроенный кем-то ещё (jail.local или свои файлы в jail.d), оставляем
+// работать — убираем только свой файл. Наш был единственным — выключаем службу.
+const F2B_RELEASE = `if [ -f /etc/fail2ban/jail.local ] || ls /etc/fail2ban/jail.d/ 2>/dev/null | grep -qvE '^defaults-debian\\.conf$'; then systemctl restart fail2ban >/dev/null 2>&1; else systemctl disable --now fail2ban >/dev/null 2>&1; fi`;
+
+/** Снять защиту целиком (только своё). Он же — страховка: если после применения панель
+ *  не войдёт заново, сервер сам запустит его через 10 минут. */
+export function sshGuardOffScript(port: number): string {
+  const P = sshPortOf(port);
+  return `#!/bin/sh
+# NoVPN: снять защиту SSH.
+rm -f ${GUARD_SSHD}
+sshd -t 2>/dev/null && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null; }
+systemctl disable --now novpn-ssh-allow >/dev/null 2>&1
+rm -f /etc/systemd/system/novpn-ssh-allow.service /opt/novpn/ssh-allow.sh
+systemctl daemon-reload 2>/dev/null
+while iptables -D INPUT -p tcp --dport ${P} -j NOVPN_SSH 2>/dev/null; do :; done
+iptables -F NOVPN_SSH 2>/dev/null; iptables -X NOVPN_SSH 2>/dev/null
+while ip6tables -D INPUT -p tcp --dport ${P} -j DROP 2>/dev/null; do :; done
+if [ -f ${GUARD_JAIL} ]; then
+  rm -f ${GUARD_JAIL}
+  ${F2B_RELEASE}
+fi
+exit 0
+`;
+}
+
+/** Файрвол «вход по SSH только с адресов»: цепочка NOVPN_SSH пропускает список и режет
+ *  остальных. Лежит на сервере и запускается при загрузке — иначе после перезагрузки
+ *  вход снова открыт всем. IPv6 к SSH закрываем целиком: список — только IPv4. */
+export function sshAllowFwScript(port: number, allow: string[]): string {
+  return `#!/bin/sh
+PORT=${sshPortOf(port)}
+ALLOW="${guardIps(allow).join(' ')}"
+iptables -N NOVPN_SSH 2>/dev/null || true
+iptables -F NOVPN_SSH
+iptables -A NOVPN_SSH -i lo -j RETURN
+for ip in $ALLOW; do iptables -A NOVPN_SSH -s "$ip" -j RETURN; done
+iptables -A NOVPN_SSH -j DROP
+iptables -C INPUT -p tcp --dport $PORT -j NOVPN_SSH 2>/dev/null || iptables -I INPUT 1 -p tcp --dport $PORT -j NOVPN_SSH
+if command -v ip6tables >/dev/null 2>&1; then ip6tables -C INPUT -p tcp --dport $PORT -j DROP 2>/dev/null || ip6tables -I INPUT 1 -p tcp --dport $PORT -j DROP 2>/dev/null || true; fi
+exit 0
+`;
+}
+
+/** Применить защиту. Перед изменениями взводит страховку (через 10 минут — снять всё);
+ *  снимает её уже НОВОЕ соединение панели — см. sshApplySshGuard. */
+export function sshGuardApplyScript(spec: SshGuardSpec, port: number, keep: string[]): string {
+  const P = sshPortOf(port);
+  const allow = guardIps(spec.allow);
+  const keepIps = guardIps(keep);
+  // Адрес панели — всегда в списке, иначе «только с адресов» заперло бы её саму.
+  const fwAllow = allow.length ? guardIps([...keepIps, ...allow]) : [];
+  const ignore = ['127.0.0.1/8', '::1', ...guardIps([...keepIps, ...allow])].join(' ');
+  const lines = [
+    'set +e',
+    'mkdir -p /opt/novpn',
+    `cat > /opt/novpn/ssh-guard-off.sh <<'OFF'\n${sshGuardOffScript(P)}OFF`,
+    'chmod 755 /opt/novpn/ssh-guard-off.sh',
+    `T=$(cat ${GUARD_TIMER} 2>/dev/null); [ -n "$T" ] && systemctl stop "$T.timer" >/dev/null 2>&1`,
+    'T="novpn-ssh-guard-rollback-$(date +%s)"',
+    'systemd-run --quiet --unit="$T" --on-active=600 /opt/novpn/ssh-guard-off.sh >/dev/null 2>&1 || { echo "GUARD_FAIL: не удалось взвести страховку (systemd-run)"; exit 1; }',
+    `echo "$T" > ${GUARD_TIMER}`,
+  ];
+  if (spec.bruteforce) {
+    lines.push(
+      `cat > ${GUARD_SSHD} <<'CONF'
+# NoVPN: защита SSH от подбора пароля (включается в панели). Боты не займут все места
+# до входа: не больше 4 одновременных попыток с адреса, мест 30, на вход 30 секунд.
+MaxStartups 30:30:100
+PerSourceMaxStartups 4
+LoginGraceTime 30
+CONF`,
+      // OpenSSH до 8.5 не знает PerSourceMaxStartups — без неё, но защиту не бросаем.
+      `sshd -t 2>/dev/null || sed -i '/^PerSourceMaxStartups/d' ${GUARD_SSHD}`,
+      `if ! sshd -t 2>/tmp/nv-sshd.err; then rm -f ${GUARD_SSHD}; echo "GUARD_FAIL: sshd не принял настройки: $(head -c 200 /tmp/nv-sshd.err)"; exit 1; fi`,
+      'systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null',
+      'export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a',
+      `if ! command -v fail2ban-client >/dev/null 2>&1; then
+  command -v apt-get >/dev/null 2>&1 || { echo "GUARD_FAIL: fail2ban ставится только через apt (Debian/Ubuntu) — поставьте его вручную"; exit 1; }
+  apt-get -o DPkg::Lock::Timeout=180 update -qq >/tmp/nv-f2b.log 2>&1
+  apt-get -o DPkg::Lock::Timeout=180 install -y -qq fail2ban >>/tmp/nv-f2b.log 2>&1 || { echo "GUARD_FAIL: fail2ban не установился: $(tail -c 200 /tmp/nv-f2b.log)"; exit 1; }
+fi`,
+      `cat > ${GUARD_JAIL} <<'CONF'
+# NoVPN: бан подбора пароля SSH (включается в панели). Адрес панели не банится никогда.
+[DEFAULT]
+ignoreip = ${ignore}
+bantime  = 1d
+findtime = 10m
+maxretry = 3
+
+[sshd]
+enabled = true
+port    = ${P}
+backend = systemd
+mode    = aggressive
+CONF`,
+      'systemctl enable --quiet fail2ban 2>/dev/null; systemctl restart fail2ban; sleep 3',
+      // Без журнала systemd (или python3-systemd) — читать файлы журналов.
+      `systemctl is-active --quiet fail2ban || { sed -i 's/^backend = systemd/backend = auto/' ${GUARD_JAIL}; systemctl restart fail2ban; sleep 3; }`,
+      'systemctl is-active --quiet fail2ban || { echo "GUARD_FAIL: fail2ban не запустился: $(journalctl -u fail2ban -n 3 --no-pager 2>/dev/null | tail -c 200)"; exit 1; }',
+    );
+  } else {
+    lines.push(
+      `rm -f ${GUARD_SSHD}; sshd -t 2>/dev/null && { systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null; }`,
+      `if [ -f ${GUARD_JAIL} ]; then rm -f ${GUARD_JAIL}; ${F2B_RELEASE}; fi`,
+    );
+  }
+  if (fwAllow.length) {
+    lines.push(
+      `cat > /opt/novpn/ssh-allow.sh <<'FW'\n${sshAllowFwScript(P, fwAllow)}FW`,
+      'chmod 755 /opt/novpn/ssh-allow.sh',
+      `cat > /etc/systemd/system/novpn-ssh-allow.service <<'SVC'
+[Unit]
+Description=NoVPN: SSH only from allowed addresses
+After=network-online.target docker.service
+[Service]
+Type=oneshot
+ExecStart=/opt/novpn/ssh-allow.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+SVC`,
+      'systemctl daemon-reload; systemctl enable novpn-ssh-allow >/dev/null 2>&1',
+      '/opt/novpn/ssh-allow.sh',
+    );
+  } else {
+    lines.push(
+      'systemctl disable --now novpn-ssh-allow >/dev/null 2>&1; rm -f /etc/systemd/system/novpn-ssh-allow.service /opt/novpn/ssh-allow.sh; systemctl daemon-reload 2>/dev/null',
+      `while iptables -D INPUT -p tcp --dport ${P} -j NOVPN_SSH 2>/dev/null; do :; done; iptables -F NOVPN_SSH 2>/dev/null; iptables -X NOVPN_SSH 2>/dev/null`,
+      `while ip6tables -D INPUT -p tcp --dport ${P} -j DROP 2>/dev/null; do :; done`,
+    );
+  }
+  lines.push('echo "GUARD_OK=1"');
+  return lines.join('\n') + '\n';
+}
+
+/** Снять страховку. Его запускает НОВОЕ соединение — значит, панель по-прежнему входит. */
+export const SSH_GUARD_CONFIRM_SCRIPT = `T=$(cat ${GUARD_TIMER} 2>/dev/null); [ -n "$T" ] && systemctl stop "$T.timer" >/dev/null 2>&1; rm -f ${GUARD_TIMER}; echo "CONFIRM_OK=1"`;
+
+/** Включить/изменить/снять защиту SSH. Сначала узнаём адрес панели (его видит сервер),
+ *  применяем, затем входим ЗАНОВО: не вошли — страховка через 10 минут снимет защиту сама. */
+export async function sshApplySshGuard(server: Server, spec: SshGuardSpec): Promise<{ panelIp: string | null }> {
+  const c = creds(server.id);
+  const panelIp = await sshPeerIp(server).catch(() => null);
+  const allow = guardIps(spec.allow);
+  if (allow.length && !panelIp)
+    throw new Error('Не удалось узнать адрес панели (сервер видит её по IPv6?) — «вход только с адресов» не включён, чтобы панель не потеряла доступ.');
+  if (!spec.bruteforce && !allow.length) {
+    // Без финального «exit 0» — иначе отметка об успехе после него не выполнится.
+    const off = await runScript(c, `${sshGuardOffScript(c.port).replace(/exit 0\n$/, '')}${SSH_GUARD_CONFIRM_SCRIPT}`, 60000);
+    if (!grab(off, 'CONFIRM_OK')) throw new Error('Не удалось снять защиту SSH.');
+    return { panelIp };
+  }
+  const out = await runScript(c, sshGuardApplyScript({ bruteforce: spec.bruteforce, allow }, c.port, panelIp ? [panelIp] : []), 300000);
+  if (!grab(out, 'GUARD_OK')) {
+    const fail = /GUARD_FAIL:([^\n]*)/.exec(out)?.[1]?.trim();
+    throw new Error(fail || 'Не удалось включить защиту SSH.');
+  }
+  try {
+    const ok = await runScript(c, SSH_GUARD_CONFIRM_SCRIPT, 30000);
+    if (!grab(ok, 'CONFIRM_OK')) throw new Error('нет ответа');
+  } catch {
+    throw new Error('После включения защиты панель не смогла войти на сервер заново. Через 10 минут сервер сам снимет защиту, и вход вернётся.');
+  }
+  return { panelIp };
 }
 
 // ── Самотест сервера ────────────────────────────────────────────────────────

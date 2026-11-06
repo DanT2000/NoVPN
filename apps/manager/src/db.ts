@@ -563,6 +563,8 @@ for (const stmt of [
   // текущего периода. Дефолт baseline=0 → у существующих/never-политики поведение прежнее.
   'ALTER TABLE users ADD COLUMN usage_baseline_gb REAL NOT NULL DEFAULT 0',
   'ALTER TABLE users ADD COLUMN usage_period TEXT',
+  // Защита SSH сервера: {bruteforce, allow[], panelIp, appliedAt} JSON; NULL = не включалась.
+  'ALTER TABLE servers ADD COLUMN ssh_guard TEXT',
 ]) {
   try {
     db.exec(stmt);
