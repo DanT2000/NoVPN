@@ -284,6 +284,7 @@ router.get('/sub/:token', (req, res) => {
     const expire = u.expiresAt ? Math.floor(new Date(u.expiresAt).getTime() / 1000) : 0;
     res.setHeader('Subscription-Userinfo', `upload=0; download=${used}; total=${total}; expire=${expire}`);
   }
+  setHappAnnounce(res, req as never);
   res.send(Buffer.from(links.join('\n'), 'utf8').toString('base64'));
 });
 
@@ -340,6 +341,50 @@ export function subAppName(ua: string | null, novpn: string | null): string {
     return v ? `${name} ${v}` : name;
   }
   return s ? s.split(/[\s/;(]/)[0]!.slice(0, 40) || 'неизвестно' : 'неизвестно';
+}
+
+/** Сравнить версии «0.2.14» и «0.2.15» по числам: <0 — первая младше. */
+export function cmpVersion(a: string, b: string): number {
+  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Кто спрашивает: наше приложение (платформа и версия из X-NoVPN-App), Happ или прочие. */
+function clientOf(req: { headers: Record<string, unknown> }): { platform: 'android' | 'windows' | 'happ' | 'other'; version: string | null } {
+  const own = /^(android|windows)\/([\w.-]{1,20})$/i.exec(String(req.headers['x-novpn-app'] ?? '').trim());
+  if (own) return { platform: own[1]!.toLowerCase() as 'android' | 'windows', version: own[2]! };
+  const ua = String(req.headers['user-agent'] ?? '');
+  if (/happ/i.test(ua)) return { platform: 'happ', version: /\/v?(\d+(?:\.\d+)+)/.exec(ua)?.[1] ?? null };
+  return { platform: 'other', version: null };
+}
+
+/** Объявления для этого клиента: «всем» — любому; платформе — только ей (и, если задано,
+ *  версиям ниже указанной; версия неизвестна — не показываем: старое приложение окно
+ *  всё равно не нарисует). */
+export function announcementsFor(c: { platform: string; version: string | null }): Array<{ id: string; text: string; update: boolean }> {
+  return repo
+    .activeAnnouncements()
+    .filter((a) => {
+      if (a.audience === 'all') return true;
+      if (a.audience !== c.platform) return false;
+      if (!a.belowVersion) return true;
+      return !!c.version && cmpVersion(c.version, a.belowVersion) < 0;
+    })
+    .slice(0, 5)
+    .map((a) => ({ id: a.id, text: a.text, update: a.update && a.audience !== 'happ' }));
+}
+
+/** Happ показывает объявление подписки из заголовка `announce` — отдаём самое свежее. */
+function setHappAnnounce(res: import('express').Response, req: { headers: Record<string, unknown> }): void {
+  const c = clientOf(req);
+  if (c.platform !== 'happ') return;
+  const a = announcementsFor(c)[0];
+  if (a) res.setHeader('announce', `base64:${Buffer.from(a.text.slice(0, 200), 'utf8').toString('base64')}`);
 }
 
 /** Учесть приложение, которое забирает подписку (HWID и модель шлют Happ и др.). Сбой
@@ -560,6 +605,7 @@ router.get('/sub/:token/full', (req, res) => {
     }
   }
   if (parts.length === 0) return res.status(404).send(''); // пусто/битое → не отдаём all-direct утечку
+  setHappAnnounce(res, req as never);
   // Домашние диапазоны для Happ (только при включённом lanAccess). 10.0.0.0/8 НЕ
   // берём — он пересекается с мобильными/операторскими сетями, увели бы их в туннель.
   const lanSubnets = lanAccessOn ? ['192.168.0.0/16', '172.16.0.0/12'] : [];
@@ -660,6 +706,9 @@ router.get('/sub/:token/meta.json', (req, res) => {
       geoip: `${origin}/routing/autoroute/geoip.dat`,
     },
     profiles,
+    // Объявления администратора для этого приложения (платформа и версия — из X-NoVPN-App).
+    // Аддитивное поле: старые приложения его пропускают.
+    announcements: announcementsFor(clientOf(req as never)),
     // Резервный пул: сколько аварийных серверов доступно этому пользователю и где
     // их забрать. Сами серверы в обычном списке НЕ показываются — клиент держит
     // их скрытыми и уходит на них только при недоступности обычной инфраструктуры.
@@ -749,6 +798,36 @@ router.get('/api/admin/users/:id/diag', requireAdmin, (req, res) => {
   res.json({ entries: backupRepo.listClientDiag(u.id) });
 });
 
+// ── admin: объявления в приложениях ──
+router.get('/api/admin/announcements', requireAdmin, (_req, res) => {
+  res.json({ announcements: repo.listAnnouncements() });
+});
+router.post('/api/admin/announcements', requireAdmin, (req, res) => {
+  const b = req.body ?? {};
+  const text = String(b.text ?? '').trim();
+  if (!text || text.length > 500) return res.status(400).json(err('validation', 'Текст объявления — от 1 до 500 символов.'));
+  const audience = String(b.audience ?? 'all');
+  if (!['all', 'android', 'windows', 'happ'].includes(audience)) return res.status(400).json(err('validation', 'Неизвестно, кому показывать.'));
+  const below = b.belowVersion == null || b.belowVersion === '' ? null : String(b.belowVersion).trim();
+  if (below && !/^\d{1,4}(\.\d{1,4}){0,3}$/.test(below)) return res.status(400).json(err('validation', 'Версия — числа через точку, например 0.2.15.'));
+  const days = b.days == null || b.days === '' ? null : Number(b.days);
+  if (days != null && (!Number.isFinite(days) || days < 1)) return res.status(400).json(err('validation', 'Срок — целое число дней от 1.'));
+  const a = repo.createAnnouncement({
+    text,
+    audience: audience as 'all' | 'android' | 'windows' | 'happ',
+    belowVersion: audience === 'android' || audience === 'windows' ? below : null,
+    update: b.update === true && audience !== 'happ',
+    days,
+  });
+  repo.addLog(`Объявление в приложениях (${audience}${a.belowVersion ? ` ниже ${a.belowVersion}` : ''}): ${text.slice(0, 80)}`);
+  res.json(a);
+});
+router.delete('/api/admin/announcements/:id', requireAdmin, (req, res) => {
+  if (!repo.deleteAnnouncement(String(req.params.id ?? ''))) return res.status(404).json(err('not_found', 'Объявление не найдено.'));
+  repo.addLog('Объявление в приложениях убрано');
+  res.json({ ok: true });
+});
+
 // Какие приложения забирают подписку человека (по HWID или User-Agent), свежие первыми.
 router.get('/api/admin/users/:id/clients', requireAdmin, (req, res) => {
   const u = repo.getUser(req.params.id!);
@@ -796,6 +875,7 @@ router.get('/sub/:token/server/:id/full', (req, res) => {
   const geoDat = wantsGeoDat(req as never);
   const json = buildUserXrayFull(u, links, srv, overQuota, profile, geoDat);
   if (!json) return res.status(404).send('');
+  setHappAnnounce(res, req as never);
   // Пер-серверная подписка: маршрутизация Happ строго по ЭТОМУ серверу. Включён
   // «Доступ в локалку» → домашние подсети уводим в туннель (RDP/доступ к домашней
   // сети). 10.0.0.0/8 не берём — пересекается с мобильными сетями.

@@ -572,6 +572,8 @@ for (const stmt of [
   // прошлый» видно у любого, а не только у тех, кому квота сбрасывается помесячно.
   'CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT NOT NULL, user_id TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (month, user_id))',
   // Какие приложения забирают подписку человека: ключ — HWID (x-hwid), иначе User-Agent.
+  // Объявления администратора для приложений (1.6.0).
+  'CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, text TEXT NOT NULL, audience TEXT NOT NULL DEFAULT \'all\', below_version TEXT, update_button INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT)',
   'CREATE TABLE IF NOT EXISTS sub_clients (user_id TEXT NOT NULL, client_key TEXT NOT NULL, app TEXT NOT NULL, ua TEXT, hwid TEXT, model TEXT, os TEXT, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, client_key))',
 ]) {
   try {

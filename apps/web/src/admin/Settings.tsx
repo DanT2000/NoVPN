@@ -7,6 +7,7 @@ import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import type { PanelUpdateState } from '../api/types';
 import { Chip, Field, Panel, Toggle } from '../components/ui';
+import { AnnouncementsPanel } from './Announcements';
 
 const PROTO_OPTIONS: Array<{ value: UserProtocol; label: string }> = [
   { value: 'xray', label: 'Xray' },
@@ -462,6 +463,9 @@ export function Settings() {
             <Chip label={lanAccess ? 'Разрешён' : 'Закрыт'} active={lanAccess} onClick={() => setLanAccess((v) => !v)} />
           </div>
         </Panel>
+
+        {/* Объявления в приложениях — сохраняются сразу, мимо общей кнопки «Сохранить» */}
+        <AnnouncementsPanel />
 
         {/* Сторонние приложения — только умный режим */}
         <Panel title="Сторонние приложения — только умный режим">

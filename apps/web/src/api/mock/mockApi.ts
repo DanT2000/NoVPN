@@ -721,6 +721,25 @@ export const mockApi: ApiClient = {
     await wait(300);
     return { ok: true, status: 200, version: '1.0.0' };
   },
+  async listAnnouncements() {
+    await wait(100);
+    return { announcements: mockAnnouncements };
+  },
+  async createAnnouncement(input: { text: string; audience: 'all' | 'android' | 'windows' | 'happ'; belowVersion?: string | null; update?: boolean; days?: number | null }) {
+    await wait(150);
+    const a = {
+      id: `ann_${Date.now()}`, text: input.text, audience: input.audience, belowVersion: input.belowVersion ?? null, update: !!input.update,
+      createdAt: new Date().toISOString(), expiresAt: input.days ? new Date(Date.now() + input.days * 86400000).toISOString() : null,
+    };
+    mockAnnouncements.unshift(a);
+    return a;
+  },
+  async deleteAnnouncement(id: string) {
+    await wait(100);
+    const i = mockAnnouncements.findIndex((a) => a.id === id);
+    if (i >= 0) mockAnnouncements.splice(i, 1);
+    return { ok: true };
+  },
   async getUserClients(_id: string) {
     await wait(150);
     const now = Date.now();
@@ -1119,3 +1138,6 @@ function routingMeta(name: 'upstream' | 'apps') {
     lastAdded: null, lastRemoved: null, sourceStats: null,
   };
 }
+
+/** Объявления в приложениях для демо-режима. */
+const mockAnnouncements: Array<{ id: string; text: string; audience: 'all' | 'android' | 'windows' | 'happ'; belowVersion: string | null; update: boolean; createdAt: string; expiresAt: string | null }> = [];

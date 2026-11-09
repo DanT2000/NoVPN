@@ -32,6 +32,7 @@
       }
     }
   ],
+  "announcements": [],
   "backup": {
     "available": false,
     "count": 0,

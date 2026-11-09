@@ -5,6 +5,8 @@ import type {
   AppClient,
   AppSettings,
   SubClient,
+  Announcement,
+  AnnouncementInput,
   BackupServer,
   BackupSubscription,
   BootstrapData,
@@ -266,6 +268,10 @@ export interface ApiClient {
   getUserDiag(id: string): Promise<{ entries: Array<{ at: string; kind: string; text: string; receivedAt: string }> }>;
   /** Какие приложения забирают подписку человека (HWID / User-Agent), свежие первыми. */
   getUserClients(id: string): Promise<{ clients: SubClient[] }>;
+  /** Объявления в приложениях. */
+  listAnnouncements(): Promise<{ announcements: Announcement[] }>;
+  createAnnouncement(input: AnnouncementInput): Promise<Announcement>;
+  deleteAnnouncement(id: string): Promise<{ ok: boolean }>;
 
   // ── admin: servers ──
   testServerConnection(input: AddServerInput): Promise<TestServerConnectionResult>;

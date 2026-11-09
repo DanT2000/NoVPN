@@ -224,6 +224,30 @@ export interface User {
   lastActivityAt: string | null;
 }
 
+/** Объявление администратора для приложений: NoVPN показывает его один раз окном, Happ —
+ *  в шапке подписки. Приходит с панели, поэтому доходит и без работающего VPN. */
+export interface Announcement {
+  id: string;
+  text: string;
+  /** all — всем; android / windows — приложению NoVPN на этой платформе; happ — Happ. */
+  audience: 'all' | 'android' | 'windows' | 'happ';
+  /** Только версиям NoVPN ниже этой (для android / windows), иначе null. */
+  belowVersion: string | null;
+  /** Кнопка «Обновить» в окне. */
+  update: boolean;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+export interface AnnouncementInput {
+  text: string;
+  audience: Announcement['audience'];
+  belowVersion?: string | null;
+  update?: boolean;
+  /** Сколько дней показывать; null — пока не уберут. */
+  days?: number | null;
+}
+
 /** Приложение, которое забирает подписку человека: по HWID (Happ и др. шлют x-hwid),
  *  иначе по User-Agent. Адреса не храним. */
 export interface SubClient {

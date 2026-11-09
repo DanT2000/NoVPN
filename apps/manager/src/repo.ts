@@ -27,6 +27,8 @@ import type {
   Server,
   ServerPorts,
   SubClient,
+  Announcement,
+  AnnouncementInput,
   TelegramSettings,
   User,
 } from '@novpn/shared';
@@ -1929,6 +1931,37 @@ export function getRuGuardExempt(serverId: string): { uuids: string[]; ips: stri
     uuids: rows.filter((r) => r.protocol === 'xray' && r.uuid).map((r) => r.uuid!),
     ips: rows.filter((r) => r.protocol === 'amneziawg' && r.ip).map((r) => r.ip!),
   };
+}
+
+// ── объявления для приложений ──
+const annRow = (r: any): Announcement => ({
+  id: r.id,
+  text: r.text,
+  audience: (['all', 'android', 'windows', 'happ'].includes(r.audience) ? r.audience : 'all') as Announcement['audience'],
+  belowVersion: r.below_version ?? null,
+  update: r.update_button === 1,
+  createdAt: r.created_at,
+  expiresAt: r.expires_at ?? null,
+});
+/** Все объявления, свежие первыми (для админки, вместе с истёкшими). */
+export function listAnnouncements(): Announcement[] {
+  return (db.prepare('SELECT * FROM announcements ORDER BY created_at DESC').all() as any[]).map(annRow);
+}
+/** Действующие сейчас (не истекшие), свежие первыми. */
+export function activeAnnouncements(): Announcement[] {
+  return (db.prepare('SELECT * FROM announcements WHERE expires_at IS NULL OR expires_at > ? ORDER BY created_at DESC').all(nowIso()) as any[]).map(annRow);
+}
+export function createAnnouncement(i: AnnouncementInput): Announcement {
+  const id = newId('ann');
+  const now = new Date();
+  const days = i.days == null ? null : Math.max(1, Math.min(365, Math.floor(i.days)));
+  db.prepare(
+    'INSERT INTO announcements(id, text, audience, below_version, update_button, created_at, expires_at) VALUES(?,?,?,?,?,?,?)',
+  ).run(id, i.text, i.audience, i.belowVersion ?? null, i.update ? 1 : 0, now.toISOString(), days ? new Date(now.getTime() + days * 86400000).toISOString() : null);
+  return annRow(db.prepare('SELECT * FROM announcements WHERE id = ?').get(id));
+}
+export function deleteAnnouncement(id: string): boolean {
+  return db.prepare('DELETE FROM announcements WHERE id = ?').run(id).changes > 0;
 }
 
 /** Отметить приложение, забравшее подписку: одно на HWID, без HWID — на User-Agent. */

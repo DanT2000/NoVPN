@@ -22,7 +22,7 @@ process.env.SESSION_SECRET = 'test-secret';
 const repo = await import('../src/repo.js');
 const { seedIfEmpty } = await import('../src/seed.js');
 const { createApp } = await import('../src/app.js');
-const { CONTRACT_SCHEMA_VERSION, subAppName } = await import('../src/routes.js');
+const { CONTRACT_SCHEMA_VERSION, subAppName, cmpVersion } = await import('../src/routes.js');
 const autoroute = await import('../src/services/autoroute.js');
 const { decodeGeoSite, decodeGeoIp } = await import('../src/lib/geodat.js');
 
@@ -561,4 +561,37 @@ test('помесячный учёт: расход идёт в месяц чел�
   u = repo.getUser(userId)!;
   assert.equal(u.resetPolicy, 'never');
   assert.ok(Math.abs(u.trafficUsedGb - total) < 1e-6, 'обратно — снова за всё время');
+});
+
+test('объявления: подбор по платформе и версии, Happ — заголовком announce, истёкшие не видны', async () => {
+  const all = repo.createAnnouncement({ text: 'Всем привет', audience: 'all' });
+  const upd = repo.createAnnouncement({ text: 'Обновите Android', audience: 'android', belowVersion: '0.2.15', update: true, days: 7 });
+  const win = repo.createAnnouncement({ text: 'Для Windows', audience: 'windows' });
+  const happ = repo.createAnnouncement({ text: 'Привет, Happ', audience: 'happ' });
+  try {
+    const ids = async (h: Record<string, string>) => (await getJson(`/sub/${subToken}/meta.json`, h)).body.announcements.map((a: any) => a.id);
+    const old = await ids({ 'user-agent': 'v2rayNG/1.9.5', 'x-novpn-app': 'android/0.2.14' });
+    assert.ok(old.includes(upd.id) && old.includes(all.id) && !old.includes(win.id) && !old.includes(happ.id));
+    const fresh = await ids({ 'user-agent': 'v2rayNG/1.9.5', 'x-novpn-app': 'android/0.2.15' });
+    assert.ok(!fresh.includes(upd.id), 'обновлённым «обновитесь» не показываем');
+    assert.ok((await ids({ 'x-novpn-app': 'windows/0.3.39' })).includes(win.id));
+    const m = (await getJson(`/sub/${subToken}/meta.json`, { 'x-novpn-app': 'android/0.2.14' })).body.announcements.find((a: any) => a.id === upd.id);
+    assert.deepEqual(m, { id: upd.id, text: 'Обновите Android', update: true });
+
+    const r = await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'Happ/3.13.0' } });
+    const h = r.headers.get('announce') ?? '';
+    assert.ok(h.startsWith('base64:'));
+    assert.ok(['Привет, Happ', 'Всем привет'].includes(Buffer.from(h.slice(7), 'base64').toString('utf8')));
+    assert.equal((await fetch(`${base}/sub/${subToken}/full`, OWN_UA)).headers.get('announce'), null, 'нашему приложению — через meta.json');
+
+    repo.deleteAnnouncement(upd.id);
+    assert.ok(!(await ids({ 'x-novpn-app': 'android/0.2.14' })).includes(upd.id), 'убранное не показывается');
+    const gone = repo.createAnnouncement({ text: 'Старое', audience: 'all', days: 1 });
+    repo.listAnnouncements(); // истекает в будущем — пока видно
+    assert.ok((await ids({ 'x-novpn-app': 'android/0.2.14' })).includes(gone.id));
+    repo.deleteAnnouncement(gone.id);
+  } finally {
+    for (const a of [all, upd, win, happ]) repo.deleteAnnouncement(a.id);
+  }
+  assert.ok(cmpVersion('0.2.9', '0.2.15') < 0 && cmpVersion('0.3.39', '0.3.39') === 0 && cmpVersion('1.0', '0.9.9') > 0);
 });

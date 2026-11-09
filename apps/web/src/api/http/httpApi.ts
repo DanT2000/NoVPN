@@ -5,6 +5,8 @@ import type {
   AppClient,
   AppSettings,
   SubClient,
+  Announcement,
+  AnnouncementInput,
   BootstrapData,
   CheckCodeResult,
   Device,
@@ -136,6 +138,9 @@ export const httpApi: ApiClient = {
   deleteUser: (id) => req<Ok>('DELETE', `/api/admin/users/${id}`),
   getUserDiag: (id) => req<{ entries: Array<{ at: string; kind: string; text: string; receivedAt: string }> }>('GET', `/api/admin/users/${id}/diag`),
   getUserClients: (id) => req<{ clients: SubClient[] }>('GET', `/api/admin/users/${id}/clients`),
+  listAnnouncements: () => req<{ announcements: Announcement[] }>('GET', '/api/admin/announcements'),
+  createAnnouncement: (input: AnnouncementInput) => req<Announcement>('POST', '/api/admin/announcements', input),
+  deleteAnnouncement: (id) => req<{ ok: boolean }>('DELETE', `/api/admin/announcements/${id}`),
 
   testServerConnection: (input: AddServerInput) =>
     req<TestServerConnectionResult>('POST', '/api/admin/servers/test-ssh', input),
