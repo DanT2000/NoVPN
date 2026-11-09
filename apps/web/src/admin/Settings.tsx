@@ -36,6 +36,10 @@ export function Settings() {
   const [xrayWhitelist, setXrayWhitelist] = useState(s?.xrayWhitelist !== false);
   // Доступ клиента в локальную сеть сервера через туннель. По умолчанию ВЫКЛ.
   const [lanAccess, setLanAccess] = useState(s?.lanAccess === true);
+  // Российские сервисы мимо серверов (применяется на серверах в фоне). По умолчанию ВЫКЛ.
+  const [ruGuard, setRuGuard] = useState(s?.ruGuard === true);
+  // Чужим приложениям (Happ и др.) — только умный профиль. Отсутствие поля = ВКЛ.
+  const [thirdPartySmartOnly, setThirdPartySmartOnly] = useState(s?.thirdPartySmartOnly !== false);
   // Уведомления администратору в Telegram (по adminTelegramChatId — свой ID из /id).
   const [adminChatId, setAdminChatId] = useState(s?.adminTelegramChatId ?? '');
   const [notifyErrors, setNotifyErrors] = useState(s?.notifyErrors !== false);
@@ -208,6 +212,8 @@ export function Settings() {
     xrayWhitelist !== (s.xrayWhitelist !== false) ||
     brandName !== (s.brandName ?? '') ||
     lanAccess !== (s.lanAccess === true) ||
+    ruGuard !== (s.ruGuard === true) ||
+    thirdPartySmartOnly !== (s.thirdPartySmartOnly !== false) ||
     adminChatId !== (s.adminTelegramChatId ?? '') ||
     notifyErrors !== (s.notifyErrors !== false) ||
     dailyDigest !== (s.dailyDigest !== false) ||
@@ -230,6 +236,8 @@ export function Settings() {
         xrayWhitelist,
         brandName: brandName.trim(),
         lanAccess,
+        ruGuard,
+        thirdPartySmartOnly,
         adminTelegramChatId: adminChatId.trim(),
         notifyErrors,
         dailyDigest,
@@ -240,7 +248,11 @@ export function Settings() {
         reserve,
       };
       await saveSettings(input);
-      showToast('Настройки сохранены');
+      showToast(
+        ruGuard !== (s.ruGuard === true)
+          ? 'Настройки сохранены. Серверы переключаются в фоне (около минуты) — итог в журнале'
+          : 'Настройки сохранены',
+      );
       // Ссылка хука могла измениться — обновляем состояние обновления панели, иначе
       // кнопка «Обновить сейчас» осталась бы отключённой по устаревшему hookConfigured
       // (вопреки подсказке «станет доступна, когда укажете ссылку и сохраните»).
@@ -448,6 +460,39 @@ export function Settings() {
           </div>
           <div className="chip-row">
             <Chip label={lanAccess ? 'Разрешён' : 'Закрыт'} active={lanAccess} onClick={() => setLanAccess((v) => !v)} />
+          </div>
+        </Panel>
+
+        {/* Сторонние приложения — только умный режим */}
+        <Panel title="Сторонние приложения — только умный режим">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Happ, v2rayTun, Streisand и другие чужие приложения получают в подписке только
+            «умный» профиль: российские сайты и приложения идут напрямую и не видят адрес
+            сервера. «Полный VPN» остаётся только в приложении NoVPN. Сервер, у которого есть
+            лишь полный режим (например, домашний), не меняется. Приложения подхватят это при
+            следующем обновлении подписки (до 12 часов или кнопкой «Обновить» в приложении).
+          </div>
+          <div className="chip-row">
+            <Chip label={thirdPartySmartOnly ? 'Включено' : 'Выключено'} active={thirdPartySmartOnly} onClick={() => setThirdPartySmartOnly((v) => !v)} />
+          </div>
+        </Panel>
+
+        {/* Российские сервисы мимо серверов */}
+        <Panel title="Российские сервисы мимо серверов">
+          <div className="body small muted" style={{ marginBottom: 10 }}>
+            Сервер не выпускает соединения к российским адресам и сервисам (Яндекс, VK, Max,
+            банки, Госуслуги, RuStore…). Российское приложение, которое видит включённый VPN,
+            может сдать адрес, с которого к нему пришёл запрос, — и сервер блокируют для всех.
+            С этой защитой оно адреса сервера не увидит. <b>Умный режим</b> нашего приложения
+            не задевается: российское там и так идёт напрямую. У тех, кто ходит через{' '}
+            <b>полный туннель</b> (профиль «Полный», AmneziaWG, Happ без маршрутизации),
+            российские приложения при включённом VPN открываться перестанут — им нужно
+            выключать VPN или перейти на умный режим. Домашний сервер (🏠) не затрагивается.
+            Включение перезапускает Xray на каждом сервере — соединения переподключатся за
+            пару секунд.
+          </div>
+          <div className="chip-row">
+            <Chip label={ruGuard ? 'Включено' : 'Выключено'} active={ruGuard} onClick={() => setRuGuard((v) => !v)} />
           </div>
         </Panel>
 

@@ -949,6 +949,221 @@ fi`;
   throw new Error('Не удалось сменить маску на сервере: ' + out.slice(-200));
 }
 
+// ── Российские сервисы — мимо сервера ──
+// 09.11.2026, после блокировки Финляндии: за 4 часа через новый сервер прошло ~100
+// соединений к Яндексу, VK, Max, RuStore, Сберу с трёх устройств (полный туннель, Happ,
+// AmneziaWG с AllowedIPs 0.0.0.0/0). Российское приложение, которое видит включённый VPN и
+// получает запрос с адреса сервера, сдаёт этот адрес — и блокируют вход для всех. Изоляция
+// в нашем приложении (умный режим) от этого не спасает тех, кто ходит мимо неё. Поэтому
+// на самом сервере: соединения к российским адресам и сервисам не выпускаем — их сервер
+// никогда не увидит наш адрес. Это общий выключатель панели (AppSettings.ruGuard).
+
+/** Российские сервисы, которые могут стоять и на зарубежных адресах (CDN): их режем по
+ *  имени, остальное — по geoip:ru. Только сервисы, которым через зарубежный VPN делать
+ *  нечего; заблокированные в России сайты сюда не попадают — им как раз нужен VPN. */
+export const RU_GUARD_DOMAINS = [
+  'yandex.ru', 'yandex.net', 'yandex.com', 'ya.ru', 'yastatic.net', 'yandex.by', 'yandex.kz', 'appmetrica.yandex.com',
+  'vk.com', 'vk.ru', 'vk.me', 'vkuser.net', 'userapi.com', 'vk-analytics.ru', 'vk-portal.net', 'vkontakte.ru', 'mycdn.me',
+  'mail.ru', 'ok.ru', 'odnoklassniki.ru', 'my.com', 'tracker-api.vk-analytics.ru', 'apptracer.ru', 'mytracker.ru',
+  'oneme.ru', 'max.ru', 'rustore.ru', 'gosuslugi.ru', 'sberbank.ru', 'sber.ru', 'tbank.ru', 'tinkoff.ru', 'vtb.ru',
+  'alfabank.ru', 'ozon.ru', 'ozone.ru', 'wildberries.ru', 'wb.ru', 'avito.ru', 'avito.st', 'kaspersky.ru',
+  'mts.ru', 'megafon.ru', 'beeline.ru', 'tele2.ru', 'rutube.ru', 'dzen.ru', 'kinopoisk.ru', 'adfox.ru', 'uxfeedback.ru',
+];
+
+/** Правка server.json (python3; argv: путь, 1|0). Пишет <путь>.tmp и печатает WRITTEN,
+ *  SAME, если менять нечего, или NO_OUTBOUND, если у конфига нет выхода по умолчанию
+ *  (иначе наш blackhole стал бы первым — и выходом для ВСЕГО трафика). Свои теги ru-block,
+ *  чужого не трогаем; vless остаётся первым inbound, 'direct' — первым outbound.
+ *  IPIfNonMatch: имя, не попавшее под правила по имени, Xray сам резолвит и сверяет с
+ *  geoip:ru — так отсекаются и российские сайты, и запросы по голому адресу. */
+export const XRAY_RUGUARD_PY = `import json,sys
+p,on=sys.argv[1],sys.argv[2]=='1'
+DOM=${JSON.stringify(RU_GUARD_DOMAINS.map((d) => 'domain:' + d))}
+c=json.load(open(p,encoding='utf-8'))
+before=json.dumps(c,sort_keys=True)
+ib=next((i for i in c['inbounds'] if i.get('tag')=='vless-reality'),c['inbounds'][0])
+outs=c.get('outbounds') or []
+had=any(o.get('tag')=='ru-block' for o in outs)
+c['outbounds']=[o for o in outs if o.get('tag')!='ru-block']
+rt=c.setdefault('routing',{})
+rt['rules']=[r for r in rt.get('rules',[]) if r.get('outboundTag')!='ru-block']
+if on:
+    if not c['outbounds']:
+        print('NO_OUTBOUND'); sys.exit(0)
+    if not ib.get('tag'): ib['tag']='vless-reality'
+    c['outbounds'].append({"protocol":"blackhole","tag":"ru-block"})
+    rt['domainStrategy']='IPIfNonMatch'
+    rt['rules'].append({"type":"field","inboundTag":[ib['tag']],"domain":DOM,"outboundTag":"ru-block"})
+    rt['rules'].append({"type":"field","inboundTag":[ib['tag']],"ip":["geoip:ru"],"outboundTag":"ru-block"})
+elif had and rt.get('domainStrategy')=='IPIfNonMatch':
+    del rt['domainStrategy']
+if json.dumps(c,sort_keys=True)==before:
+    print('SAME')
+else:
+    json.dump(c,open(p+'.tmp','w',encoding='utf-8'),indent=2)
+    print('WRITTEN')`;
+
+/** Список российских сетей для AWG (python3; argv: JSON RIPE, файл списка). Пишет список
+ *  только если он правдоподобный (> 1000 сетей): недокачанный ответ не должен открыть
+ *  или, наоборот, закрыть лишнее — тогда остаётся прошлый список. */
+export const RU_LIST_PY = `import json,sys,ipaddress
+src,out=sys.argv[1],sys.argv[2]
+try:
+    d=json.load(open(src,encoding='utf-8'))['data']['resources']['ipv4']
+    nets=[str(ipaddress.ip_network(x,strict=False)) for x in d if '/' in x]
+    if len(nets)>1000:
+        open(out+'.new','w',newline='\\n').write('\\n'.join(nets)+'\\n')
+except Exception as e:
+    sys.stderr.write('ru-list: %s\\n'%e)`;
+
+/** Скрипт включения/выключения на сервере (без SSH — чтобы тест прогнал его кусками).
+ *  Xray: правка server.json → проверка `xray -test` на копии → рестарт (счётчики снимаем
+ *  до рестарта, как при смене маски). AmneziaWG: трафик идёт ядром мимо Xray, поэтому
+ *  своя таблица nftables (inet novpn_ruguard) с набором российских сетей RIPE и юнит,
+ *  который поднимает её после перезагрузки. Таблица заменяется атомарно одним `nft -f`.
+ *  Маркеры: RUGUARD_XRAY=on|off|same|bad|none|nodefault, RUGUARD_AWG=on <N>|off|none|nolist|nonft|bad. */
+export function ruGuardScript(on: boolean): string {
+  const flag = on ? '1' : '0';
+  const xray = `if docker inspect amnezia-xray >/dev/null 2>&1 && [ -f /opt/amnezia/xray/server.json ]; then
+  for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
+  P=/opt/amnezia/xray/server.json
+  N=/opt/amnezia/xray/server.next.json
+  rm -f $P.tmp $N
+  R=$(python3 - $P '${flag}' <<'PY'
+${XRAY_RUGUARD_PY}
+PY
+)
+  if [ "$R" = "WRITTEN" ]; then
+    mv $P.tmp $N
+    if docker exec amnezia-xray xray -test -config $N >/dev/null 2>&1; then
+      mv $N $P
+      docker restart amnezia-xray >/dev/null
+      echo "RUGUARD_XRAY=${on ? 'on' : 'off'}"
+    else
+      rm -f $N
+      echo "RUGUARD_XRAY=bad"
+    fi
+  elif [ "$R" = "NO_OUTBOUND" ]; then
+    echo "RUGUARD_XRAY=nodefault"
+  else
+    echo "RUGUARD_XRAY=same"
+  fi
+else
+  echo "RUGUARD_XRAY=none"
+fi`;
+  const awgOff = `nft delete table inet novpn_ruguard 2>/dev/null || true
+if [ -f /etc/systemd/system/novpn-ruguard.service ]; then
+  systemctl disable novpn-ruguard >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/novpn-ruguard.service
+  systemctl daemon-reload || true
+fi`;
+  const awgOn = `if ! ip link show awg0 >/dev/null 2>&1; then
+  echo "RUGUARD_AWG=none"
+elif ! command -v nft >/dev/null 2>&1; then
+  echo "RUGUARD_AWG=nonft"
+else
+  mkdir -p /etc/novpn
+  L=/etc/novpn/ru4.txt
+  rm -f /tmp/novpn-ru4.json $L.new
+  if curl -fsS -m 40 'https://stat.ripe.net/data/country-resource-list/data.json?resource=RU&v4_format=prefix' -o /tmp/novpn-ru4.json 2>/dev/null; then
+    python3 - /tmp/novpn-ru4.json $L <<'PY'
+${RU_LIST_PY}
+PY
+    [ -s $L.new ] && mv $L.new $L
+  fi
+  rm -f /tmp/novpn-ru4.json $L.new
+  if [ ! -s $L ]; then
+    echo "RUGUARD_AWG=nolist"
+  else
+    F=/etc/novpn/ruguard.nft
+    {
+      echo 'table inet novpn_ruguard'
+      echo 'delete table inet novpn_ruguard'
+      echo 'table inet novpn_ruguard {'
+      echo '  set ru4 {'
+      echo '    type ipv4_addr'
+      echo '    flags interval'
+      echo '    auto-merge'
+      printf '    elements = { '; paste -sd, $L | tr -d '\\n'; echo ' }'
+      echo '  }'
+      echo '  chain guard {'
+      echo '    type filter hook forward priority -5; policy accept;'
+      echo '    iifname "awg0" ip daddr @ru4 meta l4proto tcp reject with tcp reset'
+      echo '    iifname "awg0" ip daddr @ru4 reject with icmpx type admin-prohibited'
+      echo '  }'
+      echo '}'
+    } > $F.new
+    if nft -c -f $F.new >/dev/null 2>&1 && nft -f $F.new; then
+      mv $F.new $F
+      cat > /etc/systemd/system/novpn-ruguard.service <<'UNIT'
+[Unit]
+Description=NoVPN: Russian networks are not reachable through AmneziaWG
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/novpn/ruguard.nft
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+      systemctl daemon-reload || true
+      systemctl enable novpn-ruguard >/dev/null 2>&1 || true
+      echo "RUGUARD_AWG=on $(wc -l < $L)"
+    else
+      rm -f $F.new
+      echo "RUGUARD_AWG=bad"
+    fi
+  fi
+fi`;
+  const awg = on ? awgOn : `${awgOff}\necho "RUGUARD_AWG=off"`;
+  return `${xray}\n${awg}\n`;
+}
+
+/** «Российские сервисы мимо сервера» имеет смысл только для зарубежного сервера: у
+ *  домашнего (🏠, Россия) выход и так российский, а резать ему российские адреса значит
+ *  сломать человеку всё российское через свой же дом. Отвязанный — без SSH. */
+export function ruGuardEligible(s: { name: string; country: string | null; flagEmoji?: string | null; detached?: boolean }): boolean {
+  if (s.detached) return false;
+  if ((s.country ?? '').trim().toUpperCase() === 'RU') return false;
+  return !(s.flagEmoji ?? '').includes('🏠') && !s.name.includes('🏠');
+}
+
+export interface RuGuardResult {
+  xray: 'on' | 'off' | 'same' | 'bad' | 'none' | 'nodefault' | 'unknown';
+  awg: 'on' | 'off' | 'none' | 'nolist' | 'nonft' | 'bad' | 'unknown';
+  /** Сколько российских сетей в наборе AWG (только при awg='on'). */
+  nets?: number;
+}
+
+export function parseRuGuard(out: string): RuGuardResult {
+  const x = /RUGUARD_XRAY=(\w+)/.exec(out)?.[1] as RuGuardResult['xray'] | undefined;
+  const a = /RUGUARD_AWG=(\w+)(?: (\d+))?/.exec(out);
+  const r: RuGuardResult = { xray: x ?? 'unknown', awg: (a?.[1] as RuGuardResult['awg'] | undefined) ?? 'unknown' };
+  if (a?.[2]) r.nets = Number(a[2]);
+  return r;
+}
+
+/** Человеческая строка итога для журнала и уведомлений. */
+export function formatRuGuard(r: RuGuardResult): string {
+  const x = { on: 'Xray — включено', off: 'Xray — выключено', same: 'Xray — без изменений', bad: 'Xray — конфиг не прошёл проверку, оставлен прежний', none: 'Xray не установлен', nodefault: 'Xray — нет выхода по умолчанию, не трогали', unknown: 'Xray — нет ответа' }[r.xray];
+  const a = { on: `AmneziaWG — включено (${r.nets ?? '?'} сетей)`, off: 'AmneziaWG — выключено', none: 'AmneziaWG не установлен', nolist: 'AmneziaWG — не скачался список сетей RIPE', nonft: 'AmneziaWG — нет nftables', bad: 'AmneziaWG — правило не прошло проверку', unknown: 'AmneziaWG — нет ответа' }[r.awg];
+  return `${x}; ${a}`;
+}
+
+/** Включить/выключить «российские сервисы мимо сервера». Идемпотентна: Xray
+ *  перезапускается, только если конфиг реально поменялся (рестарт рвёт текущие
+ *  соединения на пару секунд). Ошибка — только когда Xray отверг конфиг или нет ответа. */
+export async function sshApplyRuGuard(server: Server, on: boolean): Promise<RuGuardResult> {
+  const out = await withServerLock(server.id, () => runScript(creds(server.id), ruGuardScript(on), 240000));
+  const r = parseRuGuard(out);
+  if (r.xray === 'bad' || r.xray === 'unknown') throw new Error(`Не удалось применить: ${formatRuGuard(r)}. ${out.slice(-200)}`);
+  return r;
+}
+
+
 export async function sshCreateAwg(
   server: Server,
   deviceName: string,

@@ -19,7 +19,7 @@ import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { ensureXrayOnAllowedServers } from './services/issue.js';
-import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray, sshAddProxyUser, sshApplySshGuard } from './services/sshServer.js';
+import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray, sshAddProxyUser, sshApplySshGuard, sshApplyRuGuard, formatRuGuard, ruGuardEligible, type RuGuardResult } from './services/sshServer.js';
 import type { InstallCheck } from './services/sshServer.js';
 import { saveServerKeys, saveServerProxy, getServerProxy, getServerKeys, deleteServerKeys } from './services/keyvault.js';
 import { decryptSecret, encryptSecret, encConf, maskTail, randomToken } from './lib/crypto.js';
@@ -281,11 +281,28 @@ router.get('/sub/:token', (req, res) => {
  *  Умная маршрутизация включена → оба профиля у ВСЕХ пользователей; выключена → только
  *  полный. Пер-пользовательских запретов нет: на сервере ничего не блокируется, и
  *  человек всё равно мог бы получить полный туннель, поправив конфиг руками. */
-function profilesFor(_u: NonNullable<ReturnType<typeof repo.getUser>>, srv: NonNullable<ReturnType<typeof repo.getServer>>): Array<'smart' | 'full'> {
+function profilesFor(
+  _u: NonNullable<ReturnType<typeof repo.getUser>>,
+  srv: NonNullable<ReturnType<typeof repo.getServer>>,
+  thirdParty = false,
+): Array<'smart' | 'full'> {
   const profiles = repo.getEndpointConfig(srv.host).profiles;
   if (profiles === 'full') return ['full'];
-  if (profiles === 'smart') return ['smart'];
+  if (profiles === 'smart' || thirdParty) return ['smart'];
   return ['smart', 'full'];
+}
+
+/** User-Agent нашего приложения: Android и Windows с первой версии забирают подписку под
+ *  ним (Sub.USER_AGENT / sub::USER_AGENT) и сверяют профили с meta.json один к одному —
+ *  им отдаём оба профиля, как раньше. */
+const OWN_APP_UA = 'v2rayNG/1.9.5';
+
+/** Чужое приложение (Happ, v2rayTun, Streisand…) — ему только «умный» профиль, если это не
+ *  выключено в настройках. 09.11.2026: человек на Happ выбрал полный профиль, и VK с
+ *  Яндексом видели адрес сервера, а одного такого телефона хватает, чтобы сервер сдали. */
+function isThirdPartyClient(req: { headers: Record<string, unknown> }): boolean {
+  if (repo.getSettings().thirdPartySmartOnly === false) return false;
+  return String(req.headers['user-agent'] ?? '').trim() !== OWN_APP_UA;
 }
 
 /** Клиент, который умеет забирать базу маршрутизации DAT-файлами (Happ), получает
@@ -466,6 +483,7 @@ router.get('/sub/:token/full', (req, res) => {
   // остаётся их исходным сервером (entries идут новые-первыми — разворачиваем).
   const entries = (overQuota ? [] : repo.subscriptionXrayEntries(u.id)).reverse();
   const geoDat = wantsGeoDat(req as never);
+  const thirdParty = isThirdPartyClient(req as never);
   const parts: string[] = [];
   // Включён ли «Доступ в локалку» хоть у одного сервера подписки: тогда для Happ
   // уводим домашние подсети в туннель (маршрутизация Happ глобальна на подписку).
@@ -479,7 +497,7 @@ router.get('/sub/:token/full', (req, res) => {
     if (repo.getEndpointConfig(srv.host).lanAccess) lanAccessOn = true;
     // Один конфиг на ПРОФИЛЬ: сервер с обоими режимами даёт два — умный первым,
     // «Полный VPN» вторым (если разрешён пользователю). Порядок 1:1 с meta.profiles[].
-    for (const profile of profilesFor(u, srv)) {
+    for (const profile of profilesFor(u, srv, thirdParty)) {
       const json = buildUserXrayFull(u, [e.link], srv, overQuota, profile, geoDat);
       if (json) parts.push(json);
     }
@@ -707,7 +725,7 @@ router.get('/sub/:token/server/:id/full', (req, res) => {
   const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id, serverId);
   // ?profile=full — отдельный импорт профиля «Полный VPN» (только если он положен).
   const wanted = String(req.query.profile ?? '') === 'full' ? 'full' : 'smart';
-  const allowed = profilesFor(u, srv);
+  const allowed = profilesFor(u, srv, isThirdPartyClient(req as never));
   const profile = allowed.includes(wanted) ? wanted : allowed[0]!;
   const geoDat = wantsGeoDat(req as never);
   const json = buildUserXrayFull(u, links, srv, overQuota, profile, geoDat);
@@ -1529,6 +1547,30 @@ async function applySshGuard(s: NonNullable<ReturnType<typeof repo.getServer>>, 
   return r.panelIp;
 }
 
+/** Привести сервер к общему выключателю (AppSettings.ruGuard): включён и сервер
+ *  зарубежный — включить, иначе убрать (домашний сервер не получает его никогда). */
+async function applyRuGuard(s: NonNullable<ReturnType<typeof repo.getServer>>): Promise<RuGuardResult> {
+  const on = repo.getSettings().ruGuard === true && ruGuardEligible(s);
+  return sshApplyRuGuard(s, on);
+}
+
+/** После смены выключателя — на всех серверах с SSH, параллельно (у каждого свой замок).
+ *  Итог по каждому — в журнал, сбой — в ошибки фоновых задач (уйдёт и в Telegram). */
+async function applyRuGuardAll(): Promise<void> {
+  const list = repo.listServers().filter((s) => !s.detached);
+  await Promise.allSettled(
+    list.map(async (s) => {
+      if (!(await sshHasSshAccess(s.id).catch(() => false))) return;
+      try {
+        const r = await applyRuGuard(s);
+        repo.addLog(`Российские сервисы мимо сервера «${s.name}»: ${formatRuGuard(r)}`);
+      } catch (e) {
+        repo.addJobError(s.name, `Российские сервисы мимо сервера: ${e instanceof Error ? e.message : 'ошибка'}`);
+      }
+    }),
+  );
+}
+
 async function runProvision(
   serverId: string,
   comps: string[],
@@ -1659,6 +1701,15 @@ async function runProvision(
         repo.addJobError(s.name, `Прежняя маска не восстановлена: ${e instanceof Error ? e.message : 'ошибка'}`);
       }
     }
+    // Российские сервисы мимо сервера: установка пишет server.json заново, без правила, —
+    // возвращаем его (и на новом боксе после переноса).
+    if ((want.xray || want.awg) && repo.getSettings().ruGuard === true) {
+      try {
+        await applyRuGuard(s);
+      } catch (e) {
+        repo.addJobError(s.name, `Российские сервисы мимо сервера: ${e instanceof Error ? e.message : 'ошибка'} — нажмите «Синхронизировать»`);
+      }
+    }
     // Тест скорости: на новом боксе его нет, а в панели он числится установленным — ссылка
     // вела в пустоту (03.11.2026, Финляндия после переноса). Ставим заново с теми же настройками.
     if (restoring && s.speedtest?.port) {
@@ -1772,8 +1823,18 @@ router.post('/api/admin/servers/:id/resync-devices', requireAdmin, async (req, r
     }));
     if (!devs.length) return res.json({ ok: true, xray: 0, awg: 0, message: 'Активных конфигов нет.' });
     const r = await sshResyncDevices(s, devs);
-    repo.addLog(`Синхронизированы конфиги с «${s.name}» (Xray: ${r.xray.length}, AmneziaWG: ${r.awg.length})`);
-    res.json({ ok: true, xray: r.xray.length, awg: r.awg.length });
+    // Российские сервисы мимо сервера — та же кнопка доводит сервер до общего выключателя
+    // (на случай, если при включении сервер был недоступен).
+    let ruGuard = '';
+    try {
+      const g = await applyRuGuard(s);
+      if (g.xray === 'on' || g.xray === 'off' || g.awg === 'on') ruGuard = `, российские сервисы: ${formatRuGuard(g)}`;
+    } catch (e) {
+      ruGuard = `, российские сервисы: ${e instanceof Error ? e.message : 'ошибка'}`;
+    }
+    const summary = `Xray: ${r.xray.length}, AmneziaWG: ${r.awg.length}${ruGuard}`;
+    repo.addLog(`Синхронизированы конфиги с «${s.name}» (${summary})`);
+    res.json({ ok: true, xray: r.xray.length, awg: r.awg.length, ...(ruGuard ? { message: `Синхронизировано (${summary})` } : {}) });
   } catch (e) {
     res.status(500).json(err('server', e instanceof Error ? e.message : 'Не удалось синхронизировать.'));
   }
@@ -2663,7 +2724,16 @@ router.put('/api/admin/settings', requireAdmin, (req, res) => {
   if (typeof next.updateHookToken === 'string') next.updateHookToken = next.updateHookToken.trim().slice(0, 200);
   next.lanAccess = next.lanAccess === true;
   next.xrayWhitelist = next.xrayWhitelist !== false;
-  res.json(repo.saveSettings(next));
+  next.thirdPartySmartOnly = next.thirdPartySmartOnly !== false;
+  next.ruGuard = next.ruGuard === true;
+  const saved = repo.saveSettings(next);
+  // Выключатель живёт на серверах: применяем в фоне (каждый сервер — до минуты),
+  // итог по каждому — в журнале, сбой — в ошибках фоновых задач.
+  if (next.ruGuard !== (cur.ruGuard === true)) {
+    repo.addLog(`Российские сервисы мимо серверов: ${next.ruGuard ? 'включено' : 'выключено'} — применяем на серверах`);
+    void applyRuGuardAll().catch(() => {});
+  }
+  res.json(saved);
 });
 
 // ── admin: графики истории + здоровье/аптайм серверов ──

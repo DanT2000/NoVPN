@@ -86,6 +86,10 @@ after(() => {
   server?.close();
 });
 
+// Наше приложение (Android и Windows) забирает подписку под этим User-Agent — тесты,
+// которые изображают его, представляются так же (чужим клиентам полного профиля нет).
+const OWN_UA = { headers: { 'user-agent': 'v2rayNG/1.9.5' } };
+
 const getJson = async (p: string, headers: Record<string, string> = {}) => {
   const r = await fetch(`${base}${p}`, { headers });
   return { status: r.status, headers: r.headers, body: r.status === 304 ? null : await r.json() };
@@ -170,7 +174,7 @@ test('сервер отдаёт три варианта профилей и ср
   let { body } = await getJson(`/sub/${subToken}/meta.json`);
   let ids = body.profiles.filter((p: any) => p.serverId === bothId).map((p: any) => p.profileId);
   assert.deepEqual(ids, [bothId], 'только умный профиль');
-  let sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
+  let sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`, OWN_UA)).text()) as any[];
   assert.ok(!sub.some((c) => c.meta.novpn.profileId === `${bothId}:full`), 'полного конфига нет в подписке');
 
   // Оба + срок возврата.
@@ -207,7 +211,7 @@ test('meta.json: у каждого профиля обязательные по�
 
 test('подписка /full: один конфиг на профиль, 1:1 с meta.profiles, meta.novpn.profileId в каждом', async () => {
   const { body } = await getJson(`/sub/${subToken}/meta.json`);
-  const sub = await (await fetch(`${base}/sub/${subToken}/full`)).text();
+  const sub = await (await fetch(`${base}/sub/${subToken}/full`, OWN_UA)).text();
   const parsed = JSON.parse(sub) as unknown;
   const configs = (Array.isArray(parsed) ? parsed : [parsed]) as Array<any>;
   assert.equal(configs.length, body.profiles.length, 'конфигов ровно столько же, сколько профилей');
@@ -223,7 +227,7 @@ test('подписка /full: один конфиг на профиль, 1:1 с 
 });
 
 test('подписка: умный профиль = список AutoRoute + свои домены → VPN, остальное direct; полный = всё в VPN, fail-close', async () => {
-  const sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
+  const sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`, OWN_UA)).text()) as any[];
   const smart = sub.find((c) => c.meta.novpn.profileId === bothId);
   const full = sub.find((c) => c.meta.novpn.profileId === `${bothId}:full`);
   assert.ok(smart && full, 'оба профиля сервера присутствуют в подписке');
@@ -252,7 +256,7 @@ test('подписка: умный профиль = список AutoRoute + с�
 // + 6 000 подсетей строками) — приложение зависало при попытке его ОТКРЫТЬ, а Telegram
 // вообще не заворачивался в туннель: его подсети оказывались за потолком в 6 000 IP.
 test('Telegram: обязательные подсети и домены в умном профиле, потолок их не режет', async () => {
-  const sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
+  const sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`, OWN_UA)).text()) as any[];
   const smart = sub.find((c) => c.meta.novpn.profileId === bothId);
   // Первым доменным правилом идут исключения «напрямую» (встроенный GitHub) —
   // основной список выбираем по назначению, а не «первый попавшийся».
@@ -324,16 +328,16 @@ test('умная маршрутизация выключена на сервер
   repo.setEndpointConfig(bothHost, { profiles: 'full' });
   let { body } = await getJson(`/sub/${subToken}/meta.json`);
   assert.deepEqual(body.profiles.map((p: any) => p.profileId).sort(), [`${bothId}:full`, `${fullId}:full`].sort(), 'умный профиль пропал у сервера с выключенной умной');
-  let sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`)).text()) as any[];
+  let sub = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`, OWN_UA)).text()) as any[];
   assert.equal(sub.length, 2);
   // ?profile=full и без него — один и тот же полный профиль
-  const one = JSON.parse(await (await fetch(`${base}/sub/${subToken}/server/${bothId}/full`)).text());
+  const one = JSON.parse(await (await fetch(`${base}/sub/${subToken}/server/${bothId}/full`, OWN_UA)).text());
   assert.equal(one.meta.novpn.mode, 'full');
   // включили обратно — оба профиля, без каких-либо пер-пользовательских разрешений
   repo.setEndpointConfig(bothHost, { profiles: 'both' });
   ({ body } = await getJson(`/sub/${subToken}/meta.json`));
   assert.deepEqual(body.profiles.map((p: any) => p.profileId).sort(), [bothId, `${bothId}:full`, `${fullId}:full`].sort());
-  const back = JSON.parse(await (await fetch(`${base}/sub/${subToken}/server/${bothId}/full?profile=full`)).text());
+  const back = JSON.parse(await (await fetch(`${base}/sub/${subToken}/server/${bothId}/full?profile=full`, OWN_UA)).text());
   assert.equal(back.meta.novpn.mode, 'full');
 });
 
@@ -459,4 +463,28 @@ test('routing: sites.json убран — 404; неизвестный файл �
   assert.equal((await getJson('/routing/sites.json')).status, 404);
   assert.equal((await getJson('/routing/secrets.json')).status, 404);
   assert.equal((await getJson('/routing/autoroute/other.dat')).status, 404);
+});
+
+// 09.11.2026: человек на Happ выбрал полный профиль — VK и Яндекс видели адрес сервера.
+// Чужим приложениям — только умный профиль; наше (UA v2rayNG/1.9.5) получает оба, иначе
+// разъедется сверка с meta.json. Сервер только с полным режимом (домашний) не трогаем.
+test('чужие приложения получают только умный профиль, наше — оба; выключатель в настройках', async () => {
+  repo.setEndpointConfig(bothHost, { profiles: 'both' });
+  const ids = async (ua: string, p = `/sub/${subToken}/full`) => {
+    const body = JSON.parse(await (await fetch(`${base}${p}`, { headers: { 'user-agent': ua } })).text());
+    return (Array.isArray(body) ? body : [body]).map((c: any) => c.meta.novpn.profileId).sort();
+  };
+  const all = [bothId, `${bothId}:full`, `${fullId}:full`].sort();
+  const smartOnly = [bothId, `${fullId}:full`].sort();
+  assert.deepEqual(await ids('v2rayNG/1.9.5'), all, 'наше приложение — оба профиля');
+  assert.deepEqual(await ids('Happ/3.13.0'), smartOnly, 'Happ — только умный; домашний (только полный) на месте');
+  assert.deepEqual(await ids('v2rayTun/5.0'), smartOnly, 'любой чужой клиент — так же');
+  assert.deepEqual(await ids('v2rayNG/1.10.2'), smartOnly, 'настоящий v2rayNG — тоже чужой');
+  assert.deepEqual(await ids('Happ/3.13.0', `/sub/${subToken}/server/${bothId}/full?profile=full`), [bothId], 'пер-серверная ссылка на полный — умный');
+  repo.saveSettings({ ...repo.getSettings(), thirdPartySmartOnly: false });
+  try {
+    assert.deepEqual(await ids('Happ/3.13.0'), all, 'выключили в настройках — чужим снова оба');
+  } finally {
+    repo.saveSettings({ ...repo.getSettings(), thirdPartySmartOnly: undefined });
+  }
 });
