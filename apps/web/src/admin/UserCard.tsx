@@ -2,7 +2,7 @@
 // выпуск конфигов, устройства, история.
 
 import { useState } from 'react';
-import type { Device, IssueDeviceResult, Protocol, ProxyType, Server, User } from '@novpn/shared';
+import type { Device, IssueDeviceResult, Protocol, ProxyType, Server, SubClient, User } from '@novpn/shared';
 import { PROTOCOL_LABELS } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
@@ -116,7 +116,8 @@ function UserCardInner({ user }: { user: User }) {
   const [dlCustom, setDlCustom] = useState(user.deviceLimit && ![1, 10].includes(user.deviceLimit) ? String(user.deviceLimit) : '3');
   const [trafMode, setTrafMode] = useState<TrafMode>(user.trafficLimitGb == null ? 'unlim' : 'custom');
   const [trafCustom, setTrafCustom] = useState(user.trafficLimitGb == null ? '' : String(user.trafficLimitGb));
-  const resetPolicy = user.resetPolicy; // сброс трафика по расписанию убран из UI
+  // Как считается лимит: за всё время или за календарный месяц (сбрасывается 1-го числа).
+  const [resetPolicy, setResetPolicy] = useState<User['resetPolicy']>(user.resetPolicy);
 
   const [allowedServers, setAllowedServers] = useState<string[]>([...user.allowedServers]);
   const [protocols, setProtocols] = useState<Protocol[]>([...user.allowedProtocols]);
@@ -124,6 +125,9 @@ function UserCardInner({ user }: { user: User }) {
   // Приоритетный доступ — привилегия к общему резервному пулу NoVPN. Сохраняется
   // тем же «Сохранить профиль», что и остальные поля.
   const [priorityAccess, setPriorityAccess] = useState(user.priorityAccess);
+  // «Полный доступ (без защиты)»: сервер не режет человеку российское, полный профиль —
+  // в любом приложении. Применяется на серверах в фоне после сохранения.
+  const [fullAccess, setFullAccess] = useState(user.fullAccess === true);
   const [savingProfile, setSavingProfile] = useState(false);
 
   // ── Личная ссылка ──
@@ -198,6 +202,22 @@ function UserCardInner({ user }: { user: User }) {
   const [diagEntries, setDiagEntries] = useState<DiagEntry[] | null>(null);
   const [diagLoading, setDiagLoading] = useState(false);
   const [diagErr, setDiagErr] = useState<string | null>(null);
+  // ── Приложения, которые забирают подписку (ленивая загрузка) ──
+  const [clientsOpen, setClientsOpen] = useState(false);
+  const [clients, setClients] = useState<SubClient[] | null>(null);
+  const [clientsLoading, setClientsLoading] = useState(false);
+  const [clientsErr, setClientsErr] = useState<string | null>(null);
+  async function loadClients() {
+    setClientsLoading(true);
+    setClientsErr(null);
+    try {
+      setClients((await api.getUserClients(user.id)).clients);
+    } catch (e) {
+      setClientsErr(e instanceof Error ? e.message : 'Не удалось загрузить');
+    } finally {
+      setClientsLoading(false);
+    }
+  }
   async function loadDiag() {
     setDiagLoading(true);
     setDiagErr(null);
@@ -279,8 +299,13 @@ function UserCardInner({ user }: { user: User }) {
         allowedProtocols: eff as User['allowedProtocols'],
         allowedProxies: effProxies,
         priorityAccess,
+        fullAccess,
       });
-      showToast('Профиль сохранён');
+      showToast(
+        fullAccess !== (user.fullAccess === true) && data?.settings.ruGuard
+          ? 'Профиль сохранён. Серверы перестраивают исключение в фоне (около минуты)'
+          : 'Профиль сохранён',
+      );
     } finally {
       setSavingProfile(false);
     }
@@ -405,19 +430,25 @@ function UserCardInner({ user }: { user: User }) {
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 12 }}>
         <StatCard label="Статус" value={statusOf(user).label} />
         <StatCard label="Устройства AWG" value={`${awgDevices}/${user.deviceLimit ?? '∞'}`} />
-        <StatCard label="Трафик" value={`${gb(user.trafficUsedGb)} / ${gb(user.trafficLimitGb)}`} />
+        <StatCard label={user.resetPolicy === 'monthly' ? 'Трафик за месяц' : 'Трафик'} value={`${gb(user.trafficUsedGb)} / ${gb(user.trafficLimitGb)}`} />
         <StatCard label="Активность" value={rel(user.lastActivityAt)} />
       </div>
       {/* Откуда взялась цифра трафика: часть могла остаться от уже удалённых конфигов
           (она списана на человека, чтобы удаление конфига не возвращало квоту), плюс
           свежий расход за месяц из почасового учёта. */}
-      {(user.retiredTrafficGb ?? 0) > 0.05 || (user.traffic30Gb ?? 0) > 0 ? (
-        <div className="small muted mono" style={{ marginTop: -4 }}>
-          {(user.retiredTrafficGb ?? 0) > 0.05 ? `из них удалённые конфиги: ${gb(user.retiredTrafficGb ?? 0)}` : ''}
-          {(user.retiredTrafficGb ?? 0) > 0.05 && (user.traffic30Gb ?? 0) > 0 ? ' · ' : ''}
-          {(user.traffic30Gb ?? 0) > 0 ? `за последние 30 дней: ${gb(user.traffic30Gb ?? 0)}` : ''}
-        </div>
-      ) : null}
+      {(() => {
+        const parts = [
+          (user.trafficMonthGb ?? 0) > 0 ? `в этом месяце: ${gb(user.trafficMonthGb ?? 0)}` : '',
+          (user.trafficPrevMonthGb ?? 0) > 0 ? `в прошлом: ${gb(user.trafficPrevMonthGb ?? 0)}` : '',
+          (user.traffic30Gb ?? 0) > 0 ? `за 30 дней: ${gb(user.traffic30Gb ?? 0)}` : '',
+          (user.retiredTrafficGb ?? 0) > 0.05 ? `из них удалённые конфиги: ${gb(user.retiredTrafficGb ?? 0)}` : '',
+        ].filter(Boolean);
+        return parts.length ? (
+          <div className="small muted mono" style={{ marginTop: -4 }}>
+            {parts.join(' · ')}
+          </div>
+        ) : null;
+      })()}
 
       {/* Код + Срок в две колонки */}
       <div className="grid-2">
@@ -612,14 +643,25 @@ function UserCardInner({ user }: { user: User }) {
               <Chip label="Лимит, ГБ" active={trafMode === 'custom'} onClick={() => setTrafMode('custom')} />
             </div>
             {trafMode === 'custom' && (
-              <input
-                className="input"
-                inputMode="decimal"
-                placeholder="ГБ"
-                value={trafCustom}
-                onChange={(e) => setTrafCustom(e.target.value.replace(/[^\d.,]/g, ''))}
-                style={{ maxWidth: 200, marginTop: 8 }}
-              />
+              <>
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  placeholder="ГБ"
+                  value={trafCustom}
+                  onChange={(e) => setTrafCustom(e.target.value.replace(/[^\d.,]/g, ''))}
+                  style={{ maxWidth: 200, marginTop: 8 }}
+                />
+                <div className="chip-row" style={{ marginTop: 8 }}>
+                  <Chip label="За всё время" active={resetPolicy === 'never'} onClick={() => setResetPolicy('never')} />
+                  <Chip label="В месяц" active={resetPolicy === 'monthly'} onClick={() => setResetPolicy('monthly')} />
+                </div>
+                <span className="small muted">
+                  {resetPolicy === 'monthly'
+                    ? 'Лимит обновляется 1-го числа каждого месяца; расход этого месяца уже учтён.'
+                    : 'Лимит на весь срок, сам не обновляется.'}
+                </span>
+              </>
             )}
           </div>
           <div className="field">
@@ -709,6 +751,21 @@ function UserCardInner({ user }: { user: User }) {
               </span>
             </span>
             <Toggle on={priorityAccess} onChange={setPriorityAccess} ariaLabel="Приоритетный доступ" />
+          </label>
+        </div>
+
+        {/* Полный доступ (без защиты) — исключение из «Российские сервисы мимо серверов». */}
+        <div className="field" style={{ marginTop: 4 }}>
+          <label className="row" style={{ gap: 10, alignItems: 'center', cursor: 'pointer', justifyContent: 'space-between' }}>
+            <span>
+              <span style={{ fontWeight: 600 }}>Полный доступ (без защиты)</span>
+              <span className="body small muted" style={{ display: 'block', marginTop: 2 }}>
+                Серверы не режут этому человеку российские сервисы, а полный режим он получает в
+                любом приложении, не только в NoVPN. Для экстренных случаев: российское приложение
+                у него может сдать адрес сервера.
+              </span>
+            </span>
+            <Toggle on={fullAccess} onChange={setFullAccess} ariaLabel="Полный доступ без защиты" />
           </label>
         </div>
       </Panel>
@@ -897,6 +954,51 @@ function UserCardInner({ user }: { user: User }) {
       <Panel title="Telegram">
         <div>{user.telegram ? `Привязан: ${user.telegram}` : 'Не привязан'}</div>
         <span className="small muted">Привязка выполняется пользователем через бота.</span>
+      </Panel>
+
+      <Panel
+        title="Приложения и устройства"
+        extra={
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={() => {
+              const next = !clientsOpen;
+              setClientsOpen(next);
+              if (next && clients === null && !clientsLoading) void loadClients();
+            }}
+          >
+            {clientsOpen ? 'Свернуть' : 'Показать'}
+          </button>
+        }
+      >
+        {clientsOpen ? (
+          <>
+            <div className="body small muted" style={{ marginBottom: 10 }}>
+              Какие приложения забирают подписку человека. Happ и NoVPN присылают модель телефона и
+              его код (HWID) — так видно отдельные устройства; остальные различаются только по
+              названию приложения.
+            </div>
+            {clientsErr ? <div className="notice notice-red small">{clientsErr}</div> : null}
+            {clientsLoading && clients === null ? (
+              <span className="small muted">Загрузка…</span>
+            ) : clients && clients.length > 0 ? (
+              clients.map((c, i) => (
+                <div key={i} className="divide-row">
+                  <span className="small">
+                    <b>{c.app}</b>
+                    {c.model || c.os ? <span className="muted"> · {[c.model, c.os].filter(Boolean).join(', ')}</span> : null}
+                    {c.hwid ? <span className="muted mono"> · …{c.hwid.slice(-6)}</span> : null}
+                  </span>
+                  <span className="small muted" style={{ textAlign: 'right', flex: 'none' }}>
+                    {rel(c.lastSeen)}
+                  </span>
+                </div>
+              ))
+            ) : !clientsErr ? (
+              <span className="small muted">Пока никто не забирал подписку после обновления панели</span>
+            ) : null}
+          </>
+        ) : null}
       </Panel>
 
       <Panel

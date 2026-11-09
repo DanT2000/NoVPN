@@ -721,6 +721,16 @@ export const mockApi: ApiClient = {
     await wait(300);
     return { ok: true, status: 200, version: '1.0.0' };
   },
+  async getUserClients(_id: string) {
+    await wait(150);
+    const now = Date.now();
+    return {
+      clients: [
+        { app: 'NoVPN Android 0.2.15', ua: 'v2rayNG/1.9.5', hwid: 'a1b2c3', model: 'Xiaomi 2407FPN8EG', os: 'Android 16', firstSeen: new Date(now - 9 * 86400000).toISOString(), lastSeen: new Date(now - 4 * 60000).toISOString(), hits: 312 },
+        { app: 'Happ 3.13.0', ua: 'Happ/3.13.0', hwid: 'f00d42', model: 'iPhone15,2', os: 'iOS 18.1', firstSeen: new Date(now - 30 * 86400000).toISOString(), lastSeen: new Date(now - 3 * 3600000).toISOString(), hits: 57 },
+      ],
+    };
+  },
   async getUserDiag(_id: string) {
     await wait(150);
     const now = Date.now();

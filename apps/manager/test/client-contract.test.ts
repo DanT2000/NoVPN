@@ -22,7 +22,7 @@ process.env.SESSION_SECRET = 'test-secret';
 const repo = await import('../src/repo.js');
 const { seedIfEmpty } = await import('../src/seed.js');
 const { createApp } = await import('../src/app.js');
-const { CONTRACT_SCHEMA_VERSION } = await import('../src/routes.js');
+const { CONTRACT_SCHEMA_VERSION, subAppName } = await import('../src/routes.js');
 const autoroute = await import('../src/services/autoroute.js');
 const { decodeGeoSite, decodeGeoIp } = await import('../src/lib/geodat.js');
 
@@ -487,4 +487,69 @@ test('чужие приложения получают только умный �
   } finally {
     repo.saveSettings({ ...repo.getSettings(), thirdPartySmartOnly: undefined });
   }
+});
+
+test('учёт приложений: Happ различается по HWID, наше приложение — по своему UA', async () => {
+  const happ = { 'user-agent': 'Happ/3.13.0', 'x-hwid': 'hw-test-1', 'x-device-model': 'iPhone15,2', 'x-device-os': 'iOS', 'x-ver-os': '18.1' };
+  await fetch(`${base}/sub/${subToken}/full`, { headers: happ });
+  await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'Happ/3.13.0', 'x-hwid': 'hw-test-1' } });
+  await fetch(`${base}/sub/${subToken}/full`, OWN_UA);
+  await fetch(`${base}/sub/${subToken}`, { headers: { 'user-agent': 'v2RayTun/5.17' } });
+  await fetch(`${base}/sub/${subToken}`, { headers: { accept: 'text/html' } });
+  const cl = repo.listSubClients(userId);
+  const h = cl.find((c) => c.hwid === 'hw-test-1');
+  assert.ok(h, 'Happ записан');
+  assert.equal(h!.app, 'Happ 3.13.0');
+  assert.equal(h!.model, 'iPhone15,2', 'модель не стирается запросом без неё');
+  assert.equal(h!.os, 'iOS 18.1');
+  assert.equal(h!.hits, 2, 'один телефон — одна строка');
+  assert.ok(cl.some((c) => c.app === 'NoVPN' && !c.hwid));
+  assert.ok(cl.some((c) => c.app === 'v2RayTun 5.17'));
+  assert.ok(!cl.some((c) => /mozilla|text\/html/i.test(c.ua ?? '') || c.app === 'неизвестно'), 'страница в браузере — не приложение');
+});
+
+test('название приложения по заголовкам', () => {
+  assert.equal(subAppName('v2rayNG/1.9.5', 'android/0.2.15'), 'NoVPN Android 0.2.15');
+  assert.equal(subAppName('v2rayNG/1.9.5', 'windows/0.3.40'), 'NoVPN Windows 0.3.40');
+  assert.equal(subAppName('v2rayNG/1.9.5', null), 'NoVPN');
+  assert.equal(subAppName('v2rayNG/1.10.2', null), 'v2rayNG 1.10.2', 'настоящий v2rayNG — не наше приложение');
+  assert.equal(subAppName('Streisand', null), 'Streisand');
+  assert.equal(subAppName(null, null), 'неизвестно');
+  assert.equal(subAppName('SomeClient/2.0 (x)', null), 'SomeClient');
+});
+
+test('«Полный доступ (без защиты)»: Happ получает и полный профиль', async () => {
+  repo.setEndpointConfig(bothHost, { profiles: 'both' });
+  const ids = async () => {
+    const body = JSON.parse(await (await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'Happ/3.13.0' } })).text());
+    return (Array.isArray(body) ? body : [body]).map((c: any) => c.meta.novpn.profileId).sort();
+  };
+  assert.ok(!(await ids()).includes(`${bothId}:full`));
+  repo.updateUserFields(userId, { full_access: 1 });
+  try {
+    assert.equal(repo.getUser(userId)!.fullAccess, true);
+    assert.ok((await ids()).includes(`${bothId}:full`), 'с галочкой — полный профиль и в чужом приложении');
+  } finally {
+    repo.updateUserFields(userId, { full_access: 0 });
+  }
+});
+
+test('помесячный учёт: расход идёт в месяц человека; перевод на лимит «в месяц» его не обнуляет', () => {
+  const dev = repo.listDevicesOfUser(userId)[0]!;
+  const month = () => repo.getUsersTrafficMonths(userId)[userId]?.cur ?? 0;
+  const before = month();
+  repo.addTrafficSample(dev.id, 2e9);
+  assert.ok(Math.abs(month() - before - 2) < 1e-9, 'расход попал в текущий месяц');
+  repo.updateDeviceFields(dev.id, { traffic_gb: 50 });
+  repo.recomputeUserUsage(userId);
+  const total = repo.getUser(userId)!.trafficUsedGb;
+  repo.setResetPolicy(userId, 'monthly');
+  let u = repo.getUser(userId)!;
+  assert.equal(u.resetPolicy, 'monthly');
+  assert.ok(Math.abs(u.trafficUsedGb - month()) < 1e-6, `расход этого месяца сохранён (${u.trafficUsedGb} vs ${month()})`);
+  assert.equal(repo.resetMonthlyQuotas(), 0, 'в этом месяце второй раз не сбрасывается');
+  repo.setResetPolicy(userId, 'never');
+  u = repo.getUser(userId)!;
+  assert.equal(u.resetPolicy, 'never');
+  assert.ok(Math.abs(u.trafficUsedGb - total) < 1e-6, 'обратно — снова за всё время');
 });

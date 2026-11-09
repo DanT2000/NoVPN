@@ -26,6 +26,7 @@ import type {
   AutoRouteBuildSource,
   Server,
   ServerPorts,
+  SubClient,
   TelegramSettings,
   User,
 } from '@novpn/shared';
@@ -49,14 +50,19 @@ export const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(6).toSt
 // он нужен для сортировки «кто больше тратит сейчас», а не за всё время.
 export function listUsers(): User[] {
   const t30 = getUsersTraffic30();
+  const tm = getUsersTrafficMonths();
   return (db.prepare('SELECT * FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC').all() as any[]).map((r) => ({
     ...rowToUser(r),
     traffic30Gb: t30[r.id] ?? 0,
+    trafficMonthGb: tm[r.id]?.cur ?? 0,
+    trafficPrevMonthGb: tm[r.id]?.prev ?? 0,
   }));
 }
 export function getUser(id: string): User | null {
   const r = db.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').get(id) as any;
-  return r ? { ...rowToUser(r), traffic30Gb: getUsersTraffic30()[id] ?? 0 } : null;
+  if (!r) return null;
+  const tm = getUsersTrafficMonths(id)[id];
+  return { ...rowToUser(r), traffic30Gb: getUsersTraffic30()[id] ?? 0, trafficMonthGb: tm?.cur ?? 0, trafficPrevMonthGb: tm?.prev ?? 0 };
 }
 export function getUserByCode(code: string): User | null {
   const r = db.prepare('SELECT * FROM users WHERE code = ? AND deleted_at IS NULL').get(code) as any;
@@ -627,6 +633,24 @@ export function resetMonthlyQuotas(): number {
   }
   if (users.length) addLog(`Месячный сброс квоты: ${users.length}`);
   return users.length;
+}
+
+/** Сменить, как считается лимит трафика: «в месяц» или «за всё время». На «в месяц»
+ *  базовую линию ставим так, чтобы расход этого месяца (помесячный учёт) сохранился:
+ *  иначе переведённый 20-го числа получил бы весь лимит заново. */
+export function setResetPolicy(userId: string, policy: 'never' | 'monthly'): void {
+  if (policy === 'monthly') {
+    const monthGb = getUsersTrafficMonths(userId)[userId]?.cur ?? 0;
+    const baseline = Math.max(0, cumulativeUsageGb(userId) - monthGb);
+    db.prepare("UPDATE users SET reset_policy = 'monthly', usage_baseline_gb = @b, usage_period = @m WHERE id = @id").run({
+      b: baseline,
+      m: monthKey(),
+      id: userId,
+    });
+  } else {
+    db.prepare("UPDATE users SET reset_policy = 'never', usage_baseline_gb = 0, usage_period = NULL WHERE id = ?").run(userId);
+  }
+  recomputeUserUsage(userId);
 }
 
 /** Суммарный трафик сервера — из ПЕРСИСТЕНТНЫХ накопленных счётчиков всех его
@@ -1778,11 +1802,19 @@ export function addTrafficSample(deviceId: string, bytes: number): void {
   db.prepare(
     'INSERT INTO traffic_hourly(hour, device_id, bytes) VALUES(?,?,?) ON CONFLICT(hour, device_id) DO UPDATE SET bytes = bytes + excluded.bytes',
   ).run(hourKey(), deviceId, Math.round(bytes));
+  // Тот же расход — в помесячный учёт человека (почасовой живёт 30 дней, месяцы — всегда).
+  db.prepare(
+    `INSERT INTO traffic_monthly(month, user_id, bytes)
+       SELECT ?, user_id, ? FROM devices WHERE id = ? AND user_id IS NOT NULL
+     ON CONFLICT(month, user_id) DO UPDATE SET bytes = bytes + excluded.bytes`,
+  ).run(monthKey(), Math.round(bytes), deviceId);
 }
 
 /** Чистка подробностей старше месяца. */
 export function pruneTraffic(keepDays = TRAFFIC_KEEP_DAYS): void {
   db.prepare('DELETE FROM traffic_hourly WHERE hour < ?').run(hourKey(new Date(Date.now() - keepDays * 86400000)));
+  // Приложения, не забиравшие подписку 90 дней, из учёта убираем.
+  db.prepare('DELETE FROM sub_clients WHERE last_seen < ?').run(new Date(Date.now() - 90 * 86400000).toISOString());
 }
 
 export type TrafficBy = 'hour' | 'day';
@@ -1857,6 +1889,69 @@ export function getUsersTraffic30(): Record<string, number> {
   const out: Record<string, number> = {};
   for (const r of rows) out[r.userId] = r.bytes / 1e9;
   return out;
+}
+
+/** Месяц YYYY-MM (UTC) — ключ помесячного учёта. */
+export function monthKey(d = new Date()): string {
+  return d.toISOString().slice(0, 7);
+}
+
+/** Расход по людям за текущий и прошлый календарный месяц (UTC), ГБ. */
+export function getUsersTrafficMonths(userId?: string): Record<string, { cur: number; prev: number }> {
+  const now = new Date();
+  const cur = monthKey(now);
+  const prev = monthKey(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+  const rows = (
+    userId
+      ? db.prepare('SELECT month, user_id AS userId, bytes FROM traffic_monthly WHERE month IN (?, ?) AND user_id = ?').all(cur, prev, userId)
+      : db.prepare('SELECT month, user_id AS userId, bytes FROM traffic_monthly WHERE month IN (?, ?)').all(cur, prev)
+  ) as Array<{ month: string; userId: string; bytes: number }>;
+  const out: Record<string, { cur: number; prev: number }> = {};
+  for (const r of rows) {
+    const o = (out[r.userId] ??= { cur: 0, prev: 0 });
+    if (r.month === cur) o.cur = r.bytes / 1e9;
+    else o.prev = r.bytes / 1e9;
+  }
+  return out;
+}
+
+/** Устройства людей с «Полным доступом (без защиты)» на сервере — исключения из защиты:
+ *  ключи Xray и адреса AWG-пиров. */
+export function getRuGuardExempt(serverId: string): { uuids: string[]; ips: string[] } {
+  const rows = db
+    .prepare(
+      `SELECT d.protocol AS protocol, d.uuid AS uuid, d.client_ip AS ip
+         FROM devices d JOIN users u ON u.id = d.user_id
+        WHERE d.server_id = ? AND u.full_access = 1 AND u.deleted_at IS NULL AND d.revoked_at IS NULL`,
+    )
+    .all(serverId) as Array<{ protocol: string; uuid: string | null; ip: string | null }>;
+  return {
+    uuids: rows.filter((r) => r.protocol === 'xray' && r.uuid).map((r) => r.uuid!),
+    ips: rows.filter((r) => r.protocol === 'amneziawg' && r.ip).map((r) => r.ip!),
+  };
+}
+
+/** Отметить приложение, забравшее подписку: одно на HWID, без HWID — на User-Agent. */
+export function recordSubClient(
+  userId: string,
+  c: { app: string; ua: string | null; hwid: string | null; model: string | null; os: string | null },
+): void {
+  const now = nowIso();
+  db.prepare(
+    `INSERT INTO sub_clients(user_id, client_key, app, ua, hwid, model, os, first_seen, last_seen, hits)
+     VALUES(@userId, @key, @app, @ua, @hwid, @model, @os, @now, @now, 1)
+     ON CONFLICT(user_id, client_key) DO UPDATE SET app = excluded.app, ua = excluded.ua,
+       model = COALESCE(excluded.model, model), os = COALESCE(excluded.os, os),
+       last_seen = excluded.last_seen, hits = hits + 1`,
+  ).run({ userId, key: c.hwid ? `h:${c.hwid}` : `u:${c.ua ?? ''}`, app: c.app, ua: c.ua, hwid: c.hwid, model: c.model, os: c.os, now });
+}
+
+export function listSubClients(userId: string): SubClient[] {
+  return (
+    db
+      .prepare('SELECT app, ua, hwid, model, os, first_seen, last_seen, hits FROM sub_clients WHERE user_id = ? ORDER BY last_seen DESC LIMIT 50')
+      .all(userId) as Array<{ app: string; ua: string | null; hwid: string | null; model: string | null; os: string | null; first_seen: string; last_seen: string; hits: number }>
+  ).map((r) => ({ app: r.app, ua: r.ua, hwid: r.hwid, model: r.model, os: r.os, firstSeen: r.first_seen, lastSeen: r.last_seen, hits: r.hits }));
 }
 
 // ── нагрузка серверов (CPU/ОЗУ/диск/сеть) ──

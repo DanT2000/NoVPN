@@ -256,6 +256,7 @@ router.get('/sub/:token', (req, res) => {
     );
   }
 
+  noteSubClient(u.id, req as never);
   // Заголовки, которые читают клиенты подписок.
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store, private'); // тело = конфиги пользователя, не кэшировать
@@ -303,6 +304,42 @@ const OWN_APP_UA = 'v2rayNG/1.9.5';
 function isThirdPartyClient(req: { headers: Record<string, unknown> }): boolean {
   if (repo.getSettings().thirdPartySmartOnly === false) return false;
   return String(req.headers['user-agent'] ?? '').trim() !== OWN_APP_UA;
+}
+
+/** Название приложения по заголовкам запроса подписки. Наше приложение с 0.2.15/0.3.x
+ *  шлёт X-NoVPN-App («android/0.2.15», «windows/0.3.40»), раньше — только наш UA. */
+export function subAppName(ua: string | null, novpn: string | null): string {
+  const own = /^(android|windows)\/([\w.-]{1,20})$/i.exec(novpn ?? '');
+  if (own) return `NoVPN ${own[1]!.toLowerCase() === 'android' ? 'Android' : 'Windows'} ${own[2]}`;
+  const s = (ua ?? '').trim();
+  if (s === OWN_APP_UA) return 'NoVPN';
+  const known: Array<[RegExp, string]> = [
+    [/happ/i, 'Happ'], [/v2raytun/i, 'v2RayTun'], [/streisand/i, 'Streisand'], [/hiddify/i, 'Hiddify'],
+    [/nekobox|nekoray/i, 'NekoBox'], [/foxray/i, 'FoXray'], [/shadowrocket/i, 'Shadowrocket'], [/v2box/i, 'V2Box'],
+    [/karing/i, 'Karing'], [/sing-?box/i, 'sing-box'], [/clash|mihomo|stash/i, 'Clash'], [/v2rayng/i, 'v2rayNG'], [/v2rayn\b/i, 'v2rayN'],
+  ];
+  for (const [re, name] of known) {
+    if (!re.test(s)) continue;
+    const v = /\/v?(\d+(?:\.\d+)+)/.exec(s)?.[1];
+    return v ? `${name} ${v}` : name;
+  }
+  return s ? s.split(/[\s/;(]/)[0]!.slice(0, 40) || 'неизвестно' : 'неизвестно';
+}
+
+/** Учесть приложение, которое забирает подписку (HWID и модель шлют Happ и др.). Сбой
+ *  учёта не должен мешать выдаче подписки. */
+function noteSubClient(userId: string, req: { headers: Record<string, unknown> }): void {
+  try {
+    const one = (k: string): string | null => {
+      const v = String(req.headers[k] ?? '').trim();
+      return v ? v.slice(0, 120) : null;
+    };
+    const ua = one('user-agent');
+    const os = [one('x-device-os'), one('x-ver-os')].filter(Boolean).join(' ') || null;
+    repo.recordSubClient(userId, { app: subAppName(ua, one('x-novpn-app')), ua, hwid: one('x-hwid'), model: one('x-device-model'), os });
+  } catch {
+    /* учёт — не главное */
+  }
 }
 
 /** Клиент, который умеет забирать базу маршрутизации DAT-файлами (Happ), получает
@@ -483,7 +520,8 @@ router.get('/sub/:token/full', (req, res) => {
   // остаётся их исходным сервером (entries идут новые-первыми — разворачиваем).
   const entries = (overQuota ? [] : repo.subscriptionXrayEntries(u.id)).reverse();
   const geoDat = wantsGeoDat(req as never);
-  const thirdParty = isThirdPartyClient(req as never);
+  const thirdParty = isThirdPartyClient(req as never) && !u.fullAccess;
+  noteSubClient(u.id, req as never);
   const parts: string[] = [];
   // Включён ли «Доступ в локалку» хоть у одного сервера подписки: тогда для Happ
   // уводим домашние подсети в туннель (маршрутизация Happ глобальна на подписку).
@@ -691,6 +729,13 @@ router.get('/api/admin/users/:id/diag', requireAdmin, (req, res) => {
   res.json({ entries: backupRepo.listClientDiag(u.id) });
 });
 
+// Какие приложения забирают подписку человека (по HWID или User-Agent), свежие первыми.
+router.get('/api/admin/users/:id/clients', requireAdmin, (req, res) => {
+  const u = repo.getUser(req.params.id!);
+  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+  res.json({ clients: repo.listSubClients(u.id) });
+});
+
 // Отчёт клиента о резервном расходе: внешние серверы мы по SSH не опрашиваем,
 // поэтому сколько трафика ушло через резерв, знает только приложение. Присылает
 // host сервера и байты за интервал; подписку сопоставляем по host на бэкенде.
@@ -725,7 +770,8 @@ router.get('/sub/:token/server/:id/full', (req, res) => {
   const links = overQuota ? [] : repo.subscriptionXrayLinks(u.id, serverId);
   // ?profile=full — отдельный импорт профиля «Полный VPN» (только если он положен).
   const wanted = String(req.query.profile ?? '') === 'full' ? 'full' : 'smart';
-  const allowed = profilesFor(u, srv, isThirdPartyClient(req as never));
+  noteSubClient(u.id, req as never);
+  const allowed = profilesFor(u, srv, isThirdPartyClient(req as never) && !u.fullAccess);
   const profile = allowed.includes(wanted) ? wanted : allowed[0]!;
   const geoDat = wantsGeoDat(req as never);
   const json = buildUserXrayFull(u, links, srv, overQuota, profile, geoDat);
@@ -1226,8 +1272,10 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
     if (!r.ok) return res.status(400).json(err('validation', 'Срок действия должен быть корректной датой.'));
     fields.expires_at = r.value;
   }
-  if (b.resetPolicy !== undefined) fields.reset_policy = b.resetPolicy === 'monthly' ? 'monthly' : 'never';
+  const policy = b.resetPolicy !== undefined ? (b.resetPolicy === 'monthly' ? 'monthly' : 'never') : null;
   if (b.priorityAccess !== undefined) fields.priority_access = b.priorityAccess ? 1 : 0;
+  const fullAccess = b.fullAccess !== undefined ? b.fullAccess === true : null;
+  if (fullAccess !== null) fields.full_access = fullAccess ? 1 : 0;
   if (b.allowedServers !== undefined) {
     if (!Array.isArray(b.allowedServers)) return res.status(400).json(err('validation', 'Список серверов должен быть массивом.'));
     fields.allowed_servers = JSON.stringify(b.allowedServers);
@@ -1240,7 +1288,20 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
     fields.allowed_proxies = JSON.stringify(
       (Array.isArray(b.allowedProxies) ? (b.allowedProxies as string[]) : []).filter((p) => p === 'http' || p === 'https' || p === 'socks5'),
     );
-  const updated = repo.updateUserFields(u.id, fields);
+  let updated = repo.updateUserFields(u.id, fields);
+  // Лимит «в месяц» / «за всё время»: базовая линия считается в repo, чтобы расход
+  // текущего месяца не обнулился при переводе.
+  if (policy && policy !== u.resetPolicy) {
+    repo.setResetPolicy(u.id, policy);
+    repo.addHistory(u.id, policy === 'monthly' ? 'Лимит трафика считается за месяц' : 'Лимит трафика считается за всё время');
+    updated = repo.getUser(u.id);
+  }
+  // «Полный доступ (без защиты)» живёт на серверах — перестраиваем исключения в фоне.
+  if (fullAccess !== null && fullAccess !== (u.fullAccess === true)) {
+    repo.addLog(`Полный доступ (без защиты) «${u.name}»: ${fullAccess ? 'включён' : 'выключен'}`);
+    repo.addHistory(u.id, `Полный доступ (без защиты) ${fullAccess ? 'включён' : 'выключен'}`);
+    if (repo.getSettings().ruGuard === true) void applyRuGuardAll().catch(() => {});
+  }
   // Сузили allowedServers/allowedProtocols → уже выданные конфиги вне нового списка
   // помечаем на отзыв (is_active=0, revoke_pending=1): sync-цикл снимет их с сервера
   // (retry-проход). Подписка их уже не отдаёт (см. subscriptionXrayLinks). Fix #1.
@@ -1551,7 +1612,7 @@ async function applySshGuard(s: NonNullable<ReturnType<typeof repo.getServer>>, 
  *  зарубежный — включить, иначе убрать (домашний сервер не получает его никогда). */
 async function applyRuGuard(s: NonNullable<ReturnType<typeof repo.getServer>>): Promise<RuGuardResult> {
   const on = repo.getSettings().ruGuard === true && ruGuardEligible(s);
-  return sshApplyRuGuard(s, on);
+  return sshApplyRuGuard(s, on, on ? repo.getRuGuardExempt(s.id) : undefined);
 }
 
 /** После смены выключателя — на всех серверах с SSH, параллельно (у каждого свой замок).

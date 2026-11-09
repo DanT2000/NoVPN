@@ -168,7 +168,11 @@ function serverRoot(): { root: string; target: string } {
 }
 
 /** Прогнать скрипт сервера в bash с заглушками. log — журнал вызовов заглушек. */
-function runServerScript(on: boolean, root: string, opts: { xrayTestFails?: boolean; awg?: boolean; ripeCount?: number } = {}) {
+function runServerScript(
+  on: boolean,
+  root: string,
+  opts: { xrayTestFails?: boolean; awg?: boolean; ripeCount?: number; exempt?: { uuids: string[]; ips: string[] } } = {},
+) {
   const log = path.join(root, 'calls.log');
   const ripe = path.join(root, 'ripe.json');
   const nets = Array.from({ length: opts.ripeCount ?? 1200 }, (_, i) => `31.${(i >> 8) & 255}.${i & 255}.0/24`);
@@ -195,7 +199,7 @@ nft(){ log "nft $*"; return 0; }
 curl(){ log "curl"; local o=""; while [ $# -gt 0 ]; do [ "$1" = "-o" ] && o="$2"; shift; done; cp '${ripe.replace(/\\/g, '/')}' "$o"; }
 systemctl(){ log "systemctl $*"; return 0; }
 `;
-  const body = ruGuardScript(on)
+  const body = ruGuardScript(on, opts.exempt)
     .replaceAll('/opt/amnezia/xray', `${r}/opt`)
     .replaceAll('/etc/novpn', `${r}/etc`)
     .replaceAll('/etc/systemd/system', `${r}/systemd`)
@@ -290,4 +294,51 @@ test('домашний и российский сервер защиту не п
   assert.equal(ruGuardEligible({ name: 'HomeVPN', country: 'FI', flagEmoji: '🏠' }), false, 'свой значок');
   assert.equal(ruGuardEligible({ name: 'Дом', country: 'RU' }), false, 'сервер в России');
   assert.equal(ruGuardEligible({ name: 'Франция', country: 'FR', detached: true }), false, 'отвязанный — без SSH');
+});
+
+// «Полный доступ (без защиты)»: устройствам человека сервер российское не режет.
+test('«Полный доступ»: устройства человека идут мимо защиты, правило раньше ru-block', { skip: !PY }, () => {
+  const p = installed(dir());
+  assert.equal(runPy(XRAY_RUGUARD_PY, p, '1', 'u-1'), 'WRITTEN');
+  const rules = read(p).routing.rules as any[];
+  const ex = rules.findIndex((r) => r.ruleTag === 'ru-exempt');
+  const blk = rules.findIndex((r) => r.outboundTag === 'ru-block');
+  assert.ok(ex >= 0 && ex < blk, 'исключение стоит раньше защиты — в Xray выигрывает первое совпавшее');
+  assert.deepEqual(rules[ex].user, ['Телефон'], 'ключ сопоставлен с именем клиента на сервере');
+  assert.equal(rules[ex].outboundTag, 'direct');
+  assert.equal(runPy(XRAY_RUGUARD_PY, p, '1', 'u-1'), 'SAME', 'то же исключение — без перезапуска');
+  assert.equal(runPy(XRAY_RUGUARD_PY, p, '1', ''), 'WRITTEN', 'галочку сняли — исключение убирается');
+  assert.ok(!(read(p).routing.rules as any[]).some((r) => r.ruleTag === 'ru-exempt'));
+  assert.equal(runPy(XRAY_RUGUARD_PY, p, '1', 'нет-такого'), 'SAME', 'ключа нет на сервере — правила не будет');
+  runPy(XRAY_RUGUARD_PY, p, '1', 'u-1');
+  assert.equal(runPy(XRAY_RUGUARD_PY, p, '0', 'u-1'), 'WRITTEN');
+  assert.ok(!(read(p).routing.rules as any[]).some((r) => r.ruleTag === 'ru-exempt' || r.outboundTag === 'ru-block'), 'выключение убирает всё');
+});
+
+test('скрипт сервера: исключения «Полного доступа» в AWG и Xray; список сетей не перекачивается', { skip: noTools }, () => {
+  const { root, target } = serverRoot();
+  const cfg = read(target);
+  const uuid = '11111111-2222-3333-4444-555555555555';
+  cfg.inbounds[0].settings.clients.push({ id: uuid, flow: 'xtls-rprx-vision', email: 'Ноутбук' });
+  fs.writeFileSync(target, JSON.stringify(cfg, null, 2));
+  const a = runServerScript(true, root, { exempt: { uuids: [uuid, "x'; rm -rf / #"], ips: ['10.8.1.9/32', '10.8.1.5', 'плохой'] } });
+  assert.deepEqual(parseRuGuard(a.out), { xray: 'on', awg: 'on', nets: 1200 }, a.out);
+  const ex = (read(target).routing.rules as any[]).find((r) => r.ruleTag === 'ru-exempt');
+  assert.deepEqual(ex.user, ['Ноутбук']);
+  const nftFile = fs.readFileSync(path.join(root, 'etc', 'ruguard.nft'), 'utf8');
+  assert.match(nftFile, /set exempt4 \{\n\s+type ipv4_addr\n\s+elements = \{ 10\.8\.1\.5, 10\.8\.1\.9 \}/, 'только правильные адреса, без /32');
+  assert.ok(!nftFile.includes('плохой'));
+  assert.ok(nftFile.indexOf('ip saddr @exempt4 accept') < nftFile.indexOf('reject with tcp reset'), 'пропуск раньше отказа');
+  assert.equal((a.calls.match(/^curl/gm) ?? []).length, 1);
+
+  const b = runServerScript(true, root, { exempt: { uuids: [], ips: [] } });
+  assert.equal(parseRuGuard(b.out).awg, 'on', b.out);
+  assert.ok(!fs.readFileSync(path.join(root, 'etc', 'ruguard.nft'), 'utf8').includes('exempt4'), 'исключения сняты');
+  assert.ok(!(read(target).routing.rules as any[]).some((r) => r.ruleTag === 'ru-exempt'));
+  assert.equal((b.calls.match(/^curl/gm) ?? []).length, 1, 'свежий список (моложе недели) не перекачиваем');
+});
+
+test('скрипт сервера с исключениями синтаксически цел', { skip: noBash }, () => {
+  const r = spawnSync('bash', ['-n'], { input: ruGuardScript(true, { uuids: ['11111111-2222-3333-4444-555555555555'], ips: ['10.8.1.5'] }), encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
 });

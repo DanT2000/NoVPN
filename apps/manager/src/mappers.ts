@@ -34,6 +34,7 @@ export function rowToUser(r: any): User {
     allowedProxies: j<Array<'http' | 'https' | 'socks5'>>(r.allowed_proxies, []),
     isActive: b(r.is_active),
     priorityAccess: b(r.priority_access),
+    fullAccess: b(r.full_access),
     telegram: r.telegram ?? null,
     createdAt: r.created_at,
     lastActivityAt: r.last_activity_at ?? null,

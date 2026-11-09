@@ -4,6 +4,7 @@
 import type {
   AppClient,
   AppSettings,
+  SubClient,
   BackupServer,
   BackupSubscription,
   BootstrapData,
@@ -72,6 +73,8 @@ export type UpdateUserPatch = Partial<
     // Привилегия «Приоритетный доступ» — общий резервный пул NoVPN. Патчится тем же
     // updateUser, что и остальной профиль (бэкенд маппит поле в колонку).
     | 'priorityAccess'
+    // «Полный доступ (без защиты)» — исключение из защиты серверов для этого человека.
+    | 'fullAccess'
   >
 >;
 
@@ -261,6 +264,8 @@ export interface ApiClient {
    *  подключения. Присылает телефон, если включена отправка диагностики. Новые
    *  первыми, до 100 записей. */
   getUserDiag(id: string): Promise<{ entries: Array<{ at: string; kind: string; text: string; receivedAt: string }> }>;
+  /** Какие приложения забирают подписку человека (HWID / User-Agent), свежие первыми. */
+  getUserClients(id: string): Promise<{ clients: SubClient[] }>;
 
   // ── admin: servers ──
   testServerConnection(input: AddServerInput): Promise<TestServerConnectionResult>;

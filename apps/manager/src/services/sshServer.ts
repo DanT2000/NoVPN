@@ -978,6 +978,7 @@ export const RU_GUARD_DOMAINS = [
  *  geoip:ru — так отсекаются и российские сайты, и запросы по голому адресу. */
 export const XRAY_RUGUARD_PY = `import json,sys
 p,on=sys.argv[1],sys.argv[2]=='1'
+EX=set(x for x in (sys.argv[3] if len(sys.argv)>3 else '').split(',') if x)
 DOM=${JSON.stringify(RU_GUARD_DOMAINS.map((d) => 'domain:' + d))}
 c=json.load(open(p,encoding='utf-8'))
 before=json.dumps(c,sort_keys=True)
@@ -986,13 +987,18 @@ outs=c.get('outbounds') or []
 had=any(o.get('tag')=='ru-block' for o in outs)
 c['outbounds']=[o for o in outs if o.get('tag')!='ru-block']
 rt=c.setdefault('routing',{})
-rt['rules']=[r for r in rt.get('rules',[]) if r.get('outboundTag')!='ru-block']
+rt['rules']=[r for r in rt.get('rules',[]) if r.get('outboundTag')!='ru-block' and r.get('ruleTag')!='ru-exempt']
 if on:
     if not c['outbounds']:
         print('NO_OUTBOUND'); sys.exit(0)
     if not ib.get('tag'): ib['tag']='vless-reality'
     c['outbounds'].append({"protocol":"blackhole","tag":"ru-block"})
     rt['domainStrategy']='IPIfNonMatch'
+    users=sorted(set(cl.get('email') for cl in (ib.get('settings') or {}).get('clients',[]) if cl.get('id') in EX and cl.get('email')))
+    if users:
+        out=next((o for o in c['outbounds'] if o.get('tag')=='direct'),c['outbounds'][0])
+        if not out.get('tag'): out['tag']='direct'
+        rt['rules'].append({"type":"field","ruleTag":"ru-exempt","inboundTag":[ib['tag']],"user":users,"outboundTag":out['tag']})
     rt['rules'].append({"type":"field","inboundTag":[ib['tag']],"domain":DOM,"outboundTag":"ru-block"})
     rt['rules'].append({"type":"field","inboundTag":[ib['tag']],"ip":["geoip:ru"],"outboundTag":"ru-block"})
 elif had and rt.get('domainStrategy')=='IPIfNonMatch':
@@ -1022,14 +1028,23 @@ except Exception as e:
  *  своя таблица nftables (inet novpn_ruguard) с набором российских сетей RIPE и юнит,
  *  который поднимает её после перезагрузки. Таблица заменяется атомарно одним `nft -f`.
  *  Маркеры: RUGUARD_XRAY=on|off|same|bad|none|nodefault, RUGUARD_AWG=on <N>|off|none|nolist|nonft|bad. */
-export function ruGuardScript(on: boolean): string {
+/** Ключи Xray-устройств и адреса AWG-пиров людей с «Полным доступом (без защиты)»: им
+ *  сервер российское не режет. Только строгий формат — значения идут в скрипт как есть. */
+export interface RuGuardExempt {
+  uuids: string[];
+  ips: string[];
+}
+
+export function ruGuardScript(on: boolean, exempt: RuGuardExempt = { uuids: [], ips: [] }): string {
   const flag = on ? '1' : '0';
+  const uuids = [...new Set(exempt.uuids.filter((u) => /^[0-9a-f-]{36}$/i.test(u)))].sort();
+  const ips = [...new Set(exempt.ips.map((ip) => ip.trim().replace(/\/32$/, '')).filter((ip) => /^(\d{1,3}\.){3}\d{1,3}$/.test(ip)))].sort();
   const xray = `if docker inspect amnezia-xray >/dev/null 2>&1 && [ -f /opt/amnezia/xray/server.json ]; then
   for i in $(seq 1 15); do docker exec amnezia-xray true 2>/dev/null && break; sleep 1; done
   P=/opt/amnezia/xray/server.json
   N=/opt/amnezia/xray/server.next.json
   rm -f $P.tmp $N
-  R=$(python3 - $P '${flag}' <<'PY'
+  R=$(python3 - $P '${flag}' '${uuids.join(',')}' <<'PY'
 ${XRAY_RUGUARD_PY}
 PY
 )
@@ -1065,7 +1080,11 @@ else
   mkdir -p /etc/novpn
   L=/etc/novpn/ru4.txt
   rm -f /tmp/novpn-ru4.json $L.new
-  if curl -fsS -m 40 'https://stat.ripe.net/data/country-resource-list/data.json?resource=RU&v4_format=prefix' -o /tmp/novpn-ru4.json 2>/dev/null; then
+  # Свежий список (моложе недели) не перекачиваем: переприменение ради исключений
+  # не должно ждать RIPE на медленном сервере.
+  if [ -s $L ] && [ -z "$(find $L -mmin +10080 2>/dev/null)" ]; then
+    :
+  elif curl -fsS -m 40 'https://stat.ripe.net/data/country-resource-list/data.json?resource=RU&v4_format=prefix' -o /tmp/novpn-ru4.json 2>/dev/null; then
     python3 - /tmp/novpn-ru4.json $L <<'PY'
 ${RU_LIST_PY}
 PY
@@ -1085,9 +1104,14 @@ PY
       echo '    flags interval'
       echo '    auto-merge'
       printf '    elements = { '; paste -sd, $L | tr -d '\\n'; echo ' }'
-      echo '  }'
+      echo '  }'${ips.length ? `
+      echo '  set exempt4 {'
+      echo '    type ipv4_addr'
+      echo '    elements = { ${ips.join(', ')} }'
+      echo '  }'` : ''}
       echo '  chain guard {'
-      echo '    type filter hook forward priority -5; policy accept;'
+      echo '    type filter hook forward priority -5; policy accept;'${ips.length ? `
+      echo '    iifname "awg0" ip saddr @exempt4 accept'` : ''}
       echo '    iifname "awg0" ip daddr @ru4 meta l4proto tcp reject with tcp reset'
       echo '    iifname "awg0" ip daddr @ru4 reject with icmpx type admin-prohibited'
       echo '  }'
@@ -1156,8 +1180,8 @@ export function formatRuGuard(r: RuGuardResult): string {
 /** Включить/выключить «российские сервисы мимо сервера». Идемпотентна: Xray
  *  перезапускается, только если конфиг реально поменялся (рестарт рвёт текущие
  *  соединения на пару секунд). Ошибка — только когда Xray отверг конфиг или нет ответа. */
-export async function sshApplyRuGuard(server: Server, on: boolean): Promise<RuGuardResult> {
-  const out = await withServerLock(server.id, () => runScript(creds(server.id), ruGuardScript(on), 240000));
+export async function sshApplyRuGuard(server: Server, on: boolean, exempt?: RuGuardExempt): Promise<RuGuardResult> {
+  const out = await withServerLock(server.id, () => runScript(creds(server.id), ruGuardScript(on, exempt), 240000));
   const r = parseRuGuard(out);
   if (r.xray === 'bad' || r.xray === 'unknown') throw new Error(`Не удалось применить: ${formatRuGuard(r)}. ${out.slice(-200)}`);
   return r;

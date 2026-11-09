@@ -4,7 +4,7 @@ import type { IssueDeviceResult, ProxyAccount, Server, User } from '@novpn/share
 import crypto from 'node:crypto';
 import * as repo from '../repo.js';
 import { encryptSecret } from '../lib/crypto.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshAddProxyUser, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser } from './sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshAddProxyUser, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshApplyRuGuard, ruGuardEligible, formatRuGuard } from './sshServer.js';
 import { vpnLinkFromConf } from './amneziaLink.js';
 import { getServerKeys } from './keyvault.js';
 
@@ -22,6 +22,16 @@ export async function createXrayCfg(server: Server, name: string) {
 export async function createAwgCfg(server: Server, name: string) {
   if (!(await sshHasSshAccess(server.id))) throw new Error(NO_SSH);
   return sshCreateAwg(server, name, repo.getEndpointPorts(server.host).awg);
+}
+
+/** Новое устройство человека с «Полным доступом (без защиты)» сразу попадает в
+ *  исключение защиты на своём сервере — иначе российское у него резалось бы до
+ *  «Синхронизировать». В фоне: выпуск не ждёт перезапуска Xray. */
+function refreshRuGuardExempt(user: User, server: Server): void {
+  if (!user.fullAccess || repo.getSettings().ruGuard !== true || !ruGuardEligible(server)) return;
+  void sshApplyRuGuard(server, true, repo.getRuGuardExempt(server.id))
+    .then((r) => repo.addLog(`Российские сервисы мимо сервера «${server.name}»: ${formatRuGuard(r)} (новое устройство «${user.name}»)`))
+    .catch((e) => repo.addJobError(server.name, `Российские сервисы мимо сервера: ${e instanceof Error ? e.message : 'ошибка'}`));
 }
 
 // Сериализация выпуска ПО ПОЛЬЗОВАТЕЛЮ: check-then-act (посчитать активные → SSH →
@@ -127,6 +137,7 @@ async function issueForUserInner(
     const r = await createXrayCfg(server, name);
     const device = repo.insertDevice({ userId: user.id, name, serverId, protocol, uuid: r.uuid, publicKey: r.publicKey, link: r.link });
     repo.addHistory(user.id, `Выпущен конфиг «${name}» (Xray, ${server.name})`);
+    refreshRuGuardExempt(user, server);
     // Аварийный прокси-фоллбэк: заводим прокси-аккаунт (best-effort), если пользователю
     // разрешены прокси и они установлены на сервере — тогда полный конфиг (/full) сможет
     // переключиться на прокси, если Xray заблокируют. Аккаунт переиспользуется, удаляется
@@ -149,6 +160,7 @@ async function issueForUserInner(
     clientIp: r.clientIp, conf: r.conf,
   });
   repo.addHistory(user.id, `Выпущен конфиг «${name}» (AmneziaWG, ${server.name})`);
+  refreshRuGuardExempt(user, server);
   // Ссылка vpn:// для приложения AmneziaVPN — импорт в один тап.
   // Отдельное приложение AmneziaWG её не принимает, ему нужен файл .conf.
   const vpnKey = vpnLinkFromConf(r.conf, `${repo.brandName()} — ${server.name}`);

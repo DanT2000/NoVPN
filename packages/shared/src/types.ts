@@ -212,9 +212,29 @@ export interface User {
   /** Приоритетный доступ: вместе с обычной подпиской пользователь получает общий
    *  резервный пул NoVPN (внешние подписки админа) как аварийный маршрут. */
   priorityAccess: boolean;
+  /** «Полный доступ (без защиты)»: сервер не режет этому человеку российские сервисы
+   *  (исключение из «Российские сервисы мимо серверов»), а полный профиль он получает в
+   *  любом приложении, не только в NoVPN. Для экстренных случаев. */
+  fullAccess?: boolean;
+  /** Расход за текущий и прошлый календарный месяц (UTC), ГБ — из помесячного учёта. */
+  trafficMonthGb?: number;
+  trafficPrevMonthGb?: number;
   telegram: string | null;
   createdAt: string;
   lastActivityAt: string | null;
+}
+
+/** Приложение, которое забирает подписку человека: по HWID (Happ и др. шлют x-hwid),
+ *  иначе по User-Agent. Адреса не храним. */
+export interface SubClient {
+  app: string;
+  ua: string | null;
+  hwid: string | null;
+  model: string | null;
+  os: string | null;
+  firstSeen: string;
+  lastSeen: string;
+  hits: number;
 }
 
 /** Внешняя резервная подписка (сторонний провайдер) — аварийный пул. */

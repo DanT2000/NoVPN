@@ -565,12 +565,39 @@ for (const stmt of [
   'ALTER TABLE users ADD COLUMN usage_period TEXT',
   // Защита SSH сервера: {bruteforce, allow[], panelIp, appliedAt} JSON; NULL = не включалась.
   'ALTER TABLE servers ADD COLUMN ssh_guard TEXT',
+  // «Полный доступ (без защиты)»: сервер не режет человеку российское, полный профиль —
+  // в любом приложении.
+  'ALTER TABLE users ADD COLUMN full_access INTEGER NOT NULL DEFAULT 0',
+  // Расход по календарным месяцам (UTC, YYYY-MM) на человека: «за этот месяц» и «за
+  // прошлый» видно у любого, а не только у тех, кому квота сбрасывается помесячно.
+  'CREATE TABLE IF NOT EXISTS traffic_monthly (month TEXT NOT NULL, user_id TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (month, user_id))',
+  // Какие приложения забирают подписку человека: ключ — HWID (x-hwid), иначе User-Agent.
+  'CREATE TABLE IF NOT EXISTS sub_clients (user_id TEXT NOT NULL, client_key TEXT NOT NULL, app TEXT NOT NULL, ua TEXT, hwid TEXT, model TEXT, os TEXT, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, client_key))',
 ]) {
   try {
     db.exec(stmt);
   } catch {
     /* колонка уже есть */
   }
+}
+
+// Помесячный учёт появился 10.11.2026: текущий месяц заполняем из почасового (он хранит
+// 30 дней — месяц помещается), чтобы «за этот месяц» не начиналось с нуля. Только пока
+// таблица пуста; прошлые месяцы не восстанавливаем — их данных уже нет.
+try {
+  if (!db.prepare('SELECT 1 FROM traffic_monthly LIMIT 1').get()) {
+    const month = new Date().toISOString().slice(0, 7);
+    const n = db
+      .prepare(
+        `INSERT INTO traffic_monthly(month, user_id, bytes)
+         SELECT ?, d.user_id, SUM(t.bytes) FROM traffic_hourly t JOIN devices d ON d.id = t.device_id
+          WHERE t.hour >= ? AND d.user_id IS NOT NULL GROUP BY d.user_id`,
+      )
+      .run(month, `${month}-01T00`).changes;
+    if (n) console.log(`[migrate] помесячный учёт: ${month} заполнен у ${n} человек`);
+  }
+} catch {
+  /* не критично */
 }
 
 // AutoRoute: прежний одиночный внешний источник Upstream переносим в список
