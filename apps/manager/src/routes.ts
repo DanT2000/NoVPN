@@ -327,14 +327,17 @@ export function subAppName(ua: string | null, novpn: string | null): string {
 }
 
 /** Учесть приложение, которое забирает подписку (HWID и модель шлют Happ и др.). Сбой
- *  учёта не должен мешать выдаче подписки. */
-function noteSubClient(userId: string, req: { headers: Record<string, unknown> }): void {
+ *  учёта не должен мешать выдаче подписки. Наше приложение учитываем только по meta.json
+ *  (fromMeta): версию и HWID оно шлёт лишь туда — чужим панелям подписок их знать не
+ *  нужно, — а его же скачивания подписки дали бы вторую, безымянную строку. */
+function noteSubClient(userId: string, req: { headers: Record<string, unknown> }, fromMeta = false): void {
   try {
     const one = (k: string): string | null => {
       const v = String(req.headers[k] ?? '').trim();
       return v ? v.slice(0, 120) : null;
     };
     const ua = one('user-agent');
+    if (!fromMeta && ua === OWN_APP_UA) return;
     const os = [one('x-device-os'), one('x-ver-os')].filter(Boolean).join(' ') || null;
     repo.recordSubClient(userId, { app: subAppName(ua, one('x-novpn-app')), ua, hwid: one('x-hwid'), model: one('x-device-model'), os });
   } catch {
@@ -579,6 +582,7 @@ router.get('/sub/:token/meta.json', (req, res) => {
     return res.status(403).json(err('expired', 'Срок действия доступа истёк.'));
   if (u.trafficLimitGb != null && (u.trafficUsedGb ?? 0) >= u.trafficLimitGb)
     return res.status(403).json(err('traffic', 'Лимит трафика исчерпан.'));
+  noteSubClient(u.id, req as never, true);
   void ensureXrayOnAllowedServers(u).catch(() => {});
   const origin = reqOrigin(req as never);
   const token = String(req.params.token);

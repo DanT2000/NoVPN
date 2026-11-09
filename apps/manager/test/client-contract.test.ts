@@ -494,6 +494,10 @@ test('учёт приложений: Happ различается по HWID, на
   await fetch(`${base}/sub/${subToken}/full`, { headers: happ });
   await fetch(`${base}/sub/${subToken}/full`, { headers: { 'user-agent': 'Happ/3.13.0', 'x-hwid': 'hw-test-1' } });
   await fetch(`${base}/sub/${subToken}/full`, OWN_UA);
+  await fetch(`${base}/sub/${subToken}/meta.json`, OWN_UA);
+  await fetch(`${base}/sub/${subToken}/meta.json`, {
+    headers: { 'user-agent': 'v2rayNG/1.9.5', 'x-novpn-app': 'android/0.2.15', 'x-hwid': 'hw-own-1', 'x-device-model': 'Xiaomi 2407FPN8EG', 'x-device-os': 'Android', 'x-ver-os': '16' },
+  });
   await fetch(`${base}/sub/${subToken}`, { headers: { 'user-agent': 'v2RayTun/5.17' } });
   await fetch(`${base}/sub/${subToken}`, { headers: { accept: 'text/html' } });
   const cl = repo.listSubClients(userId);
@@ -503,7 +507,12 @@ test('учёт приложений: Happ различается по HWID, на
   assert.equal(h!.model, 'iPhone15,2', 'модель не стирается запросом без неё');
   assert.equal(h!.os, 'iOS 18.1');
   assert.equal(h!.hits, 2, 'один телефон — одна строка');
-  assert.ok(cl.some((c) => c.app === 'NoVPN' && !c.hwid));
+  const own = cl.filter((c) => c.app.startsWith('NoVPN'));
+  assert.equal(own.length, 2, 'наше приложение — только по meta.json: старая версия без HWID и новая с HWID');
+  assert.ok(own.some((c) => c.app === 'NoVPN' && !c.hwid && c.hits === 1), 'скачивание /full нашим приложением строку не дублирует');
+  const fresh = own.find((c) => c.hwid === 'hw-own-1');
+  assert.equal(fresh?.app, 'NoVPN Android 0.2.15');
+  assert.equal(fresh?.os, 'Android 16');
   assert.ok(cl.some((c) => c.app === 'v2RayTun 5.17'));
   assert.ok(!cl.some((c) => /mozilla|text\/html/i.test(c.ua ?? '') || c.app === 'неизвестно'), 'страница в браузере — не приложение');
 });
