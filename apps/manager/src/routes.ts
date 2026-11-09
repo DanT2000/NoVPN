@@ -50,6 +50,7 @@ import {
   type DesktopChannelConfig,
 } from './services/desktopChannel.js';
 import { checkUpdate as checkPanelUpdate, triggerUpdate as triggerPanelUpdate, currentVersion as panelVersion } from './services/panelUpdate.js';
+import { getRuIpList } from './services/ruIpList.js';
 
 export const router = Router();
 
@@ -154,6 +155,21 @@ router.get('/routing/autoroute/:file', (req, res) => {
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
   res.send(buf);
+});
+
+// Российские сети для приложений NoVPN: в «Полном VPN» и на резерве они идут напрямую
+// (services/ruIpList.ts). Текст, сеть на строку — формат rule-provider движка. Раньше
+// общего '/routing/:file', иначе тот ответил бы 404.
+router.get('/routing/ru-ip.txt', (req, res) => {
+  const l = getRuIpList();
+  if (!l) return res.status(404).type('text/plain').send('');
+  const etag = `"${l.sha256}"`;
+  res.setHeader('ETag', etag);
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  const inm = req.headers['if-none-match'];
+  if (typeof inm === 'string' && inm.split(',').some((v) => v.trim() === etag)) return res.status(304).end();
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  return res.send(l.text);
 });
 
 router.get('/routing/:file', (req, res) => {

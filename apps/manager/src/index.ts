@@ -6,6 +6,7 @@ import { startRoutingSyncLoop } from './services/routingSync.js';
 import { startAutoRouteLoop } from './services/autoroute.js';
 import { seedDesktopDir, startDesktopMirrorLoop } from './services/desktopChannel.js';
 import { startBackupSyncLoop } from './services/backupSync.js';
+import { startRuIpListLoop } from './services/ruIpList.js';
 import { startBot, notifyAdmin } from './services/telegram.js';
 import * as repo from './repo.js';
 
@@ -78,6 +79,7 @@ app.listen(config.port, () => {
   startAutoRouteLoop();
   startDesktopMirrorLoop();
   startBackupSyncLoop();
+  startRuIpListLoop();
   // Бот запускается best-effort: его сбой не должен помешать старту панели.
   setTimeout(() => {
     startBot().catch((e) => console.error('[NoVPN] startBot:', e instanceof Error ? e.message : e));
