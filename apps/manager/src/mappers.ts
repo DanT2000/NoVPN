@@ -35,6 +35,7 @@ export function rowToUser(r: any): User {
     isActive: b(r.is_active),
     priorityAccess: b(r.priority_access),
     fullAccess: b(r.full_access),
+    appOnly: b(r.app_only),
     telegram: r.telegram ?? null,
     createdAt: r.created_at,
     lastActivityAt: r.last_activity_at ?? null,

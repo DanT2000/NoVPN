@@ -575,6 +575,11 @@ for (const stmt of [
   // Объявления администратора для приложений (1.6.0).
   'CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, text TEXT NOT NULL, audience TEXT NOT NULL DEFAULT \'all\', below_version TEXT, update_button INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT)',
   'CREATE TABLE IF NOT EXISTS sub_clients (user_id TEXT NOT NULL, client_key TEXT NOT NULL, app TEXT NOT NULL, ua TEXT, hwid TEXT, model TEXT, os TEXT, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, hits INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, client_key))',
+  // «Только приложение NoVPN» (1.7.0): чужие приложения получают по подписке лишь сообщение.
+  'ALTER TABLE users ADD COLUMN app_only INTEGER NOT NULL DEFAULT 0',
+  // Группы людей (бывшие «категории», users.category) с правилами (1.7.0). Категория без
+  // строки здесь — группа без правил.
+  "CREATE TABLE IF NOT EXISTS user_groups (name TEXT PRIMARY KEY, rules TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
 ]) {
   try {
     db.exec(stmt);

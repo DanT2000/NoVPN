@@ -19,6 +19,7 @@ import { BackupRouting } from './BackupRouting';
 import { DesktopUpdates } from './DesktopUpdates';
 import { Logs } from './Logs';
 import { Settings } from './Settings';
+import { Groups } from './Groups';
 
 interface NavItem {
   key: AdminRoute;
@@ -29,6 +30,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { key: 'dashboard', label: 'Обзор', match: ['dashboard'] },
   { key: 'users', label: 'Пользователи', match: ['users', 'user-create', 'user-created', 'user-card'] },
+  { key: 'groups', label: 'Группы', match: ['groups'] },
   { key: 'servers', label: 'Серверы', match: ['servers', 'server-wizard', 'server-migrate'] },
   { key: 'telegram', label: 'Telegram', match: ['telegram'] },
   { key: 'apps', label: 'Приложения', match: ['apps'] },
@@ -86,6 +88,7 @@ export function AdminShell() {
       {route === 'desktop-updates' && <DesktopUpdates />}
       {route === 'logs' && <Logs />}
       {route === 'settings' && <Settings />}
+      {route === 'groups' && <Groups />}
     </>
   );
 

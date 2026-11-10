@@ -12,8 +12,8 @@ import type {
   TelegramSettings,
   User,
 } from '@novpn/shared';
-import { buildWhitelistXrayConfig } from '@novpn/shared';
-import type { ProxyFallback } from '@novpn/shared';
+import { buildWhitelistXrayConfig, effectiveGroupRules, groupDiff, hasGroupRules, GROUP_RULE_KEYS, GROUP_RULE_LABELS } from '@novpn/shared';
+import type { ProxyFallback, GroupRules, GroupApplyPreview } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
 import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
@@ -273,6 +273,7 @@ router.get('/sub/:token', (req, res) => {
   }
 
   noteSubClient(u.id, req as never);
+  if (appOnlyBlocks(u, req as never)) return sendAppOnlyStub(res, req as never, 'links');
   // Заголовки, которые читают клиенты подписок.
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store, private'); // тело = конфиги пользователя, не кэшировать
@@ -321,6 +322,49 @@ const OWN_APP_UA = 'v2rayNG/1.9.5';
 function isThirdPartyClient(req: { headers: Record<string, unknown> }): boolean {
   if (repo.getSettings().thirdPartySmartOnly === false) return false;
   return String(req.headers['user-agent'] ?? '').trim() !== OWN_APP_UA;
+}
+
+/** Наше приложение: прежняя подпись (User-Agent) или заголовок X-NoVPN-App (Android
+ *  0.2.15+, Windows 0.3.39+). Не зависит от выключателя «чужим только умный режим». */
+function isOwnApp(req: { headers: Record<string, unknown> }): boolean {
+  if (String(req.headers['user-agent'] ?? '').trim() === OWN_APP_UA) return true;
+  return /^(android|windows)\/[\w.-]{1,20}$/i.test(String(req.headers['x-novpn-app'] ?? '').trim());
+}
+
+/** «Только приложение NoVPN», а подписку забирает чужое приложение (Happ, v2rayNG, Amnezia…). */
+function appOnlyBlocks(u: { appOnly?: boolean }, req: { headers: Record<string, unknown> }): boolean {
+  return u.appOnly === true && !isOwnApp(req);
+}
+
+export const APP_ONLY_TITLE = '⚠ Подключайтесь через приложение NoVPN';
+
+/** Вместо конфигов — один нерабочий профиль, чьё название и есть сообщение (его видно в
+ *  списке серверов любого приложения), плюс объявление подписки для Happ. */
+function sendAppOnlyStub(res: import('express').Response, req: Request, kind: 'links' | 'json'): void {
+  const download = `${repo.publicBaseUrl(reqOrigin(req))}/download`;
+  res.setHeader('Content-Type', kind === 'json' ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, private');
+  res.setHeader('Profile-Title', `base64:${Buffer.from(repo.brandName(), 'utf8').toString('base64')}`);
+  res.setHeader('Profile-Update-Interval', '12');
+  const note = `Этой подпиской пользуйтесь только в приложении NoVPN. Скачать: ${download}`;
+  res.setHeader('announce', `base64:${Buffer.from(note.slice(0, 200), 'utf8').toString('base64')}`);
+  const uuid = '00000000-0000-4000-8000-000000000000';
+  if (kind === 'links') {
+    const link = `vless://${uuid}@127.0.0.1:1?encryption=none&security=none&type=tcp#${encodeURIComponent(APP_ONLY_TITLE)}`;
+    res.send(Buffer.from(link, 'utf8').toString('base64'));
+    return;
+  }
+  res.send(
+    JSON.stringify({
+      remarks: APP_ONLY_TITLE,
+      log: { loglevel: 'warning' },
+      outbounds: [
+        { tag: 'proxy', protocol: 'vless', settings: { vnext: [{ address: '127.0.0.1', port: 1, users: [{ id: uuid, encryption: 'none' }] }] } },
+        { tag: 'block', protocol: 'blackhole' },
+      ],
+      routing: { rules: [{ type: 'field', network: 'tcp,udp', outboundTag: 'block' }] },
+    }),
+  );
 }
 
 /** Название приложения по заголовкам запроса подписки. Наше приложение с 0.2.15/0.3.x
@@ -586,6 +630,7 @@ router.get('/sub/:token/full', (req, res) => {
   const geoDat = wantsGeoDat(req as never);
   const thirdParty = isThirdPartyClient(req as never) && !u.fullAccess;
   noteSubClient(u.id, req as never);
+  if (appOnlyBlocks(u, req as never)) return sendAppOnlyStub(res, req as never, 'json');
   const parts: string[] = [];
   // Включён ли «Доступ в локалку» хоть у одного сервера подписки: тогда для Happ
   // уводим домашние подсети в туннель (маршрутизация Happ глобальна на подписку).
@@ -738,6 +783,7 @@ router.get('/sub/:token/backup', (req, res) => {
   if (u.expiresAt && new Date(u.expiresAt) < new Date()) return res.status(404).send('');
   // Клиент может запросить конкретную КОРЗИНУ: ?kind=whitelist|outage. Без параметра —
   // обе доступные (обратная совместимость со старыми клиентами, тянущими весь пул).
+  if (appOnlyBlocks(u, req as never)) return sendAppOnlyStub(res, req as never, 'links');
   const kp = String(req.query.kind ?? '');
   const kind = kp === 'whitelist' || kp === 'outage' ? kp : undefined;
   const pool = backupRepo.reservePoolForUser(u.id, kind);
@@ -870,6 +916,7 @@ router.get('/sub/:token/server/:id/full', (req, res) => {
   // ?profile=full — отдельный импорт профиля «Полный VPN» (только если он положен).
   const wanted = String(req.query.profile ?? '') === 'full' ? 'full' : 'smart';
   noteSubClient(u.id, req as never);
+  if (appOnlyBlocks(u, req as never)) return sendAppOnlyStub(res, req as never, 'json');
   const allowed = profilesFor(u, srv, isThirdPartyClient(req as never) && !u.fullAccess);
   const profile = allowed.includes(wanted) ? wanted : allowed[0]!;
   const geoDat = wantsGeoDat(req as never);
@@ -1021,6 +1068,12 @@ router.post('/api/public/logout', (req, res) => {
 });
 
 
+/** «Только приложение NoVPN»: человеку в кабинете не отдаём vless-ссылку и .conf — только
+ *  подписку, которую примет лишь наше приложение. Админ видит всё. */
+function hideIssued(out: IssueDeviceResult): IssueDeviceResult {
+  return { ...out, link: undefined, conf: undefined, vpnKey: undefined, device: repo.hideRawConfig(out.device) } as IssueDeviceResult;
+}
+
 // ── public: issue device ──
 router.post('/api/public/devices', requireUserOrAdmin, async (req, res) => {
   try {
@@ -1038,7 +1091,7 @@ router.post('/api/public/devices', requireUserOrAdmin, async (req, res) => {
     // Лимит устройств (только AmneziaWG) и все проверки — внутри issueForUser,
     // единый источник правды. Дублирующая пред-проверка убрана, чтобы не расходиться.
     const out = await issueForUser(u, String(name || 'Устройство'), String(serverId), protocol, { byAdmin: !!req.session.admin });
-    res.json(out);
+    res.json(u.appOnly && !req.session.admin ? hideIssued(out) : out);
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка выпуска конфига.'));
   }
@@ -1112,7 +1165,7 @@ router.post('/api/public/devices/:id/reissue', requireUserOrAdmin, async (req, r
     if (result.limit) {
       return res.status(403).json(err('devices', `Достигнут лимит устройств AmneziaWG (${u.deviceLimit}). Отключите другое устройство.`));
     }
-    res.json(result.out);
+    res.json(u.appOnly && !req.session.admin ? hideIssued(result.out) : result.out);
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка.'));
   }
@@ -1331,6 +1384,13 @@ router.post('/api/admin/users', requireAdmin, (req, res) => {
   });
   repo.addLog(`Создан пользователь «${u.name}»`);
   repo.addHistory(u.id, 'Пользователь создан');
+  // Права, которые форма подставила из правил группы, — той же правкой, что и карточка.
+  const extra: Record<string, unknown> = {};
+  for (const k of ['priorityAccess', 'fullAccess', 'appOnly'] as const) if (b[k] === true) extra[k] = true;
+  if (Object.keys(extra).length) {
+    const r = patchUser(u, extra);
+    if (r.ok) return res.json(r.user);
+  }
   res.json(u);
 });
 
@@ -1346,10 +1406,14 @@ router.post('/api/admin/users/:id/code-login', requireAdmin, (req, res) => {
   res.json(repo.getUser(u.id));
 });
 
-router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
-  const u = repo.getUser(req.params.id!);
-  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
-  const b = req.body ?? {};
+type PatchUserResult =
+  | { ok: true; user: NonNullable<ReturnType<typeof repo.getUser>>; revoked: number }
+  | { ok: false; message: string };
+
+/** Правка профиля человека — одна для карточки и для «Применить ко всем в группе»: проверки,
+ *  запись, лимит «в месяц», полный доступ на серверах, снятие конфигов вне разрешённого.
+ *  Поля, которых нет в теле, не трогаются. */
+function patchUser(u: NonNullable<ReturnType<typeof repo.getUser>>, b: Record<string, any>): PatchUserResult {
   const fields: Record<string, unknown> = {};
   if (b.name !== undefined) fields.name = String(b.name);
   if (b.comment !== undefined) fields.comment = String(b.comment);
@@ -1357,19 +1421,19 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (b.tags !== undefined) fields.tags = JSON.stringify(b.tags);
   if (b.deviceLimit !== undefined) {
     const r = normCount(b.deviceLimit);
-    if (!r.ok) return res.status(400).json(err('validation', 'Лимит устройств должен быть целым числом ≥ 0.'));
+    if (!r.ok) return { ok: false, message: 'Лимит устройств должен быть целым числом ≥ 0.' };
     fields.device_limit = r.value;
   }
   if (b.trafficLimitGb !== undefined) {
     const r = normGb(b.trafficLimitGb);
-    if (!r.ok) return res.status(400).json(err('validation', 'Лимит трафика должен быть числом ≥ 0.'));
+    if (!r.ok) return { ok: false, message: 'Лимит трафика должен быть числом ≥ 0.' };
     fields.traffic_limit_gb = r.value;
   }
   if (b.expiresAt !== undefined) {
     // null/пусто = снять срок; мусорную строку отвергаем, иначе NaN-сравнение тихо
     // сделало бы пользователя бессрочным.
     const r = normExpiry(b.expiresAt);
-    if (!r.ok) return res.status(400).json(err('validation', 'Срок действия должен быть корректной датой.'));
+    if (!r.ok) return { ok: false, message: 'Срок действия должен быть корректной датой.' };
     fields.expires_at = r.value;
   }
   const policy = b.resetPolicy !== undefined ? (b.resetPolicy === 'monthly' ? 'monthly' : 'never') : null;
@@ -1377,10 +1441,11 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
   const fullAccess = b.fullAccess !== undefined ? b.fullAccess === true : null;
   if (fullAccess !== null) fields.full_access = fullAccess ? 1 : 0;
   if (b.allowedServers !== undefined) {
-    if (!Array.isArray(b.allowedServers)) return res.status(400).json(err('validation', 'Список серверов должен быть массивом.'));
+    if (!Array.isArray(b.allowedServers)) return { ok: false, message: 'Список серверов должен быть массивом.' };
     fields.allowed_servers = JSON.stringify(b.allowedServers);
   }
-  if (b.allowedProtocols !== undefined)
+  let protocolsSet = b.allowedProtocols !== undefined;
+  if (protocolsSet)
     fields.allowed_protocols = JSON.stringify(
       (Array.isArray(b.allowedProtocols) ? (b.allowedProtocols as string[]) : []).filter((p) => p === 'xray' || p === 'amneziawg'),
     );
@@ -1388,6 +1453,15 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
     fields.allowed_proxies = JSON.stringify(
       (Array.isArray(b.allowedProxies) ? (b.allowedProxies as string[]) : []).filter((p) => p === 'http' || p === 'https' || p === 'socks5'),
     );
+  // «Только приложение NoVPN»: Amnezia и прокси работают только в чужих приложениях —
+  // у такого человека их нет, что бы ни пришло в теле (и уже выданные снимаются ниже).
+  const appOnly = b.appOnly !== undefined ? b.appOnly === true : u.appOnly === true;
+  if (b.appOnly !== undefined) fields.app_only = appOnly ? 1 : 0;
+  if (appOnly) {
+    fields.allowed_protocols = JSON.stringify(['xray']);
+    fields.allowed_proxies = JSON.stringify([]);
+    protocolsSet = true;
+  }
   let updated = repo.updateUserFields(u.id, fields);
   // Лимит «в месяц» / «за всё время»: базовая линия считается в repo, чтобы расход
   // текущего месяца не обнулился при переводе.
@@ -1402,27 +1476,148 @@ router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
     repo.addHistory(u.id, `Полный доступ (без защиты) ${fullAccess ? 'включён' : 'выключен'}`);
     if (repo.getSettings().ruGuard === true) void applyRuGuardAll().catch(() => {});
   }
+  if (b.appOnly !== undefined && appOnly !== (u.appOnly === true)) {
+    repo.addLog(`Только приложение NoVPN «${u.name}»: ${appOnly ? 'включено' : 'выключено'}`);
+    repo.addHistory(u.id, `Только приложение NoVPN: ${appOnly ? 'включено' : 'выключено'}`);
+  }
   // Сузили allowedServers/allowedProtocols → уже выданные конфиги вне нового списка
   // помечаем на отзыв (is_active=0, revoke_pending=1): sync-цикл снимет их с сервера
   // (retry-проход). Подписка их уже не отдаёт (см. subscriptionXrayLinks). Fix #1.
-  if (updated && (b.allowedServers !== undefined || b.allowedProtocols !== undefined)) {
-    const okServers = new Set(updated.allowedServers);
-    const okProtos = new Set(updated.allowedProtocols);
-    let revoked = 0;
-    for (const d of repo.listDevicesOfUser(u.id)) {
-      if (!d.isActive) continue;
-      // Пустой okServers = «ни одного сервера разрешено» → все конфиги вне области
-      // (симметрично issue.ts и subscriptionXrayEntries). Прежний `.size > 0` оставлял
-      // ключи живыми на серверах при снятии всех серверов у профиля.
-      const outOfScope = !okServers.has(d.serverId) || !okProtos.has(d.protocol as (typeof updated.allowedProtocols)[number]);
-      if (outOfScope) {
-        repo.updateDeviceFields(d.id, { is_active: 0, revoke_pending: 1, revoked_at: null });
-        revoked += 1;
-      }
+  let revoked = 0;
+  if (updated && (b.allowedServers !== undefined || protocolsSet)) {
+    for (const d of outOfScopeDevices(updated)) {
+      repo.updateDeviceFields(d.id, { is_active: 0, revoke_pending: 1, revoked_at: null });
+      revoked += 1;
     }
     if (revoked) repo.addLog(`Профиль «${updated.name}»: снято ${revoked} конфиг(ов) вне разрешённых серверов/протоколов`);
   }
-  res.json(updated);
+  if (!updated) return { ok: false, message: 'Пользователь не найден.' };
+  return { ok: true, user: updated, revoked };
+}
+
+/** Активные конфиги человека вне его разрешённых серверов/протоколов. Пустой список
+ *  серверов = «ни одного сервера» (симметрично issue.ts и subscriptionXrayEntries). */
+function outOfScopeDevices(u: { id: string; allowedServers: string[]; allowedProtocols: string[] }) {
+  const okServers = new Set(u.allowedServers);
+  const okProtos = new Set<string>(u.allowedProtocols);
+  return repo.listDevicesOfUser(u.id).filter((d) => d.isActive && (!okServers.has(d.serverId) || !okProtos.has(d.protocol)));
+}
+
+router.patch('/api/admin/users/:id', requireAdmin, (req, res) => {
+  const u = repo.getUser(req.params.id!);
+  if (!u) return res.status(404).json(err('not_found', 'Пользователь не найден.'));
+  const r = patchUser(u, req.body ?? {});
+  if (!r.ok) return res.status(400).json(err('validation', r.message));
+  res.json(r.user);
+});
+
+// ── admin: группы людей (1.7.0) ──
+// Группа = категория людей + правила. «Применить ко всем» прогоняет каждого участника через
+// ту же правку, что и карточка человека (patchUser), — со снятием лишних конфигов.
+
+/** Тело правки человека по правилам группы: только то, что группа задаёт. */
+function bodyFromRules(rules: GroupRules): Record<string, unknown> {
+  const r = effectiveGroupRules(rules);
+  const b: Record<string, unknown> = {};
+  for (const k of GROUP_RULE_KEYS) if (r[k] !== undefined) b[k] = r[k];
+  return b;
+}
+
+/** Что изменится у человека от правил группы — для предпросмотра. */
+function previewFor(u: NonNullable<ReturnType<typeof repo.getUser>>, rules: GroupRules): GroupApplyPreview['people'][number] {
+  const r = effectiveGroupRules(rules);
+  const diff = groupDiff(u, rules);
+  const changes = diff.map((k) => {
+    const v = r[k];
+    if (typeof v === 'boolean') return `${GROUP_RULE_LABELS[k]}: ${v ? 'вкл' : 'выкл'}`;
+    if (k === 'deviceLimit' || k === 'trafficLimitGb') return `${GROUP_RULE_LABELS[k]}: ${v == null ? '∞' : `${v}${k === 'trafficLimitGb' ? ' ГБ' : ''}`}`;
+    if (k === 'resetPolicy') return `${GROUP_RULE_LABELS[k]}: ${v === 'monthly' ? 'в месяц' : 'за всё время'}`;
+    return GROUP_RULE_LABELS[k];
+  });
+  const after = { id: u.id, allowedServers: r.allowedServers ?? u.allowedServers, allowedProtocols: r.allowedProtocols ?? u.allowedProtocols };
+  return { userId: u.id, name: u.name, changes, revokeConfigs: diff.length ? outOfScopeDevices(after).length : 0 };
+}
+
+router.get('/api/admin/groups', requireAdmin, (_req, res) => {
+  res.json({ groups: repo.listGroups() });
+});
+
+router.post('/api/admin/groups', requireAdmin, (req, res) => {
+  const name = repo.normGroupName(req.body?.name);
+  if (!name) return res.status(400).json(err('validation', 'Название группы — от 1 до 40 символов.'));
+  if (repo.getGroup(name)) return res.status(409).json(err('validation', 'Такая группа уже есть.'));
+  repo.saveGroupRules(name, repo.normGroupRules(req.body?.rules));
+  repo.addLog(`Создана группа «${name}»`);
+  res.json(repo.getGroup(name));
+});
+
+// Сохранить правила (и, если пришло newName, переименовать вместе с людьми).
+router.put('/api/admin/groups/:name', requireAdmin, (req, res) => {
+  const name = String(req.params.name ?? '');
+  if (!repo.getGroup(name)) return res.status(404).json(err('not_found', 'Группа не найдена.'));
+  let target = name;
+  if (req.body?.newName !== undefined) {
+    const nn = repo.normGroupName(req.body.newName);
+    if (!nn) return res.status(400).json(err('validation', 'Название группы — от 1 до 40 символов.'));
+    if (nn !== name) {
+      if (repo.getGroup(nn)) return res.status(409).json(err('validation', 'Группа с таким названием уже есть.'));
+      const moved = repo.renameGroup(name, nn);
+      repo.addLog(`Группа «${name}» переименована в «${nn}» (людей: ${moved})`);
+      target = nn;
+    }
+  }
+  if (req.body?.rules !== undefined) {
+    repo.saveGroupRules(target, repo.normGroupRules(req.body.rules));
+    repo.addLog(`Группа «${target}»: правила сохранены`);
+  }
+  res.json(repo.getGroup(target));
+});
+
+router.delete('/api/admin/groups/:name', requireAdmin, (req, res) => {
+  const g = repo.getGroup(String(req.params.name ?? ''));
+  if (!g) return res.status(404).json(err('not_found', 'Группа не найдена.'));
+  if (g.members > 0) return res.status(409).json(err('validation', 'В группе есть люди — сначала переведите их в другую группу.'));
+  repo.deleteGroup(g.name);
+  repo.addLog(`Удалена группа «${g.name}»`);
+  res.json({ ok: true });
+});
+
+// Предпросмотр: что изменится у каждого участника (rules из тела — несохранённые правки формы).
+router.post('/api/admin/groups/:name/preview', requireAdmin, (req, res) => {
+  const g = repo.getGroup(String(req.params.name ?? ''));
+  if (!g) return res.status(404).json(err('not_found', 'Группа не найдена.'));
+  const rules = req.body?.rules !== undefined ? repo.normGroupRules(req.body.rules) : g.rules;
+  const preview: GroupApplyPreview = { people: repo.listGroupMembers(g.name).map((u) => previewFor(u, rules)) };
+  res.json(preview);
+});
+
+// Применить правила группы ко всем участникам (rules из тела сначала сохраняются).
+router.post('/api/admin/groups/:name/apply', requireAdmin, (req, res) => {
+  const g = repo.getGroup(String(req.params.name ?? ''));
+  if (!g) return res.status(404).json(err('not_found', 'Группа не найдена.'));
+  let rules = g.rules;
+  if (req.body?.rules !== undefined) {
+    rules = repo.normGroupRules(req.body.rules);
+    repo.saveGroupRules(g.name, rules);
+  }
+  if (!hasGroupRules(rules)) return res.status(400).json(err('validation', 'У группы не задано ни одного правила.'));
+  const body = bodyFromRules(rules);
+  let changed = 0;
+  let revoked = 0;
+  const failed: string[] = [];
+  for (const u of repo.listGroupMembers(g.name)) {
+    if (!groupDiff(u, rules).length) continue;
+    const r = patchUser(u, body);
+    if (!r.ok) {
+      failed.push(`${u.name}: ${r.message}`);
+      continue;
+    }
+    changed += 1;
+    revoked += r.revoked;
+    repo.addHistory(u.id, `Применены правила группы «${g.name}»`);
+  }
+  repo.addLog(`Группа «${g.name}»: правила применены — изменено у ${changed}, снято конфигов ${revoked}${failed.length ? `; не применилось: ${failed.join('; ')}` : ''}`);
+  res.json({ ok: true, changed, revoked, failed, group: repo.getGroup(g.name) });
 });
 
 // Перевыпуск личной ссылки: старая сразу перестаёт работать.
@@ -1837,10 +2032,12 @@ async function runProvision(
       awgServerPrivKey: installed.awgPriv, awgServerPubKey: installed.awgPub,
       awgParams: JSON.stringify(awgParams),
     });
+    let httpsReason: string | null = null;
     if (want.http || want.https || want.socks) {
       provisionStatus.set(serverId, { state: 'running', message: 'Шаг 3 из 4: ставим прокси…', at: Date.now() });
       const proxy = await sshInstallProxies(s, { http: want.http, https: want.https, socks: want.socks, httpPort: portHttp, socksPort: portSocks, httpsPort: portHttps });
       saveServerProxy(s.host, proxy);
+      if (proxy.httpsError) httpsReason = await httpsFailReason(s, proxy.httpsError);
       const back = await resyncProxyLogins(repo.getServer(s.id) ?? s);
       if (back.failed) repo.addJobError(s.name, `Прокси-логины людей: не вернулись ${back.failed} — нажмите «Установить прокси» ещё раз`);
     }
@@ -1912,7 +2109,7 @@ async function runProvision(
     ).catch((e): InstallCheck[] => {
       warnings.push(`самопроверка не выполнилась (${e instanceof Error ? e.message : 'ошибка'})`);
       return [];
-    });
+    }).then((c) => withHttpsReason(c, httpsReason));
     const summary = formatInstallCheck(checks);
     const vpnBad = checks.filter((c) => !c.ok && (c.key === 'xray' || c.key === 'awg'));
     for (const c of checks) if (!c.ok && c.key !== 'xray' && c.key !== 'awg') warnings.push(`${c.name} не работает (${c.detail})`);
@@ -2007,6 +2204,11 @@ router.post('/api/admin/servers/:id/resync-devices', requireAdmin, async (req, r
 router.get('/api/admin/servers/:id/dns-check', requireAdmin, async (req, res) => {
   const s = repo.getServer(req.params.id!);
   if (!s) return res.status(404).json(err('not_found', 'Сервер не найден.'));
+  res.json(await domainVsBox(s));
+});
+
+/** Куда сейчас указывает домен сервера и совпадает ли это с адресом самого бокса. */
+async function domainVsBox(s: { id: string; host: string }): Promise<{ domain: string; resolved: string[]; boxIp: string | null; match: boolean; domainIsIp: boolean }> {
   const sshHost = repo.getServerSsh(s.id)?.host ?? null; // новый бокс: IP или hostname (ssh_host)
   const safeResolve = async (h: string): Promise<string[]> => {
     if (net.isIP(h) > 0) return [h];
@@ -2019,8 +2221,25 @@ router.get('/api/admin/servers/:id/dns-check', requireAdmin, async (req, res) =>
   const boxIp = boxIps[0] ?? sshHost;
   const domainIsIp = net.isIP(s.host) > 0; // домен = сам IP → сверка не нужна
   const match = domainIsIp || resolved.some((ip) => boxIps.includes(ip));
-  res.json({ domain: s.host, resolved, boxIp, match, domainIsIp });
-});
+  return { domain: s.host, resolved, boxIp, match, domainIsIp };
+}
+
+/** Почему не встал HTTPS-прокси: ответ Let's Encrypt и, если домен ещё указывает не на этот
+ *  сервер (09.11.2026: перенос «Франции 1» — сертификат просили до смены DNS), подсказка. */
+async function httpsFailReason(s: { id: string; host: string }, certbot: string): Promise<string> {
+  const dns = await domainVsBox(s).catch(() => null);
+  const hint =
+    dns && !dns.match && !dns.domainIsIp
+      ? `домен ${s.host} указывает на ${dns.resolved.join(', ') || 'неизвестный адрес'}, а сервер — ${dns.boxIp ?? '?'}: дождитесь обновления DNS и нажмите «Доустановить»`
+      : 'порт 80 должен быть открыт снаружи (файрвол хостера), домен — указывать на этот сервер';
+  return `сертификат не выпущен: ${certbot}; ${hint}`;
+}
+
+/** Подставить причину отказа HTTPS в самопроверку — вместо общего «не слушает 8443». */
+function withHttpsReason(checks: InstallCheck[], reason: string | null): InstallCheck[] {
+  if (!reason) return checks;
+  return checks.map((c) => (c.key === 'https' && !c.ok ? { ...c, detail: reason } : c));
+}
 
 // Сменить reality-SNI на сервере (без переустановки). vk.com режется DPI —
 // переводим на cdn.dodostatic.net. Ключи не трогаются, UUID остаются валидными;
@@ -2133,6 +2352,7 @@ router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, 
   try {
     const p = await sshInstallProxies(s, want);
     saveServerProxy(s.host, p);
+    const httpsReason = p.httpsError ? await httpsFailReason(s, p.httpsError) : null;
     // Отмечаем протоколы как установленные.
     const cur = new Set(s.protocols as string[]);
     if (want.http) cur.add('http');
@@ -2149,9 +2369,11 @@ router.post('/api/admin/servers/:id/install-proxies', requireAdmin, async (req, 
       { xray: pr.includes('xray'), awg: pr.includes('amneziawg'), http: pr.includes('http'), socks: pr.includes('socks5'), https: pr.includes('https'), sshGuard: sshGuardWant(fresh) },
       repo.getEndpointPorts(fresh.host),
     ).catch((): InstallCheck[] => []);
-    if (checks.length) repo.setInstallCheck(s.id, { at: repo.nowIso(), ok: checks.every((c) => c.ok), summary: formatInstallCheck(checks), error: null, checks });
-    repo.addLog(`Установлены прокси на «${s.name}»${back.ok ? `; прокси-логинов людей возвращено: ${back.ok}` : ''}`);
-    res.json({ ok: true, proxy: p, server: repo.getServer(s.id) });
+    const checks2 = withHttpsReason(checks, httpsReason);
+    if (checks2.length) repo.setInstallCheck(s.id, { at: repo.nowIso(), ok: checks2.every((c) => c.ok), summary: formatInstallCheck(checks2), error: null, checks: checks2 });
+    repo.addLog(`Установлены прокси на «${s.name}»${back.ok ? `; прокси-логинов людей возвращено: ${back.ok}` : ''}${httpsReason ? `; HTTPS: ${httpsReason}` : ''}`);
+    if (httpsReason) repo.addJobError(s.name, `HTTPS-прокси: ${httpsReason}`);
+    res.json({ ok: true, proxy: p, server: repo.getServer(s.id), ...(httpsReason ? { warning: `HTTPS не установлен — ${httpsReason}` } : {}) });
   } catch (e) {
     res.status(400).json(err('server', e instanceof Error ? e.message : 'Ошибка установки прокси.'));
   }

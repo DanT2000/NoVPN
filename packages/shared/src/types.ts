@@ -216,12 +216,50 @@ export interface User {
    *  (исключение из «Российские сервисы мимо серверов»), а полный профиль он получает в
    *  любом приложении, не только в NoVPN. Для экстренных случаев. */
   fullAccess?: boolean;
+  /** «Только приложение NoVPN»: Amnezia и прокси не выдаются, чужие приложения (Happ,
+   *  v2rayNG…) получают по подписке только сообщение «подключайтесь через NoVPN». */
+  appOnly?: boolean;
   /** Расход за текущий и прошлый календарный месяц (UTC), ГБ — из помесячного учёта. */
   trafficMonthGb?: number;
   trafficPrevMonthGb?: number;
   telegram: string | null;
   createdAt: string;
   lastActivityAt: string | null;
+}
+
+/** Правила группы: что группа задаёт своим участникам. Поля нет — группа его не трогает,
+ *  у каждого остаётся своё. Применяются кнопкой «Применить ко всем в группе» и
+ *  подставляются в форму, когда человека заводят в группу или переводят в неё. */
+export interface GroupRules {
+  allowedServers?: string[];
+  allowedProtocols?: Array<'xray' | 'amneziawg'>;
+  allowedProxies?: ProxyType[];
+  priorityAccess?: boolean;
+  fullAccess?: boolean;
+  appOnly?: boolean;
+  deviceLimit?: number | null;
+  trafficLimitGb?: number | null;
+  resetPolicy?: ResetPolicy;
+}
+
+/** Группа людей (прежняя «категория» пользователя). */
+export interface UserGroup {
+  name: string;
+  rules: GroupRules;
+  /** Участников (не удалённых). */
+  members: number;
+}
+
+/** Предпросмотр «Применить ко всем»: что изменится у каждого участника. */
+export interface GroupApplyPreview {
+  people: Array<{
+    userId: string;
+    name: string;
+    /** Что поменяется — по-человечески: «серверы», «полный доступ: вкл»… */
+    changes: string[];
+    /** Сколько выданных конфигов снимется (вне новых серверов/протоколов). */
+    revokeConfigs: number;
+  }>;
 }
 
 /** Объявление администратора для приложений: NoVPN показывает его один раз окном, Happ —
@@ -769,6 +807,8 @@ export interface BootstrapData {
   /** Пароль администратора всё ещё дефолтный — панель обязана потребовать смену
    *  до любых действий (переживает перезагрузку страницы, не только вход). */
   mustChangePassword: boolean;
+  /** Группы людей с правилами (1.7.0). Старые панели поле не шлют. */
+  groups?: UserGroup[];
 }
 
 /** Сервер глазами обычного пользователя: куда подключаться, без внутренней телеметрии. */

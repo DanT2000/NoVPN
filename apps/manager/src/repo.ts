@@ -31,6 +31,8 @@ import type {
   AnnouncementInput,
   TelegramSettings,
   User,
+  GroupRules,
+  UserGroup,
 } from '@novpn/shared';
 import { config } from './config.js';
 import { db, getSetting, setSetting } from './db.js';
@@ -200,6 +202,93 @@ export function updateUserFields(id: string, fields: Record<string, unknown>): U
   }
   return getUser(id);
 }
+// ── группы людей (1.7.0) ──
+// Группа — это категория человека (users.category) плюс правила в user_groups. Категория
+// без строки там — группа без правил: так все прежние категории стали группами сами.
+
+/** Имя группы: без лишних пробелов, до 40 символов; пусто/длиннее — null. */
+export function normGroupName(raw: unknown): string | null {
+  const s = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  return s && s.length <= 40 ? s : null;
+}
+
+/** Правила группы из присланного JSON: только известные поля и только корректного вида. */
+export function normGroupRules(raw: unknown): GroupRules {
+  const r = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const out: GroupRules = {};
+  const strs = (v: unknown, ok: (x: string) => boolean): string[] | undefined =>
+    Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && ok(x)))] : undefined;
+  const srv = strs(r.allowedServers, (x) => x.length > 0 && x.length <= 80);
+  if (srv) out.allowedServers = srv;
+  const pr = strs(r.allowedProtocols, (x) => x === 'xray' || x === 'amneziawg');
+  if (pr) out.allowedProtocols = pr as GroupRules['allowedProtocols'];
+  const px = strs(r.allowedProxies, (x) => x === 'http' || x === 'https' || x === 'socks5');
+  if (px) out.allowedProxies = px as GroupRules['allowedProxies'];
+  for (const k of ['priorityAccess', 'fullAccess', 'appOnly'] as const) if (typeof r[k] === 'boolean') out[k] = r[k] as boolean;
+  if (r.deviceLimit === null) out.deviceLimit = null;
+  else if (typeof r.deviceLimit === 'number' && Number.isInteger(r.deviceLimit) && r.deviceLimit >= 0 && r.deviceLimit <= 1000) out.deviceLimit = r.deviceLimit;
+  if (r.trafficLimitGb === null) out.trafficLimitGb = null;
+  else if (typeof r.trafficLimitGb === 'number' && Number.isFinite(r.trafficLimitGb) && r.trafficLimitGb >= 0 && r.trafficLimitGb <= 1e6) out.trafficLimitGb = r.trafficLimitGb;
+  if (r.resetPolicy === 'monthly' || r.resetPolicy === 'never') out.resetPolicy = r.resetPolicy;
+  return out;
+}
+
+const parseRules = (s: unknown): GroupRules => {
+  try {
+    return normGroupRules(JSON.parse(String(s ?? '{}')));
+  } catch {
+    return {};
+  }
+};
+
+/** Все группы: заведённые явно и категории людей; больше участников — выше. */
+export function listGroups(): UserGroup[] {
+  const map = new Map<string, UserGroup>();
+  for (const r of db.prepare('SELECT name, rules FROM user_groups').all() as Array<{ name: string; rules: string }>) {
+    map.set(r.name, { name: r.name, rules: parseRules(r.rules), members: 0 });
+  }
+  const counts = db
+    .prepare("SELECT category AS name, COUNT(*) AS n FROM users WHERE deleted_at IS NULL AND category IS NOT NULL AND category != '' GROUP BY category")
+    .all() as Array<{ name: string; n: number }>;
+  for (const c of counts) {
+    const g = map.get(c.name) ?? { name: c.name, rules: {}, members: 0 };
+    g.members = c.n;
+    map.set(c.name, g);
+  }
+  return [...map.values()].sort((a, b) => b.members - a.members || a.name.localeCompare(b.name, 'ru'));
+}
+
+export function getGroup(name: string): UserGroup | null {
+  return listGroups().find((g) => g.name === name) ?? null;
+}
+
+/** Создать группу или заменить её правила. */
+export function saveGroupRules(name: string, rules: GroupRules): void {
+  const now = nowIso();
+  db.prepare(
+    'INSERT INTO user_groups(name, rules, created_at, updated_at) VALUES(?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET rules = excluded.rules, updated_at = excluded.updated_at',
+  ).run(name, JSON.stringify(normGroupRules(rules)), now, now);
+}
+
+/** Переименовать группу вместе с людьми в ней (новое имя должно быть свободно). */
+export function renameGroup(from: string, to: string): number {
+  return db.transaction(() => {
+    const row = db.prepare('SELECT rules FROM user_groups WHERE name = ?').get(from) as { rules: string } | undefined;
+    db.prepare('DELETE FROM user_groups WHERE name = ?').run(from);
+    if (row) saveGroupRules(to, parseRules(row.rules));
+    return db.prepare('UPDATE users SET category = ?, updated_at = ? WHERE category = ? AND deleted_at IS NULL').run(to, nowIso(), from).changes;
+  })();
+}
+
+/** Удалить группу (только правила; людей в ней быть не должно — проверяет роут). */
+export function deleteGroup(name: string): void {
+  db.prepare('DELETE FROM user_groups WHERE name = ?').run(name);
+}
+
+export function listGroupMembers(name: string): User[] {
+  return listUsers().filter((u) => (u.category ?? '') === name);
+}
+
 export function softDeleteUser(id: string): void {
   db.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(nowIso(), id);
   // Базовое состояние: доступ снят, серверный отзыв ОЖИДАЕТ подтверждения. revoked_at
@@ -2136,6 +2225,7 @@ export function toPublicUserView(u: User): PublicUserView {
     trafficLimitGb: u.trafficLimitGb, trafficUsedGb: u.trafficUsedGb, allowedServers: u.allowedServers,
     allowedProtocols: u.allowedProtocols, isActive: u.isActive,
     telegramLinked: !!u.telegram, codeLoginUntil: u.codeLoginUntil,
+    appOnly: u.appOnly === true,
   };
 }
 
@@ -2154,6 +2244,7 @@ export function buildBootstrap(): BootstrapData {
     history: allHistory(),
     dbHealth: checkDbIsolation(earliestDataIso()),
     mustChangePassword: isDefaultAdminPassword(),
+    groups: listGroups(),
   };
 }
 
@@ -2222,6 +2313,11 @@ export function subscriptionXrayEntries(userId: string, onlyServerId?: string): 
   return links;
 }
 
+/** Убрать из ответа готовый конфиг для сторонних приложений (vless-ссылку, .conf, vpn://). */
+export function hideRawConfig<T extends { link?: string | null; conf?: string | null; vpnKey?: string | null }>(d: T): T {
+  return { ...d, link: null, conf: null, ...(d.vpnKey !== undefined ? { vpnKey: null } : {}) };
+}
+
 /** Данные публичной части. Без userId — только справочники (серверы, приложения):
  *  ни кодов, ни конфигов, ни чужих устройств. */
 /** Публичный адрес подписки Xray для пользователя. */
@@ -2261,7 +2357,9 @@ export function buildPublicBootstrap(userId?: string, fallbackOrigin?: string): 
   const allowedSet = user ? new Set(user.allowedServers) : null;
   return {
     user: user && user.isActive ? toPublicUserView(user) : null,
-    devices: user ? listDevicesOfUser(user.id) : [],
+    // «Только приложение NoVPN»: готовые ссылки и .conf для других приложений не отдаём —
+    // человеку остаётся подписка, которую примет только наше приложение.
+    devices: user ? listDevicesOfUser(user.id).map((d) => (user.appOnly ? hideRawConfig(d) : d)) : [],
     servers: listServers().map((s) => ({
       id: s.id,
       name: s.name,
@@ -2278,7 +2376,8 @@ export function buildPublicBootstrap(userId?: string, fallbackOrigin?: string): 
           ? `${subBase}/sub/${subT}/server/${s.id}/full`
           : null,
     })),
-    apps: listApps(),
+    // «Только приложение NoVPN»: в кабинете предлагаем только наши приложения.
+    apps: user?.appOnly ? listApps().filter((a) => /novpn/i.test(a.client)) : listApps(),
     telegram: { enabled: tg.enabled, botUsername: tg.botUsername ?? null },
     botLink,
     subLink: user ? subscriptionUrl(user.id, fallbackOrigin) : null,

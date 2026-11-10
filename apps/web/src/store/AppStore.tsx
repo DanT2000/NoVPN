@@ -28,7 +28,7 @@ export type PublicRoute = 'home' | 'cabinet' | 'wizard' | 'devices' | 'apps';
 export type AdminRoute =
   | 'login' | 'dashboard' | 'users' | 'user-create' | 'user-created'
   | 'user-card' | 'servers' | 'server-wizard' | 'server-migrate' | 'telegram' | 'apps' | 'logs' | 'settings'
-  | 'smart-routing' | 'autoroute' | 'backup' | 'desktop-updates';
+  | 'smart-routing' | 'autoroute' | 'backup' | 'desktop-updates' | 'groups';
 
 export interface NavParams {
   userId?: string;
@@ -41,6 +41,8 @@ export interface NavParams {
   issued?: IssueDeviceResult & { serverId: string; appId?: string };
   /** Для админского «выпустить конфиг как пользователь». */
   asUserId?: string;
+  /** Экран «Группы»: какую группу открыть. */
+  group?: string;
 }
 
 export interface NavState {
@@ -147,6 +149,7 @@ function pathForNav(nav: NavState): string {
       case 'user-create': return '/admin/users/new';
       case 'user-created': return '/admin/users/created';
       case 'user-card': return nav.params.userId ? `/admin/users/${nav.params.userId}` : '/admin/users';
+      case 'groups': return '/admin/groups';
       case 'servers': return '/admin/servers';
       case 'server-wizard': return '/admin/servers/new';
       case 'server-migrate': return nav.params.serverId ? `/admin/servers/${nav.params.serverId}/migrate` : '/admin/servers';
@@ -189,6 +192,7 @@ function navForPath(p: string): NavState {
       return { area: 'admin', route: seg[0], params: {} };
     }
     if (seg[0] === 'desktop') return { area: 'admin', route: 'desktop-updates', params: {} };
+    if (seg[0] === 'groups') return { area: 'admin', route: 'groups', params: {} };
     return { area: 'admin', route: 'dashboard', params: {} };
   }
   if (p === '/cabinet') return { area: 'public', route: 'cabinet', params: {} };

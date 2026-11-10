@@ -18,7 +18,19 @@ const iso = (t: number) => new Date(t).toISOString();
 
 export const SERVERS: Server[] = [
   { id: 's1', name: 'Нидерланды', country: 'NL', host: 'nl1.novpn.example', agent: 'online', endpointOk: true, protocols: ['xray', 'amneziawg'], trafficGb: 412.7, users: 14, autoIssue: true, lastSyncAt: iso(now - 4 * 60000), recommended: true },
-  { id: 's2', name: 'Германия', country: 'DE', host: 'de1.novpn.example', agent: 'online', endpointOk: true, protocols: ['xray'], trafficGb: 268.1, users: 9, autoIssue: true, lastSyncAt: iso(now - 11 * 60000), recommended: false },
+  {
+    id: 's2', name: 'Германия', country: 'DE', host: 'de1.novpn.example', agent: 'online', endpointOk: true, protocols: ['xray', 'http', 'https', 'socks5'], trafficGb: 268.1, users: 9, autoIssue: true, lastSyncAt: iso(now - 11 * 60000), recommended: false,
+    // Пример «установлено не всё»: HTTPS не выпустил сертификат (как «Франция 1» 09.11.2026).
+    installCheck: {
+      at: iso(now - 3600000), ok: false, summary: 'Xray ✓, HTTP-прокси ✓, SOCKS5-прокси ✓, HTTPS-прокси ✗', error: null,
+      checks: [
+        { key: 'xray', name: 'Xray', ok: true, detail: 'слушает TCP 443' },
+        { key: 'http', name: 'HTTP-прокси', ok: true, detail: 'слушает TCP 8080' },
+        { key: 'socks', name: 'SOCKS5-прокси', ok: true, detail: 'слушает TCP 1080' },
+        { key: 'https', name: 'HTTPS-прокси', ok: false, detail: 'сертификат не выпущен: Timeout during connect (likely firewall problem); домен de1.novpn.example указывает на 203.0.113.7, а сервер — 203.0.113.9: дождитесь обновления DNS и нажмите «Доустановить»' },
+      ],
+    },
+  },
   { id: 's3', name: 'США', country: 'US', host: 'us1.novpn.example', agent: 'offline', endpointOk: false, protocols: ['xray', 'amneziawg'], trafficGb: 96.4, users: 3, autoIssue: false, lastSyncAt: iso(now - 26 * 3600000), recommended: false },
 ];
 

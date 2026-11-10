@@ -4,3 +4,4 @@ export * from './api.js';
 export * from './labels.js';
 export * from './catalog.js';
 export * from './whitelist.js';
+export * from './groups.js';

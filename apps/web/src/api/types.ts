@@ -36,6 +36,9 @@ import type {
   TestTelegramResult,
   User,
   ServerSelfTest,
+  GroupRules,
+  UserGroup,
+  GroupApplyPreview,
 } from '@novpn/shared';
 
 export interface CreateUserInput {
@@ -56,6 +59,11 @@ export interface CreateUserInput {
   code: string;
   /** Разрешить запасной вход по коду. По умолчанию нет — основной способ ссылка. */
   codeLoginEnabled?: boolean;
+  /** «Только приложение NoVPN» (1.7.0). */
+  appOnly?: boolean;
+  /** Права из правил группы (1.7.0): приоритетный и полный доступ сразу при создании. */
+  priorityAccess?: boolean;
+  fullAccess?: boolean;
 }
 
 export type UpdateUserPatch = Partial<
@@ -77,6 +85,8 @@ export type UpdateUserPatch = Partial<
     | 'priorityAccess'
     // «Полный доступ (без защиты)» — исключение из защиты серверов для этого человека.
     | 'fullAccess'
+    // «Только приложение NoVPN»: без Amnezia/прокси, чужим приложениям — сообщение.
+    | 'appOnly'
   >
 >;
 
@@ -272,12 +282,19 @@ export interface ApiClient {
   listAnnouncements(): Promise<{ announcements: Announcement[] }>;
   createAnnouncement(input: AnnouncementInput): Promise<Announcement>;
   deleteAnnouncement(id: string): Promise<{ ok: boolean }>;
+  /** Группы людей (1.7.0): правила, предпросмотр и «Применить ко всем». */
+  listGroups(): Promise<{ groups: UserGroup[] }>;
+  createGroup(name: string, rules?: GroupRules): Promise<UserGroup>;
+  saveGroup(name: string, patch: { rules?: GroupRules; newName?: string }): Promise<UserGroup>;
+  deleteGroup(name: string): Promise<{ ok: boolean }>;
+  previewGroup(name: string, rules?: GroupRules): Promise<GroupApplyPreview>;
+  applyGroup(name: string, rules?: GroupRules): Promise<{ ok: boolean; changed: number; revoked: number; failed: string[]; group: UserGroup }>;
 
   // ── admin: servers ──
   testServerConnection(input: AddServerInput): Promise<TestServerConnectionResult>;
   addServer(input: AddServerInput): Promise<Server>;
   editServer(id: string, input: EditServerInput): Promise<Server>;
-  installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>;
+  installServerProxies(id: string, types: { http: boolean; https: boolean; socks: boolean }): Promise<{ ok: boolean; proxy: ServerProxyConfig; server: Server; warning?: string }>;
   /** Тест скорости на сервере: установка, список адресов, открыть для себя, удалить. */
   speedtestInstall(id: string, allow?: string[], port?: number): Promise<{ ok: boolean; server: Server }>;
   /** Самотест: сервер сам меряет свой канал (около минуты, при первом запуске ставит speedtest). */

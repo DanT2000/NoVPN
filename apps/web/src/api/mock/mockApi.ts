@@ -19,7 +19,10 @@ import type {
   TestServerConnectionResult,
   TestTelegramResult,
   User,
+  GroupRules,
+  UserGroup,
 } from '@novpn/shared';
+import { effectiveGroupRules, groupDiff, GROUP_RULE_LABELS } from '@novpn/shared';
 import type {
   AddServerInput,
   ApiClient,
@@ -124,6 +127,7 @@ export const mockApi: ApiClient = {
       adminLog: clone(state.adminLog), jobErrors: clone(state.jobErrors), history: clone(state.history),
       dbHealth: { dbPath: '/data/database.sqlite', container: true, confirmedPersistent: true, risky: false },
       mustChangePassword: false,
+      groups: mockGroupsList(),
     };
   },
 
@@ -734,6 +738,52 @@ export const mockApi: ApiClient = {
     mockAnnouncements.unshift(a);
     return a;
   },
+  async listGroups() {
+    await wait(80);
+    return { groups: mockGroupsList() };
+  },
+  async createGroup(name: string, rules?: GroupRules) {
+    await wait(80);
+    mockGroupRules.set(name, rules ?? {});
+    return mockGroupsList().find((g) => g.name === name)!;
+  },
+  async saveGroup(name: string, patch: { rules?: GroupRules; newName?: string }) {
+    await wait(80);
+    const target = patch.newName && patch.newName !== name ? patch.newName : name;
+    if (target !== name) {
+      mockGroupRules.set(target, mockGroupRules.get(name) ?? {});
+      mockGroupRules.delete(name);
+      for (const u of state.users) if (u.category === name) u.category = target;
+    }
+    if (patch.rules) mockGroupRules.set(target, patch.rules);
+    return mockGroupsList().find((g) => g.name === target)!;
+  },
+  async deleteGroup(name: string) {
+    await wait(80);
+    mockGroupRules.delete(name);
+    return { ok: true };
+  },
+  async previewGroup(name: string, rules?: GroupRules) {
+    await wait(80);
+    const r = rules ?? mockGroupRules.get(name) ?? {};
+    return {
+      people: state.users
+        .filter((u) => u.category === name)
+        .map((u) => ({ userId: u.id, name: u.name, changes: groupDiff(u, r).map((k) => GROUP_RULE_LABELS[k]), revokeConfigs: 0 })),
+    };
+  },
+  async applyGroup(name: string, rules?: GroupRules) {
+    await wait(120);
+    const r = effectiveGroupRules(rules ?? mockGroupRules.get(name) ?? {});
+    if (rules) mockGroupRules.set(name, rules);
+    let changed = 0;
+    for (const u of state.users) {
+      if (u.category !== name || !groupDiff(u, r).length) continue;
+      Object.assign(u, r);
+      changed += 1;
+    }
+    return { ok: true, changed, revoked: 0, failed: [], group: mockGroupsList().find((g) => g.name === name)! };
+  },
   async deleteAnnouncement(id: string) {
     await wait(100);
     const i = mockAnnouncements.findIndex((a) => a.id === id);
@@ -1141,3 +1191,10 @@ function routingMeta(name: 'upstream' | 'apps') {
 
 /** Объявления в приложениях для демо-режима. */
 const mockAnnouncements: Array<{ id: string; text: string; audience: 'all' | 'android' | 'windows' | 'happ'; belowVersion: string | null; update: boolean; createdAt: string; expiresAt: string | null }> = [];
+
+// ── группы (мок): правила в памяти, участники — по категории людей ──
+const mockGroupRules = new Map<string, GroupRules>();
+function mockGroupsList(): UserGroup[] {
+  const names = new Set<string>([...mockGroupRules.keys(), ...state.users.map((u) => u.category ?? '').filter(Boolean)]);
+  return [...names].map((name) => ({ name, rules: mockGroupRules.get(name) ?? {}, members: state.users.filter((u) => u.category === name).length }));
+}

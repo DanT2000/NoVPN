@@ -105,8 +105,10 @@ export function Users() {
   };
   const shown = [...filtered].sort((a, b) => Number(fav.has(b.id)) - Number(fav.has(a.id)) || cmp(a, b));
 
-  // Категории: базовые + любые встречающиеся у пользователей (кастомные).
-  const catList = Array.from(new Set([...CATEGORIES, ...users.map((u) => u.category ?? '').filter(Boolean)]));
+  // Группы (бывшие категории): заведённые в «Группах» + любые встречающиеся у людей. Пустые
+  // базовые названия не показываем — фильтр по ним всегда пуст.
+  const used = new Set(users.map((u) => u.category ?? '').filter(Boolean));
+  const catList = Array.from(new Set([...(data?.groups ?? []).map((g) => g.name), ...CATEGORIES.filter((c) => used.has(c)), ...used]));
 
   const total = users.length;
   const title = `${total} ${plural(total, 'пользователь', 'пользователя', 'пользователей')}`;
@@ -165,7 +167,7 @@ export function Users() {
         </div>
 
         <div className="chip-row">
-          <span className="small muted" style={{ alignSelf: 'center', marginRight: 4 }}>Категория:</span>
+          <span className="small muted" style={{ alignSelf: 'center', marginRight: 4 }}>Группа:</span>
           <Chip label="Все" size="sm" active={catFilter === 'all'} onClick={() => setCatFilter('all')} />
           {catList.map((c) => (
             <Chip key={c} label={c} size="sm" active={catFilter === c} onClick={() => setCatFilter(c)} />

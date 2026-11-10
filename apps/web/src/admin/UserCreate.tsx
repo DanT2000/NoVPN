@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 import type { Protocol, ProxyType } from '@novpn/shared';
+import { GROUP_RULE_LABELS, GROUP_RULE_KEYS, effectiveGroupRules, hasGroupRules } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import type { CreateUserInput } from '../api/types';
-import { CategoryPicker, Chip, Dot, Field, Panel, ScreenHeader } from '../components/ui';
+import { CategoryPicker, Chip, Dot, Field, Panel, ScreenHeader, Toggle } from '../components/ui';
 import { DAY_MS } from '../lib/format';
 import { serverAgentView } from '../lib/status';
 
@@ -47,7 +48,15 @@ export function UserCreate() {
   const [expCustom, setExpCustom] = useState('');
   const [trafMode, setTrafMode] = useState<TrafMode>('unlim');
   const [trafCustom, setTrafCustom] = useState('');
-  const resetPolicy = 'never' as const; // сброс трафика по расписанию убран — не был реализован
+  // Счёт лимита: «за всё время», если правило группы не говорит «в месяц».
+  const [resetPolicy, setResetPolicy] = useState<'never' | 'monthly'>('never');
+  // Права, которые задаёт группа (в этой форме их отдельных переключателей нет).
+  const [priorityAccess, setPriorityAccess] = useState(false);
+  const [fullAccess, setFullAccess] = useState(false);
+  // «Только приложение NoVPN»: без Amnezia и прокси, чужим приложениям — сообщение.
+  const [appOnly, setAppOnly] = useState(false);
+  // Что подставила группа — показываем под полем «Группа».
+  const [fromGroup, setFromGroup] = useState<string | null>(null);
 
   // Доступ
   const [allowedServers, setAllowedServers] = useState<string[]>(() => (firstServerId ? [firstServerId] : []));
@@ -74,6 +83,30 @@ export function UserCreate() {
 
   function changeCategory(v: string) {
     setCategory(v);
+    // Новый человек в группе сразу получает её правила: подставляем их в форму.
+    const g = (data?.groups ?? []).find((x) => x.name === v);
+    if (!g || !hasGroupRules(g.rules)) {
+      setFromGroup(null);
+      return;
+    }
+    const r = effectiveGroupRules(g.rules);
+    if (r.allowedServers) setAllowedServers([...r.allowedServers]);
+    if (r.allowedProtocols) setProtocols([...r.allowedProtocols]);
+    if (r.allowedProxies) setProxies([...r.allowedProxies]);
+    if (r.deviceLimit !== undefined) {
+      const dl = r.deviceLimit;
+      setDlMode(dl == null ? 'unlim' : dl === 1 ? '1' : dl === 10 ? '10' : 'custom');
+      if (dl != null && dl !== 1 && dl !== 10) setDlCustom(String(dl));
+    }
+    if (r.trafficLimitGb !== undefined) {
+      setTrafMode(r.trafficLimitGb == null ? 'unlim' : 'custom');
+      setTrafCustom(r.trafficLimitGb == null ? '' : String(r.trafficLimitGb));
+    }
+    setResetPolicy(r.resetPolicy ?? 'never');
+    setPriorityAccess(r.priorityAccess === true);
+    setFullAccess(r.fullAccess === true);
+    setAppOnly(r.appOnly === true);
+    setFromGroup(GROUP_RULE_KEYS.filter((k) => g.rules[k] !== undefined).map((k) => GROUP_RULE_LABELS[k]).join(', '));
   }
 
   function toggleProtocol(p: Protocol) {
@@ -94,7 +127,9 @@ export function UserCreate() {
   ];
 
   async function submit() {
-    const effProtocols = protocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg');
+    const effProtocols = appOnly
+      ? (['xray'] as Array<'xray' | 'amneziawg'>)
+      : protocols.filter((p): p is 'xray' | 'amneziawg' => p === 'xray' || p === 'amneziawg');
 
     if (!name.trim()) {
       setError('Укажите имя пользователя.');
@@ -134,7 +169,10 @@ export function UserCreate() {
       resetPolicy,
       allowedServers,
       allowedProtocols: effProtocols,
-      allowedProxies: proxies,
+      allowedProxies: appOnly ? [] : proxies,
+      priorityAccess,
+      fullAccess,
+      appOnly,
       // Пусто → код генерирует сервер. Иначе — свой 6-значный (уникальность на сервере).
       code: customCode.trim(),
       codeLoginEnabled,
@@ -162,8 +200,11 @@ export function UserCreate() {
         <Field label="Комментарий">
           <input className="input" placeholder="Виден только вам" value={comment} onChange={(e) => setComment(e.target.value)} />
         </Field>
-        <Field label="Категория" hint="можно выбрать из списка или задать свою (напр. «Церковь»)">
-          <CategoryPicker value={category} onChange={changeCategory} suggestions={[...CATEGORIES]} />
+        <Field
+          label="Группа"
+          hint={fromGroup ? `подставлены правила группы: ${fromGroup}` : 'можно выбрать из списка или задать свою (напр. «Церковь»); правила групп — в разделе «Группы»'}
+        >
+          <CategoryPicker value={category} onChange={changeCategory} suggestions={[...(data.groups ?? []).map((g) => g.name), ...CATEGORIES]} />
         </Field>
         <Field label="Теги">
           <input className="input" placeholder="vip, промо" value={tagsRaw} onChange={(e) => setTagsRaw(e.target.value)} />
@@ -279,16 +320,29 @@ export function UserCreate() {
           <span className="field-label">Разрешённые VPN-протоколы</span>
           <div className="chip-row">
             {protocolOptions.map((p) => (
-              <Chip key={p.key} label={p.label} active={protocols.includes(p.key)} onClick={() => toggleProtocol(p.key)} />
+              <Chip key={p.key} label={p.label} disabled={appOnly} active={appOnly ? p.key === 'xray' : protocols.includes(p.key)} onClick={() => toggleProtocol(p.key)} />
             ))}
           </div>
+        </div>
+
+        <div className="field">
+          <label className="row" style={{ gap: 10, alignItems: 'center', cursor: 'pointer', justifyContent: 'space-between' }}>
+            <span>
+              <span style={{ fontWeight: 600 }}>Только приложение NoVPN</span>
+              <span className="body small muted" style={{ display: 'block', marginTop: 2 }}>
+                Без Amnezia и прокси; Happ и другие чужие приложения получат вместо серверов сообщение
+                «Подключайтесь через приложение NoVPN». Для айфонов с Happ не включайте.
+              </span>
+            </span>
+            <Toggle on={appOnly} onChange={setAppOnly} ariaLabel="Только приложение NoVPN" />
+          </label>
         </div>
 
         <div className="field">
           <span className="field-label">Прокси (пользователь выдаст себе в кабинете)</span>
           <div className="chip-row">
             {proxyOptions.map((p) => (
-              <Chip key={p.key} label={p.label} active={proxies.includes(p.key)} onClick={() => toggleProxy(p.key)} />
+              <Chip key={p.key} label={p.label} disabled={appOnly} active={!appOnly && proxies.includes(p.key)} onClick={() => toggleProxy(p.key)} />
             ))}
           </div>
           <span className="small muted">

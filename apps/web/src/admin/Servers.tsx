@@ -272,6 +272,108 @@ function EndpointConfigPanel({ server }: { server: Server }) {
 
 /** Безопасный перевод сервера на вход по SSH-ключу: ставим ключ → тест-вход → только
  *  потом отключаем пароль (никогда не отключаем пароль до подтверждённого входа ключом). */
+/* Компоненты сервера на карточке: что стоит (✓/✗ по самопроверке) и «Доустановить» у того,
+   что не встало. 10.11.2026: HTTPS на «Франции 1» не выпустил сертификат при переносе, а
+   панель числила его установленным; доустановить можно было лишь из глубины «Изменить». */
+const COMP_CHECK_KEY: Record<string, string> = { xray: 'xray', amneziawg: 'awg', http: 'http', https: 'https', socks5: 'socks' };
+const COMP_LABEL: Record<string, string> = { xray: 'Xray', amneziawg: 'AmneziaWG', http: 'HTTP-прокси', https: 'HTTPS-прокси', socks5: 'SOCKS5-прокси' };
+const PROXY_COMPS = ['http', 'https', 'socks5'];
+
+function ComponentsRow({ server }: { server: Server }) {
+  const { showConfirm, showToast, reload } = useApp();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [step, setStep] = useState<string | null>(null);
+  const protos = server.protocols as string[];
+  if (!protos.length) return null;
+  const checks = server.installCheck?.checks ?? [];
+  const checkOf = (p: string) => checks.find((c) => c.key === COMP_CHECK_KEY[p]) ?? null;
+
+  const repairProxies = async (p: string) => {
+    setBusy(p);
+    try {
+      const r = await api.installServerProxies(server.id, { http: protos.includes('http'), https: protos.includes('https'), socks: protos.includes('socks5') });
+      await reload();
+      showToast(r.warning ?? `${COMP_LABEL[p]}: установлено`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Не удалось установить прокси');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const repairVpn = async (p: string) => {
+    setBusy(p);
+    setStep('Запуск установки…');
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    try {
+      await api.provisionServer(server.id, protos);
+      const started = Date.now();
+      for (;;) {
+        await sleep(4000);
+        if (Date.now() - started > 20 * 60 * 1000) throw new Error('Установка заняла слишком долго — проверьте сервер кнопкой «Проверить установку».');
+        const st = await api.provisionStatus(server.id);
+        if (st.message) setStep(st.message);
+        if (st.state === 'done' || st.state === 'error') {
+          await reload();
+          showToast(st.message || 'Установка завершена');
+          return;
+        }
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Ошибка установки');
+    } finally {
+      setBusy(null);
+      setStep(null);
+    }
+  };
+  const repair = (p: string) => {
+    const proxy = PROXY_COMPS.includes(p);
+    showConfirm({
+      title: `Доустановить ${COMP_LABEL[p]}?`,
+      text: proxy
+        ? `Панель заново поставит прокси на «${server.name}» (${protos.filter((x) => PROXY_COMPS.includes(x)).map((x) => COMP_LABEL[x]).join(', ')}) с теми же портами и логинами людей; работающие прокси на несколько секунд перезапустятся.` +
+          (p === 'https' ? ' Для HTTPS домен сервера должен уже указывать на этот сервер, а порт 80 — быть открыт снаружи.' : '')
+        : `Панель переустановит ПО «${server.name}» с сохранёнными ключами — выданные конфиги продолжат работать. Займёт несколько минут; на это время люди на этом сервере отключатся и подключатся сами.`,
+      confirmLabel: 'Доустановить',
+      onConfirm: () => void (proxy ? repairProxies(p) : repairVpn(p)),
+    });
+  };
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border-inner)', paddingTop: 10 }}>
+      <div className="eyebrow" style={{ marginBottom: 6 }}>Компоненты</div>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {protos.map((p) => {
+          const c = checkOf(p);
+          const bad = c ? !c.ok : false;
+          return (
+            <span
+              key={p}
+              className="badge"
+              title={c ? `${c.ok ? 'работает' : 'не работает'}: ${c.detail}` : 'ещё не проверялся — «Проверить установку» в «Изменить»'}
+              style={{
+                background: bad ? 'var(--warn-bg, #fff3cd)' : 'var(--surface-btn-2, #2a2a2a)',
+                color: bad ? 'var(--warn-fg, #8a5a00)' : c ? 'var(--ok-fg, #2a9d3c)' : 'var(--text-muted)',
+              }}
+            >
+              {c ? (c.ok ? '✓' : '✗') : '·'} {COMP_LABEL[p] ?? PROTOCOL_LABELS[p as keyof typeof PROTOCOL_LABELS] ?? p}
+            </span>
+          );
+        })}
+      </div>
+      {protos.filter((p) => checkOf(p)?.ok === false).map((p) => (
+        <div key={p} className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span className="small" style={{ color: 'var(--amber-fg)', flex: '1 1 260px' }}>
+            {COMP_LABEL[p]} не работает: {checkOf(p)!.detail}
+          </span>
+          <button className="btn btn-secondary btn-sm" disabled={!!busy || server.detached} onClick={() => repair(p)}>
+            {busy === p ? (step ?? 'Устанавливаем… (до нескольких минут)') : 'Доустановить'}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* Итог самопроверки установки + проверка по кнопке: что реально работает на сервере.
    02.11.2026 установка Франции встала наполовину, а сервер в списке выглядел исправным. */
 function InstallCheckView({ server, disabled }: { server: Server; disabled: boolean }) {
@@ -1208,9 +1310,6 @@ export function Servers() {
             const endpointV = serverEndpointView(s);
             const dotColor = s.detached ? 'var(--text-faint, #888)' : s.agent === 'online' ? 'var(--green-dot)' : 'var(--red-fg)';
             const title = s.country ? `${s.name} · ${s.country}` : s.name;
-            const protocols = s.protocols.length
-              ? s.protocols.map((p) => PROTOCOL_LABELS[p]).join(', ')
-              : '—';
 
             return (
               <div key={s.id} className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1242,11 +1341,13 @@ export function Servers() {
                 <div style={{ display: 'grid', gridTemplateColumns: statCols, gap: 12 }}>
                   <Metric label="Связь с сервером" value={agentV.label} color={agentV.fg} />
                   <Metric label="VPN-адрес" value={endpointV.label} color={endpointV.fg} />
-                  <Metric label="Протоколы" value={protocols} />
+
                   <Metric label="Трафик" value={gb(s.trafficGb)} />
                   <Metric label="Пользователи" value={String(s.users)} />
                   <Metric label="Синхронизация" value={rel(s.lastSyncAt)} />
                 </div>
+
+                <ComponentsRow server={s} />
 
                 {/* Сводка маршрутизации: видна сразу, без захода в «Изменить» —
                     именно эти настройки раньше терялись в глубине формы. */}

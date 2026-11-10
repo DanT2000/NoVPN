@@ -1256,7 +1256,7 @@ PersistentKeepalive = 25`;
 export async function sshInstallProxies(
   server: Server,
   opts: { http?: boolean; https?: boolean; socks?: boolean; httpPort?: number; socksPort?: number; httpsPort?: number },
-): Promise<{ user: string; pass: string; httpPort: number | null; httpsPort: number | null; socksPort: number | null; httpsHost: string | null }> {
+): Promise<{ user: string; pass: string; httpPort: number | null; httpsPort: number | null; socksPort: number | null; httpsHost: string | null; httpsError: string | null }> {
   const domain = server.host;
   // host задаёт админ — прежде чем подставлять в install-скрипт (DOMAIN=…, certbot -d),
   // проверяем, что это валидный хост (буквы/цифры/дефис/точки), а не shell-инъекция.
@@ -1367,6 +1367,8 @@ SVC2
   HTTPS_PUB="$HTTPS_PORT"
 else
   echo "HTTPS_SKIP: сертификат для $DOMAIN не выпущен (домен должен указывать на этот сервер и порт 80 открыт) — HTTPS-прокси пропущен, HTTP/SOCKS работают"
+  # Причина от Let's Encrypt (напр. «Timeout during connect») — панель покажет её в карточке.
+  echo "HTTPS_ERR=$(grep -m1 -oE 'Detail: .*' /tmp/cb.log 2>/dev/null | cut -c9-240 | tr -d '\r\n')"
 fi
 `
     : 'true'
@@ -1384,7 +1386,9 @@ echo "HTTPS_PORT=${wantHttps ? '$HTTPS_PUB' : ''}"`;
     const v = grab(out, k);
     return v ? Number(v) : null;
   };
-  return { user, pass, httpPort: num('HTTP_PORT'), socksPort: num('SOCKS_PORT'), httpsPort: num('HTTPS_PORT'), httpsHost: wantHttps ? domain : null };
+  // HTTPS просили, а он не встал (нет сертификата) — честно говорим почему, а не молчим.
+  const httpsError = wantHttps && !num('HTTPS_PORT') ? grab(out, 'HTTPS_ERR') || 'сертификат не выпущен' : null;
+  return { user, pass, httpPort: num('HTTP_PORT'), socksPort: num('SOCKS_PORT'), httpsPort: num('HTTPS_PORT'), httpsHost: wantHttps ? domain : null, httpsError };
 }
 
 // Сбор статистики AmneziaWG: rx/tx и время последнего рукопожатия по каждому пиру.

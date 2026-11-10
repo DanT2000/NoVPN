@@ -2,8 +2,8 @@
 // выпуск конфигов, устройства, история.
 
 import { useState } from 'react';
-import type { Device, IssueDeviceResult, Protocol, ProxyType, Server, SubClient, User } from '@novpn/shared';
-import { PROTOCOL_LABELS } from '@novpn/shared';
+import type { Device, GroupRules, IssueDeviceResult, Protocol, ProxyType, Server, SubClient, User } from '@novpn/shared';
+import { GROUP_RULE_LABELS, PROTOCOL_LABELS, effectiveGroupRules, groupDiff, hasGroupRules } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { api } from '../api';
 import { CategoryPicker, Chip, ConfigBox, Dot, EmptyState, Field, Panel, Pill, ProgressBar, ScreenHeader, Toggle } from '../components/ui';
@@ -128,7 +128,34 @@ function UserCardInner({ user }: { user: User }) {
   // «Полный доступ (без защиты)»: сервер не режет человеку российское, полный профиль —
   // в любом приложении. Применяется на серверах в фоне после сохранения.
   const [fullAccess, setFullAccess] = useState(user.fullAccess === true);
+  // «Только приложение NoVPN»: без Amnezia и прокси, чужим приложениям — только сообщение.
+  const [appOnly, setAppOnly] = useState(user.appOnly === true);
   const [savingProfile, setSavingProfile] = useState(false);
+  // Правила группы человека (если у группы они есть) — для подстановки и пометки отличий.
+  const groupRulesOf = (name: string): GroupRules | null => {
+    const g = (data?.groups ?? []).find((x) => x.name === name);
+    return g && hasGroupRules(g.rules) ? g.rules : null;
+  };
+  /** Подставить правила группы в форму (сохраняет админ сам — кнопкой «Сохранить профиль»). */
+  const fillFromRules = (raw: GroupRules) => {
+    const r = effectiveGroupRules(raw);
+    if (r.allowedServers) setAllowedServers([...r.allowedServers]);
+    if (r.allowedProtocols) setProtocols([...r.allowedProtocols]);
+    if (r.allowedProxies) setProxies([...r.allowedProxies]);
+    if (r.priorityAccess !== undefined) setPriorityAccess(r.priorityAccess);
+    if (r.fullAccess !== undefined) setFullAccess(r.fullAccess);
+    if (r.appOnly !== undefined) setAppOnly(r.appOnly);
+    if (r.deviceLimit !== undefined) {
+      const v = r.deviceLimit;
+      setDlMode(v == null ? 'unlim' : v === 1 ? '1' : v === 10 ? '10' : 'custom');
+      if (v != null && v !== 1 && v !== 10) setDlCustom(String(v));
+    }
+    if (r.trafficLimitGb !== undefined) {
+      setTrafMode(r.trafficLimitGb == null ? 'unlim' : 'custom');
+      setTrafCustom(r.trafficLimitGb == null ? '' : String(r.trafficLimitGb));
+    }
+    if (r.resetPolicy) setResetPolicy(r.resetPolicy);
+  };
 
   // ── Личная ссылка ──
   // Домен берём из настроек, а если не задан — из адресной строки, чтобы
@@ -258,6 +285,20 @@ function UserCardInner({ user }: { user: User }) {
   else if (new Date(user.expiresAt).getTime() < Date.now()) expLine = `Срок истёк ${dateShort(user.expiresAt)}`;
   else expLine = `Осталось ${daysLeft(user.expiresAt) ?? 0} дн · до ${dateShort(user.expiresAt)}`;
 
+  const myRules = groupRulesOf(user.category ?? '');
+  const myDiff = myRules ? groupDiff(user, myRules) : [];
+  const groupNote = !myRules ? (
+    'можно выбрать из списка или задать свою; правила группы — в разделе «Группы»'
+  ) : myDiff.length ? (
+    <span>
+      <span style={{ color: 'var(--amber-fg)' }}>отличается от группы: {myDiff.map((k) => GROUP_RULE_LABELS[k]).join(', ')}</span>{' '}
+      <button type="button" className="btn btn-outline btn-sm" style={{ padding: '2px 8px', marginLeft: 4 }} onClick={() => { fillFromRules(myRules); showToast('Подставлены правила группы — сохраните профиль'); }}>
+        Как в группе
+      </button>
+    </span>
+  ) : (
+    'как в группе'
+  );
   const issuable = issuableFor(issServer);
   const effIssProto = issuable.includes(issProto) ? issProto : issuable[0];
 
@@ -267,6 +308,12 @@ function UserCardInner({ user }: { user: User }) {
   function changeCategory(v: string) {
     setCategory(v);
     if (v !== 'Админ') setProtocols((prev) => prev.filter((p) => p === 'xray' || p === 'amneziawg'));
+    // Перевели в группу с правилами — сразу подставляем их (сохранить — «Сохранить профиль»).
+    const rules = v !== (user.category ?? '') ? groupRulesOf(v) : null;
+    if (rules) {
+      fillFromRules(rules);
+      showToast(`Подставлены правила группы «${v}» — проверьте и сохраните профиль`);
+    }
   }
   function toggleProtocol(p: Protocol) {
     setProtocols((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
@@ -277,8 +324,8 @@ function UserCardInner({ user }: { user: User }) {
       showToast('Выберите хотя бы один сервер');
       return;
     }
-    const eff = protocols.filter((p) => (p === 'xray' || p === 'amneziawg') && installed.includes(p));
-    const effProxies = proxies.filter((p) => installed.includes(p));
+    const eff = appOnly ? (['xray'] as Protocol[]) : protocols.filter((p) => (p === 'xray' || p === 'amneziawg') && installed.includes(p));
+    const effProxies = appOnly ? [] : proxies.filter((p) => installed.includes(p));
     if (eff.length === 0 && effProxies.length === 0) {
       showToast('Выберите хотя бы один установленный протокол или прокси');
       return;
@@ -300,6 +347,7 @@ function UserCardInner({ user }: { user: User }) {
         allowedProxies: effProxies,
         priorityAccess,
         fullAccess,
+        appOnly,
       });
       showToast(
         fullAccess !== (user.fullAccess === true) && data?.settings.ruGuard
@@ -601,11 +649,11 @@ function UserCardInner({ user }: { user: User }) {
           <Field label="Имя">
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
           </Field>
-          <Field label="Категория" hint="можно менять из списка или задать свою">
+          <Field label="Группа" hint={groupNote}>
             <CategoryPicker
               value={category}
               onChange={changeCategory}
-              suggestions={[...CATEGORIES, ...(data?.users.map((u) => u.category ?? '') ?? [])]}
+              suggestions={[...(data?.groups ?? []).map((g) => g.name), ...CATEGORIES, ...(data?.users.map((u) => u.category ?? '') ?? [])]}
             />
           </Field>
           <Field label="Комментарий">
@@ -723,7 +771,13 @@ function UserCardInner({ user }: { user: User }) {
           ) : (
             <div className="chip-row">
               {protocolOptions.map((p) => (
-                <Chip key={p.key} label={p.label} active={protocols.includes(p.key)} onClick={() => toggleProtocol(p.key)} />
+                <Chip
+                  key={p.key}
+                  label={p.label}
+                  disabled={appOnly}
+                  active={appOnly ? p.key === 'xray' : protocols.includes(p.key)}
+                  onClick={() => toggleProtocol(p.key)}
+                />
               ))}
             </div>
           )}
@@ -733,10 +787,10 @@ function UserCardInner({ user }: { user: User }) {
             <span className="field-label">Прокси (пользователь выдаст себе в кабинете)</span>
             <div className="chip-row">
               {proxyOptions.map((p) => (
-                <Chip key={p.key} label={p.label} active={proxies.includes(p.key)} onClick={() => toggleProxy(p.key)} />
+                <Chip key={p.key} label={p.label} disabled={appOnly} active={!appOnly && proxies.includes(p.key)} onClick={() => toggleProxy(p.key)} />
               ))}
             </div>
-            <span className="small muted">Каждому пользователю выдаётся отдельный логин.</span>
+            <span className="small muted">{appOnly ? 'Недоступно: включено «Только приложение NoVPN».' : 'Каждому пользователю выдаётся отдельный логин.'}</span>
           </div>
         ) : null}
 
@@ -766,6 +820,21 @@ function UserCardInner({ user }: { user: User }) {
               </span>
             </span>
             <Toggle on={fullAccess} onChange={setFullAccess} ariaLabel="Полный доступ без защиты" />
+          </label>
+        </div>
+
+        {/* Только приложение NoVPN — без Amnezia, прокси и чужих приложений. */}
+        <div className="field" style={{ marginTop: 4 }}>
+          <label className="row" style={{ gap: 10, alignItems: 'center', cursor: 'pointer', justifyContent: 'space-between' }}>
+            <span>
+              <span style={{ fontWeight: 600 }}>Только приложение NoVPN</span>
+              <span className="body small muted" style={{ display: 'block', marginTop: 2 }}>
+                Amnezia и прокси не выдаются (выданные снимутся при сохранении). Happ и другие чужие
+                приложения вместо серверов получат сообщение «Подключайтесь через приложение NoVPN».
+                Тем, у кого айфон и Happ, не включайте.
+              </span>
+            </span>
+            <Toggle on={appOnly} onChange={setAppOnly} ariaLabel="Только приложение NoVPN" />
           </label>
         </div>
       </Panel>

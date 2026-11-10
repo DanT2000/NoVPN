@@ -25,6 +25,9 @@ import type {
   TestTelegramResult,
   User,
   ServerSelfTest,
+  GroupRules,
+  UserGroup,
+  GroupApplyPreview,
 } from '@novpn/shared';
 import type {
   AddServerInput,
@@ -141,13 +144,20 @@ export const httpApi: ApiClient = {
   listAnnouncements: () => req<{ announcements: Announcement[] }>('GET', '/api/admin/announcements'),
   createAnnouncement: (input: AnnouncementInput) => req<Announcement>('POST', '/api/admin/announcements', input),
   deleteAnnouncement: (id) => req<{ ok: boolean }>('DELETE', `/api/admin/announcements/${id}`),
+  listGroups: () => req<{ groups: UserGroup[] }>('GET', '/api/admin/groups'),
+  createGroup: (name: string, rules?: GroupRules) => req<UserGroup>('POST', '/api/admin/groups', { name, rules }),
+  saveGroup: (name: string, patch: { rules?: GroupRules; newName?: string }) => req<UserGroup>('PUT', `/api/admin/groups/${encodeURIComponent(name)}`, patch),
+  deleteGroup: (name: string) => req<{ ok: boolean }>('DELETE', `/api/admin/groups/${encodeURIComponent(name)}`),
+  previewGroup: (name: string, rules?: GroupRules) => req<GroupApplyPreview>('POST', `/api/admin/groups/${encodeURIComponent(name)}/preview`, { rules }),
+  applyGroup: (name: string, rules?: GroupRules) =>
+    req<{ ok: boolean; changed: number; revoked: number; failed: string[]; group: UserGroup }>('POST', `/api/admin/groups/${encodeURIComponent(name)}/apply`, { rules }),
 
   testServerConnection: (input: AddServerInput) =>
     req<TestServerConnectionResult>('POST', '/api/admin/servers/test-ssh', input),
   addServer: (input: AddServerInput) => req<Server>('POST', '/api/admin/servers', input),
   editServer: (id: string, input: EditServerInput) => req<Server>('PATCH', `/api/admin/servers/${id}`, input),
   installServerProxies: (id: string, types: { http: boolean; https: boolean; socks: boolean }) =>
-    req<{ ok: boolean; proxy: ServerProxyConfig; server: Server }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
+    req<{ ok: boolean; proxy: ServerProxyConfig; server: Server; warning?: string }>('POST', `/api/admin/servers/${id}/install-proxies`, types),
   speedtestInstall: (id: string, allow?: string[], port?: number) =>
     req<{ ok: boolean; server: Server }>('POST', `/api/admin/servers/${id}/speedtest/install`, { allow: allow ?? [], port: port ?? null }),
   speedtestSelf: (id: string) =>
