@@ -134,7 +134,8 @@ function splitHostPort(hp: string): { host: string; port: number } {
 function parseSs(line: string): BackupNode | null {
   try {
     const hash = line.indexOf('#');
-    const name = hash >= 0 ? decodeURIComponent(line.slice(hash + 1)) : '';
+    // Терпимо, как у vless/trojan: одиночный «%» в имени («50%off») ронял весь узел.
+    const name = hash >= 0 ? tryDecodeComponent(line.slice(hash + 1)) : '';
     let body = line.slice('ss://'.length, hash >= 0 ? hash : undefined);
     const q = body.indexOf('?');
     if (q >= 0) body = body.slice(0, q);
@@ -170,7 +171,7 @@ function parseLine(raw: string): BackupNode | null {
 // готовых Xray-конфигов, у каждого remarks (имя) и outbounds с прокси. Собираем
 // из них стандартные vless://…/vmess://… ссылки — тот же формат, что понимает
 // клиент. Реконструируем то, что реально используют: vless (reality/tls/none)
-// поверх tcp/ws/grpc, плюс vmess/trojan/ss.
+// поверх tcp/ws/grpc/xhttp/httpupgrade, плюс vmess/trojan/ss.
 
 function q(params: Array<[string, string | undefined | null]>): string {
   const parts = params
@@ -215,8 +216,57 @@ function streamParams(ss: any): Array<[string, string | undefined]> {
     const h = ss?.httpSettings ?? {};
     out.push(['path', h.path]);
     if (Array.isArray(h.host) && h.host.length) out.push(['host', h.host.join(',')]);
+  } else if (net === 'xhttp' || net === 'splithttp') {
+    // Без пути, хоста и режима клиент стучится в «/», а сервер ждёт свой путь — узел
+    // резерва не подключится никогда. 30.09.2026 клиенты научились брать их из ссылки,
+    // но ссылку из Xray-JSON собирает панель, и до клиента они не доходили.
+    const x = ss?.xhttpSettings ?? ss?.splithttpSettings ?? {};
+    out.push(['path', x.path], ['host', x.host ?? x.headers?.Host], ['mode', x.mode]);
+    const extra = xhttpExtra(x);
+    if (extra) out.push(['extra', extra]);
+  } else if (net === 'httpupgrade') {
+    const h = ss?.httpupgradeSettings ?? {};
+    out.push(['path', h.path], ['host', h.host ?? h.headers?.Host]);
   }
   return out;
+}
+
+/** `extra` share-ссылки XHTTP (формат v2rayN) — JSON строкой. Xray, получив extra,
+ *  берёт из исходных настроек только path/host/mode, а остальное — из extra. Поэтому:
+ *  есть extra у провайдера — отдаём его как есть; нет — собираем его из прочих полей
+ *  (xPaddingBytes, noGRPCHeader, xmux…), иначе они бы молча пропали. */
+function xhttpExtra(x: any): string | undefined {
+  if (x?.extra && typeof x.extra === 'object') {
+    return Object.keys(x.extra).length ? JSON.stringify(x.extra) : undefined;
+  }
+  const rest: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(x ?? {})) {
+    if (k === 'path' || k === 'host' || k === 'mode' || k === 'extra' || v === undefined || v === null) continue;
+    if (k === 'headers' && v && typeof v === 'object') {
+      // Host из заголовков уже ушёл в host — дублировать его в extra незачем.
+      const h = { ...(v as Record<string, unknown>) };
+      delete h.Host;
+      if (Object.keys(h).length) rest.headers = h;
+      continue;
+    }
+    rest[k] = v;
+  }
+  return Object.keys(rest).length ? JSON.stringify(rest) : undefined;
+}
+
+/** path/host транспорта — для vmess, у которого они лежат в JSON ссылки, а не в query. */
+function transportPathHost(ss: any): { path: string; host: string } {
+  const net = ss?.network ?? 'tcp';
+  const str = (v: unknown) => (typeof v === 'string' ? v : Array.isArray(v) ? v.join(',') : '');
+  if (net === 'ws') return { path: str(ss?.wsSettings?.path), host: str(ss?.wsSettings?.headers?.Host ?? ss?.wsSettings?.host) };
+  if (net === 'xhttp' || net === 'splithttp') {
+    const x = ss?.xhttpSettings ?? ss?.splithttpSettings ?? {};
+    return { path: str(x.path), host: str(x.host ?? x.headers?.Host) };
+  }
+  if (net === 'httpupgrade') return { path: str(ss?.httpupgradeSettings?.path), host: str(ss?.httpupgradeSettings?.host ?? ss?.httpupgradeSettings?.headers?.Host) };
+  if (net === 'http' || net === 'h2') return { path: str(ss?.httpSettings?.path), host: str(ss?.httpSettings?.host) };
+  if (net === 'grpc') return { path: str(ss?.grpcSettings?.serviceName), host: '' };
+  return { path: '', host: str(ss?.tcpSettings?.header?.request?.headers?.Host) };
 }
 
 function outboundToLink(ob: any, name: string): BackupNode | null {
@@ -239,8 +289,9 @@ function outboundToLink(ob: any, name: string): BackupNode | null {
         const link = `vless://${id}@${host}:${port}${q(params)}#${encodeURIComponent(name)}`;
         return { name: nameOr(name, host, port), link, host, port, protocol: 'vless' };
       }
-      // vmess: собираем классический vmess://base64(json).
-      const w = ss?.wsSettings ?? {};
+      // vmess: собираем классический vmess://base64(json). path/host — по транспорту
+      // (раньше только из wsSettings: у xhttp/grpc/httpupgrade они терялись).
+      const w = transportPathHost(ss);
       const t = ss?.tlsSettings ?? {};
       const vm = {
         v: '2',
@@ -252,8 +303,8 @@ function outboundToLink(ob: any, name: string): BackupNode | null {
         scy: user?.security ?? 'auto',
         net: ss?.network ?? 'tcp',
         type: ss?.tcpSettings?.header?.type ?? 'none',
-        host: w.headers?.Host ?? '',
-        path: w.path ?? '',
+        host: w.host,
+        path: w.path,
         tls: ss?.security === 'tls' ? 'tls' : '',
         sni: t.serverName ?? '',
       };
@@ -290,17 +341,33 @@ function outboundToLink(ob: any, name: string): BackupNode | null {
 function parseXrayJson(body: string): BackupNode[] {
   const data = JSON.parse(body);
   const configs: any[] = Array.isArray(data) ? data : [data];
-  const out: BackupNode[] = [];
+  const single: BackupNode[] = [];
+  const multi: BackupNode[] = [];
   for (const cfg of configs) {
-    const obs: any[] = cfg?.outbounds ?? [];
-    // Берём первый прокси-outbound (freedom/blackhole пропускаем).
-    const proxy = obs.find((o) => ['vless', 'vmess', 'trojan', 'shadowsocks'].includes(o?.protocol));
-    if (!proxy) continue;
-    const name = String(cfg?.remarks ?? cfg?.tag ?? '').trim();
-    const node = outboundToLink(proxy, name);
-    if (node) out.push(node);
+    const obs: any[] = Array.isArray(cfg?.outbounds) ? cfg.outbounds : [];
+    // Звенья цепочки (на них ссылается другой outbound через dialerProxy/proxySettings)
+    // отдельными серверами не считаем: это промежуточный хоп, а не выход.
+    const hops = new Set<string>();
+    for (const o of obs) {
+      const via = o?.streamSettings?.sockopt?.dialerProxy ?? o?.proxySettings?.tag;
+      if (typeof via === 'string' && via) hops.add(via);
+    }
+    // ВСЕ прокси-outbound'ы (freedom/blackhole пропускаем): конфиг с балансировщиком
+    // держит несколько серверов, а раньше брался только первый — остальные терялись.
+    const proxies = obs.filter((o) => ['vless', 'vmess', 'trojan', 'shadowsocks'].includes(o?.protocol) && !hops.has(o?.tag));
+    if (!proxies.length) continue;
+    const remarks = String(cfg?.remarks ?? cfg?.tag ?? '').trim();
+    proxies.forEach((proxy, i) => {
+      // Несколько серверов в одном конфиге — различаем их тегом, иначе имена совпадут.
+      const suffix = String(proxy?.tag ?? '').trim() || `#${i + 1}`;
+      const name = proxies.length > 1 ? [remarks, suffix].filter(Boolean).join(' · ') : remarks;
+      const node = outboundToLink(proxy, name);
+      if (node) (proxies.length > 1 ? multi : single).push(node);
+    });
   }
-  return out;
+  // Одиночные конфиги — первыми: если провайдер отдаёт и «Авто»-конфиг со всеми
+  // серверами, и каждый сервер отдельно, при дедупе остаются понятные имена отдельных.
+  return [...single, ...multi];
 }
 
 /** Похоже ли тело на Xray-JSON (массив конфигов или конфиг с outbounds). */
@@ -329,8 +396,9 @@ function parseClash(body: string): BackupNode[] {
       const proto = (['vless', 'vmess', 'trojan', 'ss'] as const).find((p) => p === cur.type) ?? 'unknown';
       out.push({
         name: nameOr(cur.name, cur.server, cur.port),
-        // Своей ссылки у Clash-узла нет — храним минимальный маркер, клиент возьмёт
-        // из общего конфига. Для пула важны host/port/имя.
+        // Своей ссылки у Clash-узла нет, а клиенту уходят ТОЛЬКО ссылки — такой узел
+        // годится лишь для показа в админке. backupSync ответ без единой ссылки
+        // считает ошибкой и рабочий пул им не затирает.
         link: '',
         host: cur.server,
         port: clampPort(cur.port),
@@ -391,12 +459,33 @@ export function parseSubscription(body: string): ParsedSub {
   return { format: wasBase64 ? 'base64' : nodes.length ? 'plain' : 'unknown', nodes: dedupe(nodes) };
 }
 
-/** Убрать точные повторы по (protocol, host, port). */
+/** Ключ точного повтора: ссылка без #имени (у vmess — JSON без ps). Один host:port —
+ *  ещё не повтор: на одном адресе живут разные конфиги (варианты SNI под белые списки
+ *  разных операторов, CDN-ws с разным path/Host, reality и xhttp на одном 443), и
+ *  прежний ключ protocol|host|port оставлял только первый — нужный оператору
+ *  вариант мог молча пропасть. Одинаковые имена клиенты переименуют сами. */
+function dedupeKey(n: BackupNode): string {
+  // У Clash-узла ссылки нет — различаем ещё и по имени, чтобы не схлопнуть разные прокси.
+  if (!n.link) return `${n.protocol}|${n.host}|${n.port}|${n.name}`;
+  if (n.link.startsWith('vmess://')) {
+    try {
+      const j = JSON.parse(b64decode(n.link.slice('vmess://'.length))) as Record<string, unknown>;
+      delete j.ps;
+      return 'vmess://' + JSON.stringify(Object.keys(j).sort().map((k) => [k, j[k]]));
+    } catch {
+      /* не JSON — сравниваем как есть */
+    }
+  }
+  const hash = n.link.indexOf('#');
+  return hash >= 0 ? n.link.slice(0, hash) : n.link;
+}
+
+/** Убрать точные повторы (см. dedupeKey). */
 function dedupe(nodes: BackupNode[]): BackupNode[] {
   const seen = new Set<string>();
   const out: BackupNode[] = [];
   for (const n of nodes) {
-    const key = `${n.protocol}|${n.host}|${n.port}`;
+    const key = dedupeKey(n);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(n);

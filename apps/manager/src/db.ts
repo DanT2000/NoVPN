@@ -879,3 +879,17 @@ export function setSetting(key: string, value: unknown): void {
     JSON.stringify(value),
   );
 }
+
+// 1.7.1: разбор Xray-JSON резервных подписок исправлен — берутся ВСЕ серверы балансировщика
+// и настройки xhttp. Провайдер на условный запрос отвечает 304, и панель старый, неполный
+// список не пересобрала бы, пока у него что-нибудь не поменяется. Один раз забываем etag —
+// следующий опрос заберёт подписку целиком и разберёт заново.
+try {
+  if (getSetting<number>('backup_reparse', 0) < 2) {
+    const n = db.prepare('UPDATE backup_subscriptions SET etag = NULL, last_modified = NULL').run().changes;
+    setSetting('backup_reparse', 2);
+    if (n) console.log(`[migrate] резервные подписки: заберём заново и разберём новым разбором (${n})`);
+  }
+} catch {
+  /* таблицы ещё нет */
+}

@@ -38,9 +38,26 @@ test('base64 от списка распознаётся и раскодируе�
   assert.equal(r.nodes[0].host, 'nl1.example.com');
 });
 
-test('дедуп по protocol|host|port', () => {
-  const r = parseSubscription([vless, vless].join('\n'));
+test('дедуп: точный повтор (в том числе с другим #именем) схлопывается', () => {
+  const r = parseSubscription([vless, vless, vless.replace(/#.*$/, '#Другое имя')].join('\n'));
   assert.equal(r.nodes.length, 1);
+  const vm2 = 'vmess://' + Buffer.from(JSON.stringify({ ...vmessJson, ps: 'Germany 2' })).toString('base64');
+  assert.equal(parseSubscription([vmess, vm2].join('\n')).nodes.length, 1, 'vmess: тот же JSON без ps — повтор');
+});
+
+// Подписка под белые списки: один сервер с разными SNI (у операторов в белом списке
+// разные домены), CDN-ws с разным path/Host на одном адресе. Прежний ключ
+// protocol|host|port оставлял только первый вариант.
+test('дедуп: разные конфиги на одном host:port — разные узлы', () => {
+  const lines = [
+    'vless://u1@1.2.3.4:443?type=tcp&security=reality&sni=vk.com&pbk=P&sid=1#WL-vk',
+    'vless://u1@1.2.3.4:443?type=tcp&security=reality&sni=ya.ru&pbk=P&sid=1#WL-ya',
+    'vless://u1@1.2.3.4:443?type=tcp&security=reality&sni=gosuslugi.ru&pbk=P&sid=1#WL-gu',
+    'vless://u2@cdn.example.com:443?type=ws&security=tls&path=%2Fnl&host=nl.example.com#NL',
+    'vless://u3@cdn.example.com:443?type=ws&security=tls&path=%2Fde&host=de.example.com#DE',
+  ];
+  const r = parseSubscription(lines.join('\n'));
+  assert.deepEqual(r.nodes.map((n) => n.name), ['WL-vk', 'WL-ya', 'WL-gu', 'NL', 'DE']);
 });
 
 test('пустое и мусор не роняют парсер', () => {
@@ -144,4 +161,104 @@ test('ss:// без порта (внешний userinfo): host корректен
   assert.ok(sh);
   assert.equal(sh!.host, 'ss.example.com');
   assert.equal(sh!.port, 443);
+});
+
+test('ss:// с одиночным «%» в имени не теряется', () => {
+  const line = 'ss://' + Buffer.from('aes-256-gcm:pass').toString('base64') + '@1.2.3.4:8388#50%off';
+  const sh = parseSubscription(line).nodes.find((n) => n.protocol === 'ss');
+  assert.ok(sh, 'узел ss не должен выпадать из-за имени');
+  assert.equal(sh!.host, '1.2.3.4');
+  assert.equal(sh!.port, 8388);
+  assert.equal(sh!.name, '50%off');
+});
+
+// У владельца реально работает резерв с XHTTP-серверами. Провайдер с Xray-JSON (формат
+// v2rayN): ссылку собирает панель, и без path/host/mode клиент стучится в «/» — сервер,
+// который ждёт свой путь, соединение отбивает.
+test('Xray-JSON: XHTTP/splithttp/httpupgrade — path, host, mode и extra доходят до ссылки', () => {
+  const xhttp = (extra: Record<string, unknown>) => ({
+    remarks: 'NL xhttp',
+    outbounds: [
+      {
+        protocol: 'vless',
+        settings: { vnext: [{ address: 'nl.example.com', port: 443, users: [{ id: 'u1', encryption: 'none' }] }] },
+        streamSettings: {
+          network: 'xhttp',
+          security: 'reality',
+          realitySettings: { serverName: 'www.google.com', fingerprint: 'chrome', publicKey: 'PBK', shortId: 'ab' },
+          xhttpSettings: { path: '/secret', host: 'cdn.example.com', mode: 'stream-one', ...extra },
+        },
+      },
+    ],
+  });
+  const r = parseSubscription(JSON.stringify([xhttp({ extra: { xPaddingBytes: '100-1000', noGRPCHeader: true } })]));
+  assert.equal(r.format, 'xray-json');
+  const u = new URL(r.nodes[0]!.link);
+  assert.equal(u.searchParams.get('type'), 'xhttp');
+  assert.equal(u.searchParams.get('path'), '/secret');
+  assert.equal(u.searchParams.get('host'), 'cdn.example.com');
+  assert.equal(u.searchParams.get('mode'), 'stream-one');
+  assert.deepEqual(JSON.parse(u.searchParams.get('extra')!), { xPaddingBytes: '100-1000', noGRPCHeader: true });
+  assert.equal(u.searchParams.get('pbk'), 'PBK');
+
+  // extra нет, но поля лежат прямо в xhttpSettings — Xray их применяет, значит и ссылка
+  // обязана их нести (в extra, как у v2rayN).
+  const flat = new URL(parseSubscription(JSON.stringify(xhttp({ xPaddingBytes: '1-2' }))).nodes[0]!.link);
+  assert.deepEqual(JSON.parse(flat.searchParams.get('extra')!), { xPaddingBytes: '1-2' });
+  // Голые path/host/mode — без лишнего extra.
+  const bare = new URL(parseSubscription(JSON.stringify(xhttp({}))).nodes[0]!.link);
+  assert.equal(bare.searchParams.get('extra'), null);
+
+  // Прежнее имя транспорта (splithttp) и httpupgrade.
+  const legacy = JSON.parse(JSON.stringify(xhttp({})));
+  legacy.outbounds[0].streamSettings.network = 'splithttp';
+  legacy.outbounds[0].streamSettings.splithttpSettings = legacy.outbounds[0].streamSettings.xhttpSettings;
+  delete legacy.outbounds[0].streamSettings.xhttpSettings;
+  const sh = new URL(parseSubscription(JSON.stringify(legacy)).nodes[0]!.link);
+  assert.equal(sh.searchParams.get('path'), '/secret');
+  assert.equal(sh.searchParams.get('mode'), 'stream-one');
+  const hu = JSON.parse(JSON.stringify(xhttp({})));
+  hu.outbounds[0].streamSettings = { network: 'httpupgrade', security: 'tls', tlsSettings: { serverName: 'hu.example.com' }, httpupgradeSettings: { path: '/up', host: 'hu.example.com' } };
+  const hl = new URL(parseSubscription(JSON.stringify(hu)).nodes[0]!.link);
+  assert.equal(hl.searchParams.get('path'), '/up');
+  assert.equal(hl.searchParams.get('host'), 'hu.example.com');
+
+  // vmess поверх xhttp: path/host в JSON ссылки (раньше брались только из wsSettings).
+  const vm = JSON.parse(JSON.stringify(xhttp({})));
+  vm.outbounds[0].protocol = 'vmess';
+  vm.outbounds[0].streamSettings.security = 'none';
+  const vmLink = parseSubscription(JSON.stringify(vm)).nodes[0]!.link;
+  const vmBody = JSON.parse(Buffer.from(vmLink.slice('vmess://'.length), 'base64').toString('utf8'));
+  assert.equal(vmBody.path, '/secret');
+  assert.equal(vmBody.host, 'cdn.example.com');
+});
+
+// Конфиг с балансировщиком держит несколько серверов, раньше брался только первый.
+test('Xray-JSON: все прокси-outbound одного конфига, звено цепочки — не сервер', () => {
+  const ob = (tag: string, host: string, extra: Record<string, unknown> = {}) => ({
+    tag,
+    protocol: 'vless',
+    settings: { vnext: [{ address: host, port: 443, users: [{ id: 'u', encryption: 'none' }] }] },
+    streamSettings: { network: 'tcp', security: 'reality', realitySettings: { serverName: 'x', publicKey: 'P', shortId: '1' } },
+    ...extra,
+  });
+  const cfg = {
+    remarks: 'Auto',
+    outbounds: [
+      ob('proxy-1', 'a.example'),
+      ob('proxy-2', 'b.example'),
+      ob('proxy-3', 'c.example', { streamSettings: { network: 'tcp', security: 'none', sockopt: { dialerProxy: 'hop' } } }),
+      ob('hop', 'relay.example'),
+      { protocol: 'freedom', tag: 'direct' },
+    ],
+    routing: { balancers: [{ tag: 'b', selector: ['proxy-'] }] },
+  };
+  const r = parseSubscription(JSON.stringify(cfg));
+  assert.deepEqual(r.nodes.map((n) => n.host), ['a.example', 'b.example', 'c.example'], 'три сервера, звено цепочки отдельно не считаем');
+  assert.deepEqual(r.nodes.map((n) => n.name), ['Auto · proxy-1', 'Auto · proxy-2', 'Auto · proxy-3']);
+  // Тот же сервер отдельным конфигом рядом с «Авто» — остаётся одно понятное имя.
+  const single = { remarks: 'A отдельно', outbounds: [ob('proxy', 'a.example')] };
+  const both = parseSubscription(JSON.stringify([cfg, single]));
+  assert.equal(both.nodes.filter((n) => n.host === 'a.example').length, 1);
+  assert.equal(both.nodes.find((n) => n.host === 'a.example')!.name, 'A отдельно');
 });

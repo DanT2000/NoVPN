@@ -93,11 +93,13 @@ async function fetchOne(row: any): Promise<void> {
   });
 }
 
-/** Обновить одну подписку по id (кнопка «Обновить» в админке). */
+/** Обновить одну подписку по id (кнопка «Обновить» в админке). Всегда забираем целиком,
+ *  без «изменилось ли?»: иначе провайдер отвечал 304 и кнопка не пересобирала список —
+ *  например, после исправления разбора. */
 export async function refreshBackup(id: string): Promise<void> {
   const row = repo.getBackupSubscriptionRow(id);
   if (!row) return;
-  await fetchOne(row);
+  await fetchOne({ ...row, etag: null, last_modified: null });
 }
 
 async function tick(): Promise<void> {
