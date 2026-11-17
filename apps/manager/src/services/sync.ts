@@ -3,6 +3,7 @@
 // Xray: xray api statsquery --reset → трафик по клиентам (нужен stats API).
 // Сервер может отдавать и то, и другое одновременно (Finland).
 
+import tls from 'node:tls';
 import * as repo from '../repo.js';
 import { getSetting, setSetting } from '../db.js';
 import { sshHasSshAccess, sshPing, sshSyncAwg, sshSyncXray, sshReadProxyTraffic, sshRevokeAwg, sshRevokeXray, sshRevokeProxyUser, sshAddProxyUser, sshResyncDevices, sshSetXraySni, sshReadMetrics, REALITY_SNI } from './sshServer.js';
@@ -46,12 +47,30 @@ const unreachableStreak = new Map<string, number>();
 export function noteUnreachable(serverId: string, msg: string): void {
   if (!cycleUnreachable.has(serverId)) cycleUnreachable.set(serverId, msg);
 }
-/** Итог прохода по серверу: подряд неудачных проходов. Пишет «недоступен» на втором. */
-export function settleUnreachable(serverName: string, serverId: string): number {
+/** Что показала перепроверка перед тревогой: панель снова вошла по SSH (`ok`), по SSH не
+ *  вошла, но VPN-порт отвечает (`vpn-only` — людям сбой не мешает), не отвечает ничего
+ *  (`down` — настоящая тревога). */
+export type DownVerdict = 'ok' | 'vpn-only' | 'down';
+
+/**
+ * Итог прохода по серверу: подряд неудачных проходов. На втором — тревога, но не сразу.
+ *
+ * 16.11.2026 в 02:06 и 02:17 (ночью) владельцу пришло «Сервер недоступен» по обеим «Франциям»,
+ * хотя в те же минуты панель каждые 5 минут снимала с них нагрузку по SSH, а люди сидели в
+ * VPN: по дороге из дома во Францию сорвалось по одному SSH-входу в двух проходах подряд.
+ * Поэтому: проход, где до сервера хоть раз достучались (`contact`), неудачным не считается;
+ * а перед тревогой панель сама перепроверяет (`verify`) — заново входит по SSH и стучится в
+ * VPN-порт. Будим человека, только когда не отвечает ни то, ни другое.
+ */
+export async function settleUnreachable(
+  serverName: string,
+  serverId: string,
+  opts: { contact?: boolean; verify?: () => Promise<DownVerdict> } = {},
+): Promise<number> {
   const msg = cycleUnreachable.get(serverId);
   cycleUnreachable.delete(serverId);
   const key = `${serverId}|__unreachable__`;
-  if (msg === undefined) {
+  if (msg === undefined || opts.contact) {
     // Проход целиком успешный — снимаем и «недоступен» (новый сбой сообщим заново).
     // Не в clearSyncErr: при частичном сбое (одна операция прошла, другая нет) уведомление
     // повторялось бы каждый проход.
@@ -62,11 +81,63 @@ export function settleUnreachable(serverName: string, serverId: string): number 
   const n = (unreachableStreak.get(serverId) ?? 0) + 1;
   unreachableStreak.set(serverId, n);
   if (n < UNREACHABLE_STREAK) return n;
-  const now = Date.now();
-  if (now - (lastSyncErrAt.get(key) ?? 0) < 30 * 60 * 1000) return n;
-  lastSyncErrAt.set(key, now);
-  repo.addJobError(serverName, `Сервер недоступен: ${msg} (нет связи ${n} ${passes(n)} подряд)`);
+  if (Date.now() - (lastSyncErrAt.get(key) ?? 0) < 30 * 60 * 1000) return n;
+  const verdict: DownVerdict = opts.verify ? await opts.verify().catch((): DownVerdict => 'down') : 'down';
+  if (verdict === 'ok') {
+    // Повторный вход прошёл — сервер жив, сбоила дорога. Только отметка в журнале.
+    unreachableStreak.delete(serverId);
+    repo.addJobError(serverName, `Связь панели с сервером сбоила ${n} ${passes(n)} подряд (${msg}), повторная проверка прошла — сервер работает`, 'info');
+    return 0;
+  }
+  lastSyncErrAt.set(key, Date.now());
+  if (verdict === 'vpn-only') {
+    // Уровень warn в Telegram не уходит (см. хук в index.ts) — будить незачем.
+    repo.addJobError(serverName, `Панель не может зайти на сервер по SSH (${msg}, ${n} ${passes(n)} подряд), но VPN на нём отвечает — людям это не мешает`, 'warn');
+    return n;
+  }
+  repo.addJobError(
+    serverName,
+    `Сервер недоступен: ${msg} (нет связи ${n} ${passes(n)} подряд${opts.verify ? '; повторный вход и VPN-порт тоже не ответили' : ''})`,
+  );
   return n;
+}
+
+/** Пауза между повторными SSH-входами перепроверки. */
+export const VERIFY_GAP_MS = 10_000;
+
+/** Перепроверка перед тревогой: два повторных SSH-входа, затем TLS-рукопожатие с VPN-портом. */
+async function verifyServerDown(s: { id: string; host: string; protocols: string[] }): Promise<DownVerdict> {
+  for (let i = 0; i < 2; i++) {
+    if (i) await new Promise((r) => setTimeout(r, VERIFY_GAP_MS));
+    try {
+      await sshPing(s.id);
+      return 'ok';
+    } catch {
+      /* следующая попытка */
+    }
+  }
+  if (!s.protocols.includes('xray')) return 'down'; // AmneziaWG — UDP, рукопожатием не проверить
+  const port = repo.getEndpointPorts(s.host).xray;
+  const sni = getServerKeys(s.host)?.xraySni ?? undefined;
+  for (let i = 0; i < 2; i++) if (await tlsAnswers(s.host, port, sni)) return 'vpn-only';
+  return 'down';
+}
+
+/** Отвечает ли порт TLS-рукопожатием (Reality отдаёт сертификат сайта-маски). */
+export function tlsAnswers(host: string, port: number, servername?: string, timeoutMs = 8000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolve(ok);
+    };
+    const sock = tls.connect({ host, port, servername, rejectUnauthorized: false }, () => finish(true));
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    sock.once('error', () => finish(false));
+  });
 }
 const passes = (n: number): string => {
   const a = n % 100;
@@ -192,12 +263,17 @@ export async function syncAllServers(): Promise<void> {
         continue;
       }
 
+      // Достучались ли до сервера в этом проходе хоть раз (метрики или синхронизация) —
+      // тогда сорвавшаяся соседняя операция не делает проход «без связи».
+      let contact = false;
+
       // Нагрузка сервера: CPU/ОЗУ/диск/сеть тем же заходом по SSH, раз в 5 минут.
       // Пишем ДО проверки порогов, чтобы свежий замер попал в оценку «держится ли CPU».
       if (Date.now() - (lastMetricsAt.get(s.id) ?? 0) >= METRICS_GAP_MS) {
         lastMetricsAt.set(s.id, Date.now());
         try {
           const m = await sshReadMetrics(s.id);
+          contact = true;
           if (m) {
             repo.recordServerMetrics(s.id, m);
             await checkLoadAlerts(s.name, s.id, m);
@@ -346,7 +422,7 @@ export async function syncAllServers(): Promise<void> {
           /* offline ниже */
         }
       }
-      settleUnreachable(s.name, s.id);
+      await settleUnreachable(s.name, s.id, { contact: contact || reachable, verify: () => verifyServerDown(s) });
 
       if (reachable) {
         repo.updateServerFields(s.id, {

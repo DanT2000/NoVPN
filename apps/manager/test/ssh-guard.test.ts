@@ -16,7 +16,7 @@ process.env.ENCRYPTION_KEY = '0'.repeat(64);
 process.env.SESSION_SECRET = 'test-secret';
 
 const { sshGuardApplyScript, sshGuardOffScript, sshAllowFwScript, SSH_GUARD_CONFIRM_SCRIPT, installCheckScript, parseInstallCheck } = await import('../src/services/sshServer.js');
-const { noteUnreachable, settleUnreachable, UNREACHABLE_STREAK } = await import('../src/services/sync.js');
+const { noteUnreachable, settleUnreachable, tlsAnswers, UNREACHABLE_STREAK } = await import('../src/services/sync.js');
 const repo = await import('../src/repo.js');
 
 const noBash = spawnSync('bash', ['--version']).error ? 'bash недоступен' : false;
@@ -103,32 +103,90 @@ test('самопроверка: защита на месте / пропала', 
   assert.equal(installCheckScript({ sshGuard: null }, {}), '');
 });
 
-test('«сервер недоступен» — только если связи не было два прохода подряд', () => {
+test('«сервер недоступен» — только если связи не было два прохода подряд', async () => {
   assert.equal(UNREACHABLE_STREAK, 2);
-  const count = () => repo.listJobErrors(100).filter((e) => e.server === 'Франция').length;
+  const count = () => repo.listJobErrors(100).filter((e) => e.server === 'Франция' && e.level === 'error').length;
   // Одна сорвавшаяся попытка, следующий проход успешный — тишина.
   noteUnreachable('s_fr', 'Timed out while waiting for handshake');
-  assert.equal(settleUnreachable('Франция', 's_fr'), 1);
-  assert.equal(settleUnreachable('Франция', 's_fr'), 0);
+  assert.equal(await settleUnreachable('Франция', 's_fr'), 1);
+  assert.equal(await settleUnreachable('Франция', 's_fr'), 0);
   assert.equal(count(), 0);
   // Два прохода подряд без связи — одна запись (она же уведомление).
   noteUnreachable('s_fr', 'Timed out while waiting for handshake');
   noteUnreachable('s_fr', 'read ECONNRESET'); // несколько операций в одном проходе — один счёт
-  assert.equal(settleUnreachable('Франция', 's_fr'), 1);
+  assert.equal(await settleUnreachable('Франция', 's_fr'), 1);
   assert.equal(count(), 0);
   noteUnreachable('s_fr', 'Timed out while waiting for handshake');
-  assert.equal(settleUnreachable('Франция', 's_fr'), 2);
+  assert.equal(await settleUnreachable('Франция', 's_fr'), 2);
   assert.equal(count(), 1);
   assert.match(repo.listJobErrors(1)[0]!.text, /^Сервер недоступен: Timed out while waiting for handshake \(нет связи 2 прохода подряд\)$/);
   // Третий проход подряд — без повтора (не чаще раза в 30 минут).
   noteUnreachable('s_fr', 'Timed out while waiting for handshake');
-  assert.equal(settleUnreachable('Франция', 's_fr'), 3);
+  assert.equal(await settleUnreachable('Франция', 's_fr'), 3);
   assert.equal(count(), 1);
   // Связь вернулась (проход целиком успешный), потом новый сбой — сообщаем заново.
-  assert.equal(settleUnreachable('Франция', 's_fr'), 0);
+  assert.equal(await settleUnreachable('Франция', 's_fr'), 0);
   noteUnreachable('s_fr', 'Connection lost before handshake');
-  settleUnreachable('Франция', 's_fr');
+  await settleUnreachable('Франция', 's_fr');
   noteUnreachable('s_fr', 'Connection lost before handshake');
-  settleUnreachable('Франция', 's_fr');
+  await settleUnreachable('Франция', 's_fr');
   assert.equal(count(), 2);
+});
+
+// 16.11.2026: ночью пришло «Сервер недоступен» по обеим «Франциям», а они работали — в те же
+// минуты панель снимала с них нагрузку по SSH, люди сидели в VPN. Будим только по делу.
+test('«сервер недоступен»: проход со связью не считается, перед тревогой — перепроверка', async () => {
+  const errs = (srv: string) => repo.listJobErrors(100).filter((e) => e.server === srv);
+  const level = (srv: string, lv: string) => errs(srv).filter((e) => e.level === lv).length;
+
+  // В проходе одна операция сорвалась, но метрики сняты — проход со связью, счёт не растёт.
+  noteUnreachable('s_a', 'Timed out while waiting for handshake');
+  assert.equal(await settleUnreachable('А', 's_a', { contact: true }), 0);
+  noteUnreachable('s_a', 'Timed out while waiting for handshake');
+  assert.equal(await settleUnreachable('А', 's_a', { contact: true }), 0);
+  assert.equal(errs('А').length, 0);
+
+  // Два прохода без связи, но повторный вход прошёл — тревоги нет, счёт сброшен, отметка info.
+  let calls = 0;
+  const okAgain = async () => { calls++; return 'ok' as const; };
+  noteUnreachable('s_b', 'Timed out while waiting for handshake');
+  assert.equal(await settleUnreachable('Б', 's_b', { verify: okAgain }), 1);
+  assert.equal(calls, 0, 'на первом проходе не перепроверяем');
+  noteUnreachable('s_b', 'Timed out while waiting for handshake');
+  assert.equal(await settleUnreachable('Б', 's_b', { verify: okAgain }), 0);
+  assert.equal(calls, 1);
+  assert.equal(level('Б', 'error'), 0);
+  assert.equal(level('Б', 'info'), 1);
+
+  // SSH не входит, а VPN-порт отвечает — предупреждение без уведомления (warn), не error.
+  const vpnOnly = async () => 'vpn-only' as const;
+  noteUnreachable('s_c', 'Timed out while waiting for handshake');
+  await settleUnreachable('В', 's_c', { verify: vpnOnly });
+  noteUnreachable('s_c', 'Timed out while waiting for handshake');
+  assert.equal(await settleUnreachable('В', 's_c', { verify: vpnOnly }), 2);
+  assert.equal(level('В', 'error'), 0);
+  assert.equal(level('В', 'warn'), 1);
+  assert.match(errs('В')[0]!.text, /VPN на нём отвечает/);
+
+  // Не отвечает ни SSH, ни VPN — настоящая тревога (error → уведомление).
+  const down = async () => 'down' as const;
+  noteUnreachable('s_d', 'Timed out while waiting for handshake');
+  await settleUnreachable('Г', 's_d', { verify: down });
+  noteUnreachable('s_d', 'Timed out while waiting for handshake');
+  await settleUnreachable('Г', 's_d', { verify: down });
+  assert.equal(level('Г', 'error'), 1);
+  assert.match(errs('Г')[0]!.text, /^Сервер недоступен: .*повторный вход и VPN-порт тоже не ответили\)$/);
+
+  // Перепроверка сама упала — считаем «не отвечает» (тревога не теряется).
+  noteUnreachable('s_e', 'Timed out while waiting for handshake');
+  await settleUnreachable('Д', 's_e', { verify: async () => { throw new Error('boom'); } });
+  noteUnreachable('s_e', 'Timed out while waiting for handshake');
+  await settleUnreachable('Д', 's_e', { verify: async () => { throw new Error('boom'); } });
+  assert.equal(level('Д', 'error'), 1);
+});
+
+test('tlsAnswers: закрытый порт — «не отвечает», без зависания', async () => {
+  const t0 = Date.now();
+  assert.equal(await tlsAnswers('127.0.0.1', 9, undefined, 3000), false);
+  assert.ok(Date.now() - t0 < 3500);
 });
