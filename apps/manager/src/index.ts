@@ -5,6 +5,7 @@ import { startSyncLoop } from './services/sync.js';
 import { startRoutingSyncLoop } from './services/routingSync.js';
 import { startAutoRouteLoop } from './services/autoroute.js';
 import { seedDesktopDir, startDesktopMirrorLoop } from './services/desktopChannel.js';
+import { startAndroidMirrorLoop } from './services/androidChannel.js';
 import { startBackupSyncLoop } from './services/backupSync.js';
 import { startRuIpListLoop } from './services/ruIpList.js';
 import { startBot, notifyAdmin } from './services/telegram.js';
@@ -78,6 +79,7 @@ app.listen(config.port, () => {
   startRoutingSyncLoop();
   startAutoRouteLoop();
   startDesktopMirrorLoop();
+  startAndroidMirrorLoop();
   startBackupSyncLoop();
   startRuIpListLoop();
   // Бот запускается best-effort: его сбой не должен помешать старту панели.

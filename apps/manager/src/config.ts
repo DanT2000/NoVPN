@@ -103,6 +103,9 @@ export const config = {
   // своего канала (у Роберта) отправляет /android/* на неё, чтобы приложение у её людей
   // видело новые версии. Пусто — перенаправление выключено.
   androidUpstream: env('ANDROID_UPSTREAM', 'https://vpn.appswire.ru'),
+  // Зеркало канала: раз в час скачивать новую версию с центральной к себе (services/
+  // androidChannel.ts). ANDROID_MIRROR=0 — только перенаправление, без копии на томе.
+  androidMirror: env('ANDROID_MIRROR', '1') !== '0',
   // Встроенная (закоммиченная в образ) версия — источник первичного сида /data/desktop.
   desktopSeedDir: env('DESKTOP_SEED_DIR', path.join(__dirname, '../../../desktop')),
 

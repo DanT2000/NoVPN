@@ -109,7 +109,9 @@ export function createApp() {
   // кладёт, — у Роберта. Тогда /android/* отправляем на центральную панель: без этого
   // /android/latest.json отдавал HTML главной, и приложение у их людей никогда не видело
   // новых версий (26.11.2026). Проверка — на каждый запрос: канал, появившийся на томе
-  // позже, начинает работать без перезапуска.
+  // позже (его кладёт зеркало, services/androidChannel.ts), работает без перезапуска.
+  // Свой канал = есть latest.json, а не просто папка: зеркало создаёт папку и качает APK
+  // минуту-другую, и всё это время приложения должны уходить на центральную, а не в 404.
   const androidStatic = express.static(config.androidDir, {
     setHeaders: (res, p) => {
       if (p.endsWith('.apk')) res.setHeader('Content-Type', 'application/vnd.android.package-archive');
@@ -117,7 +119,7 @@ export function createApp() {
     },
   });
   app.use('/android', (req, res, next) => {
-    if (fs.existsSync(config.androidDir)) return androidStatic(req, res, next);
+    if (fs.existsSync(path.join(config.androidDir, 'latest.json'))) return androidStatic(req, res, next);
     const target = androidUpstreamUrl(config.androidUpstream, req.get('host'), req.method, req.path);
     if (!target) return next();
     res.setHeader('Cache-Control', 'no-store');
