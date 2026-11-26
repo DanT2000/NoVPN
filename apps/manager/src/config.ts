@@ -99,6 +99,10 @@ export const config = {
   // Канал Android-сборки: apk кладётся в том, чтобы выкладывать новые версии
   // без пересборки образа панели — точно так же, как у десктопа.
   androidDir: env('ANDROID_DIR', path.join(dataDir, 'android')),
+  // Центральная панель с каналом Android. APK публикуется скриптом только туда; панель без
+  // своего канала (у Роберта) отправляет /android/* на неё, чтобы приложение у её людей
+  // видело новые версии. Пусто — перенаправление выключено.
+  androidUpstream: env('ANDROID_UPSTREAM', 'https://vpn.appswire.ru'),
   // Встроенная (закоммиченная в образ) версия — источник первичного сида /data/desktop.
   desktopSeedDir: env('DESKTOP_SEED_DIR', path.join(__dirname, '../../../desktop')),
 

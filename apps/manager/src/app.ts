@@ -7,6 +7,25 @@ import { router } from './routes.js';
 import { agentRouter } from './routes/agent.js';
 import { SqliteSessionStore } from './services/sessionStore.js';
 
+/**
+ * Куда отправить запрос к /android/* панели без своего канала, или null (тогда 404).
+ * Только GET/HEAD и только имя файла (буквы, цифры, «.», «_», «-»): путь к чему-то ещё на
+ * центральной так не построить. Центральная, у которой канала вдруг нет, на себя не шлёт.
+ */
+export function androidUpstreamUrl(upstream: string, host: string | undefined, method: string, reqPath: string): string | null {
+  if (!upstream || (method !== 'GET' && method !== 'HEAD')) return null;
+  let base: URL;
+  try {
+    base = new URL(upstream);
+  } catch {
+    return null;
+  }
+  if (base.protocol !== 'https:' && base.protocol !== 'http:') return null;
+  if (host && base.host.toLowerCase() === host.toLowerCase()) return null;
+  if (!/^\/[A-Za-z0-9._-]+$/.test(reqPath) || reqPath.includes('..')) return null;
+  return `${base.origin}/android${reqPath}`;
+}
+
 export function createApp() {
   const app = express();
   // За edge-прокси (openresty → traefik), который терминирует TLS. trust proxy +
@@ -85,18 +104,26 @@ export function createApp() {
   // Канал раздачи NoVPN для Android: /android/novpn.apk. Та же логика, что у
   // десктопа, и по той же причине — до SPA-fallback, иначе запрос за apk вернул бы
   // HTML главной страницы, и человек скачал бы «битый файл».
-  if (fs.existsSync(config.androidDir)) {
-    app.use(
-      '/android',
-      express.static(config.androidDir, {
-        setHeaders: (res, p) => {
-          if (p.endsWith('.apk')) res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-          if (p.endsWith('.json')) res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        },
-      }),
-    );
-    app.use('/android', (_req, res) => res.status(404).json({ error: { type: 'not_found', message: 'Файл не найден.' } }));
-  }
+  //
+  // Своего канала (папки android на томе) нет у панелей, куда скрипт публикации APK не
+  // кладёт, — у Роберта. Тогда /android/* отправляем на центральную панель: без этого
+  // /android/latest.json отдавал HTML главной, и приложение у их людей никогда не видело
+  // новых версий (26.11.2026). Проверка — на каждый запрос: канал, появившийся на томе
+  // позже, начинает работать без перезапуска.
+  const androidStatic = express.static(config.androidDir, {
+    setHeaders: (res, p) => {
+      if (p.endsWith('.apk')) res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      if (p.endsWith('.json')) res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    },
+  });
+  app.use('/android', (req, res, next) => {
+    if (fs.existsSync(config.androidDir)) return androidStatic(req, res, next);
+    const target = androidUpstreamUrl(config.androidUpstream, req.get('host'), req.method, req.path);
+    if (!target) return next();
+    res.setHeader('Cache-Control', 'no-store');
+    return res.redirect(302, target);
+  });
+  app.use('/android', (_req, res) => res.status(404).json({ error: { type: 'not_found', message: 'Файл не найден.' } }));
 
   // Статика собранного фронтенда (в проде) + SPA-fallback.
   if (fs.existsSync(config.webDist)) {
