@@ -12,10 +12,12 @@
 
 import { useMemo, useState } from 'react';
 import type { AppClient, IssueDeviceResult, PublicServerView } from '@novpn/shared';
+import { orderApps } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Dot, EmptyState } from '../components/ui';
 import { Qr } from '../components/Qr';
 import { copyText, downloadText, openUrl, normalizeUrl } from '../lib/clipboard';
+import { AppNotes } from './appNotes';
 
 const PLATFORMS = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'] as const;
 type Platform = (typeof PLATFORMS)[number];
@@ -162,11 +164,14 @@ export function Wizard() {
   // маршрутизацией (JSON-массив в /full). Одна ссылка/QR на всё.
   const subUrl = data.subLink ? (data.xrayWhitelist !== false ? `${data.subLink}/full` : data.subLink) : '';
 
-  const apps = data.apps.filter(
-    (a) =>
-      a.enabled &&
-      a.platforms.some((p) => p.platform === platform) &&
-      (cfgProto === 'xray' ? a.compat.includes('xray') : a.compat.includes('amneziawg') || a.compat.includes('amnezia-app')),
+  // NoVPN первым, затем Happ — как на странице подключения (orderApps).
+  const apps = orderApps(
+    data.apps.filter(
+      (a) =>
+        a.enabled &&
+        a.platforms.some((p) => p.platform === platform) &&
+        (cfgProto === 'xray' ? a.compat.includes('xray') : a.compat.includes('amneziawg') || a.compat.includes('amnezia-app')),
+    ),
   );
 
   const title =
@@ -390,6 +395,9 @@ export function Wizard() {
                           {tap ? (
                             <button className="btn btn-primary btn-sm" onClick={() => openUrl(tap)}>Добавить подписку</button>
                           ) : null}
+                        </div>
+                        <div style={{ marginTop: 6 }}>
+                          <AppNotes app={a} entry={entry} />
                         </div>
                       </div>
                     </div>

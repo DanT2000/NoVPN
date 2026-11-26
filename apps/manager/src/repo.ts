@@ -592,6 +592,25 @@ export function awgParamsFromDevice(
   return v as { Jc: number; Jmin: number; Jmax: number; S1: number; S2: number; H1: number; H2: number; H3: number; H4: number };
 }
 
+/** Параметры обфускации из САМОГО СВЕЖЕГО действующего AWG-конфига сервера — то, что
+ *  сейчас на руках у людей (см. pickAwgParams). null — конфигов нет или в них не все поля. */
+export function awgParamsIssued(
+  serverId: string,
+): { Jc: number; Jmin: number; Jmax: number; S1: number; S2: number; H1: number; H2: number; H3: number; H4: number } | null {
+  const r = db
+    .prepare("SELECT conf FROM devices WHERE server_id = ? AND protocol = 'amneziawg' AND conf IS NOT NULL AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1")
+    .get(serverId) as { conf: string | null } | undefined;
+  const conf = decConf(r?.conf);
+  if (!conf) return null;
+  const p = (k: string): number | null => {
+    const m = conf.match(new RegExp('^' + k + '\\s*=\\s*(\\d+)', 'm'));
+    return m ? Number(m[1]) : null;
+  };
+  const v = { Jc: p('Jc'), Jmin: p('Jmin'), Jmax: p('Jmax'), S1: p('S1'), S2: p('S2'), H1: p('H1'), H2: p('H2'), H3: p('H3'), H4: p('H4') };
+  if (Object.values(v).some((x) => x == null)) return null;
+  return v as { Jc: number; Jmin: number; Jmax: number; S1: number; S2: number; H1: number; H2: number; H3: number; H4: number };
+}
+
 /** Порт AmneziaWG из УЖЕ ВЫДАННОГО клиентского конфига (строка «Endpoint = host:port»).
  *  Спасательный источник при восстановлении, когда порты в server_keys не сохранены
  *  (старая установка до персиста портов): иначе restore взял бы DEFAULT 51820, а

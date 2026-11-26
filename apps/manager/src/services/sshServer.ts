@@ -193,10 +193,67 @@ for k in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do echo "$k=$(p $k)"; done`,
   }
 }
 
+/**
+ * Параметры обфускации перед записью в awg0.conf: целые в допустимых границах (идут в bash
+ * без кавычек — это и защита от инъекции). Вне границ — ОШИБКА, а не «значение по
+ * умолчанию»: с 13.08.2026 граница стояла 2 000 000 000 при генераторе до 2 147 483 600, и
+ * лишнее H молча становилось 1/2/3/4 — то есть БЕЗ маскировки, а панель хранила у себя
+ * «правильное» число («Франция 1»: H1=1 при 2012218649 в панели, «Франция»: H3=3).
+ * H — uint32, как в AmneziaWG.
+ */
+export function checkAwgParams(raw: AwgParams): AwgParams {
+  const lim: Record<keyof AwgParams, number> = {
+    Jc: 128, Jmin: 1280, Jmax: 1280, S1: 1280, S2: 1280, H1: 4294967295, H2: 4294967295, H3: 4294967295, H4: 4294967295,
+  };
+  const src = raw as unknown as Record<string, unknown>;
+  const out = {} as AwgParams;
+  for (const k of Object.keys(lim) as Array<keyof AwgParams>) {
+    const n = Number(src[k]);
+    if (!Number.isInteger(n) || n < 0 || n > lim[k]) {
+      throw new Error(`Параметр AmneziaWG ${k}=${String(src[k])} вне допустимого — установка остановлена, чтобы не записать на сервер не то, что знает панель`);
+    }
+    out[k] = n;
+  }
+  return out;
+}
+
+const AWG_KEYS = ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4'] as const;
+export const sameAwgParams = (a: AwgParams | null, b: AwgParams | null): boolean =>
+  !!a && !!b && AWG_KEYS.every((k) => Number(a[k]) === Number(b[k]));
+
+/**
+ * Какие параметры маскировки ставить при (пере)установке. Главное — не сломать уже
+ * выданные конфиги: параметры клиента и сервера обязаны совпадать до числа.
+ *
+ * 30.08.2026 смена порта AmneziaWG переустановила «Францию 1» с параметрами из копии в
+ * панели, а копия разошлась с сервером ещё 23.08 при переезде на новую машину — все девять
+ * выданных конфигов перестали подключаться в ту же минуту. Поэтому истина — то, что на
+ * руках у людей (самый свежий выданный конфиг): из сервера и копии берём тот вариант, что
+ * с ним совпадает, а если не совпадает ни один — сам набор из конфига. Конфигов нет — то,
+ * что стоит на сервере, иначе копия панели, иначе новые случайные.
+ */
+export function pickAwgParams(o: {
+  onServer: AwgParams | null;
+  stored: AwgParams | null;
+  issued: AwgParams | null;
+  fresh: () => AwgParams;
+}): { params: AwgParams; source: 'server' | 'stored' | 'issued' | 'new'; storedDiffers: boolean } {
+  let params: AwgParams;
+  let source: 'server' | 'stored' | 'issued' | 'new';
+  if (o.issued) {
+    if (sameAwgParams(o.onServer, o.issued)) [params, source] = [o.onServer!, 'server'];
+    else if (sameAwgParams(o.stored, o.issued)) [params, source] = [o.stored!, 'stored'];
+    else [params, source] = [o.issued, 'issued'];
+  } else if (o.onServer) [params, source] = [o.onServer, 'server'];
+  else if (o.stored) [params, source] = [o.stored, 'stored'];
+  else [params, source] = [o.fresh(), 'new'];
+  return { params, source, storedDiffers: !!o.stored && !sameAwgParams(o.stored, params) };
+}
+
 // ── Провижининг сервера с нуля (xray Reality + AmneziaWG) ──
 // Скрипт без bash-${…} (кроме инжектов сверху) — безопасно в JS-шаблоне.
 // Параметры обфускации AWG фиксированы → восстановление по домену требует только приватный ключ.
-function buildInstallScript(o: {
+export function buildInstallScript(o: {
   sni: string; realityPriv: string; shortId: string; awgPriv: string; xray: boolean; awg: boolean; awgParams: AwgParams;
   xrayPort: number; awgPort: number;
 }): string {
@@ -205,18 +262,7 @@ function buildInstallScript(o: {
   const xrayPort = port(o.xrayPort, 443);
   const awgPort = port(o.awgPort, 51820);
   const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
-  // Параметры обфускации подставляются в bash БЕЗ кавычек — приводим каждый к целому
-  // в разумных границах (защита от инъекции, если awgParams пришли из админ-ввода/импорта).
-  const int = (v: unknown, def: number): number => {
-    const n = Math.trunc(Number(v));
-    return Number.isFinite(n) && n >= 0 && n <= 2000000000 ? n : def;
-  };
-  const raw = o.awgParams;
-  const a = {
-    Jc: int(raw.Jc, 4), Jmin: int(raw.Jmin, 40), Jmax: int(raw.Jmax, 70),
-    S1: int(raw.S1, 0), S2: int(raw.S2, 0),
-    H1: int(raw.H1, 1), H2: int(raw.H2, 2), H3: int(raw.H3, 3), H4: int(raw.H4, 4),
-  };
+  const a = checkAwgParams(o.awgParams);
   return `set -e
 SNI=${q(o.sni)}
 REALITY_PRIV=${q(o.realityPriv)}

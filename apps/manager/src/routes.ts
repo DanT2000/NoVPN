@@ -13,10 +13,10 @@ import type {
   User,
 } from '@novpn/shared';
 import { buildWhitelistXrayConfig, effectiveGroupRules, groupDiff, hasGroupRules, GROUP_RULE_KEYS, GROUP_RULE_LABELS } from '@novpn/shared';
-import type { ProxyFallback, GroupRules, GroupApplyPreview } from '@novpn/shared';
+import type { ProxyFallback, GroupRules, GroupApplyPreview, Server } from '@novpn/shared';
 import { config } from './config.js';
 import { requireAdmin, requireUserOrAdmin } from './middleware/auth.js';
-import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
+import { sshHasSshAccess, sshCreateXray, sshCreateAwg, sshRevokeXray, sshRevokeAwg, sshRevokeProxyUser, sshInstallProxies, sshInstallServer, sshUninstallServer, sshResyncDevices, sshProbe, sshReadAwgParams, genAwgParams, sshSetXraySni, sshPickPort, sshSetPortAlias, pickAwgParams, sshIsPortFree, sshHardenToKey, sshInstallSpeedtest, sshApplySpeedtestAllow, sshRemoveSpeedtest, sshPeerIp, sshSelfSpeedtest, isAllowEntry, REALITY_SNI } from './services/sshServer.js';
 import type { AwgParams } from './services/sshServer.js';
 import { ensureXrayOnAllowedServers } from './services/issue.js';
 import { sshApplyXrayMask, isValidMask, sshVerifyInstall, formatInstallCheck, sshRemoveOwnXray, sshAddProxyUser, sshApplySshGuard, sshApplyRuGuard, formatRuGuard, ruGuardEligible, type RuGuardResult } from './services/sshServer.js';
@@ -1927,6 +1927,23 @@ async function applyRuGuardAll(): Promise<void> {
   );
 }
 
+/**
+ * Перенаправления прежних портов («старый оставлен для совместимости» при смене порта)
+ * живут в iptables самого сервера. Переустановка на новой машине их не переносила — маски
+ * Xray возвращала, а порты нет: после переезда «Франции 1» (09.11.2026) конфиги AWG со
+ * старым портом 51820 стучались в закрытый. Возвращаем при каждом восстановлении.
+ */
+async function reapplyLegacyPorts(s: Server, want: { xray?: boolean; awg?: boolean }): Promise<void> {
+  for (const l of repo.getLegacyPorts(s.host)) {
+    if ((l.proto === 'awg' && !want.awg) || (l.proto === 'xray' && !want.xray)) continue;
+    try {
+      await sshSetPortAlias(s, l.proto === 'awg' ? 'udp' : 'tcp', l.port, l.target, true);
+    } catch (e) {
+      repo.addJobError(s.name, `Прежний порт ${l.proto} ${l.port} → ${l.target} не перенаправлен: ${e instanceof Error ? e.message : 'ошибка'}`);
+    }
+  }
+}
+
 async function runProvision(
   serverId: string,
   comps: string[],
@@ -1946,23 +1963,32 @@ async function runProvision(
     const restoring = !!(prev?.xrayRealityPrivKey || prev?.awgServerPrivKey);
     provisionStatus.set(serverId, { state: 'running', message: `Шаг 1 из 4: подготовка${restoring ? ' (ключи сервера восстанавливаются)' : ''}…`, at: Date.now() });
 
-    // Параметры обфускации AmneziaWG — уникальны для сервера.
-    // Приоритет: 1) сохранённые в keyvault → 2) уже стоящие на сервере (старые
-    // установки: их НЕЛЬЗЯ менять, иначе выданные конфиги отвалятся) → 3) новые случайные.
-    let awgParams: AwgParams | null = null;
+    // Параметры обфускации AmneziaWG — уникальны для сервера, и их НЕЛЬЗЯ менять, иначе
+    // выданные конфиги отвалятся. Раньше копия в панели (keyvault) шла первой и молча
+    // перезаписывала сервер — 30.08.2026 так умерли все AWG-конфиги «Франции 1». Теперь
+    // решает то, что на руках у людей (см. pickAwgParams).
+    let stored: AwgParams | null = null;
     if (prev?.awgParams) {
       try {
-        awgParams = JSON.parse(prev.awgParams) as AwgParams;
+        stored = JSON.parse(prev.awgParams) as AwgParams;
       } catch {
-        awgParams = null;
+        stored = null;
       }
     }
-    if (!awgParams) awgParams = await sshReadAwgParams(s);
-    // Восстановление на НОВОМ боксе + пустой keyvault.awg_params (сервер до миграции
-    // колонки): вытаскиваем параметры из уже выданного клиентского конфига, иначе
-    // genAwgParams() сгенерил бы НОВЫЕ и все существующие AWG-конфиги отвалились бы.
-    if (!awgParams && restoring) awgParams = repo.awgParamsFromDevice(s.id) as AwgParams | null;
-    if (!awgParams) awgParams = genAwgParams();
+    const picked = pickAwgParams({
+      onServer: await sshReadAwgParams(s),
+      stored,
+      issued: repo.awgParamsIssued(s.id) as AwgParams | null,
+      fresh: genAwgParams,
+    });
+    const awgParams: AwgParams = picked.params;
+    if (picked.storedDiffers) {
+      repo.addJobError(
+        s.name,
+        `Параметры маскировки AmneziaWG в панели расходились с ${picked.source === 'server' ? 'сервером' : 'выданными конфигами'} — оставлены те, что у людей на руках`,
+        'warn',
+      );
+    }
 
     // Публичные порты endpoint'а. Восстановление по домену → берём сохранённые (старые
     // конфиги живут). Новый endpoint → auto-pick: Xray предпочитает 443 (если свободен),
@@ -2047,6 +2073,7 @@ async function runProvision(
         psk: d.presharedKeyEnc ? decryptSecret(d.presharedKeyEnc) : null,
       }));
       if (devs.length) await sshResyncDevices(s, devs);
+      await reapplyLegacyPorts(s, want);
     }
     // Переходный период маски: установка пишет server.json только с основной маской, а
     // приложения со старой подпиской ещё ходят с прежней — возвращаем её приём.

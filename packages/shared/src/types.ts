@@ -390,6 +390,9 @@ export interface AppPlatformEntry {
   downloadName?: string | null;
   /** Размер файла в байтах (для подписи «Скачать · 64 МБ»). */
   downloadSize?: number | null;
+  /** В российском App Store приложения нет — под кнопкой пометка со ссылкой на
+   *  инструкцию «как поставить из России» (/guide/ios-region). */
+  regionNote?: boolean;
 }
 
 /** Клиент-приложение: одна карточка на все платформы, ссылки/файлы — по платформам. */

@@ -2,7 +2,7 @@
 // НЕ создаёт демо-пользователей/серверы — они появляются через создание/enrollment.
 
 import type { AppClient, AppSettings, TelegramSettings } from '@novpn/shared';
-import { DEFAULT_APPS } from '@novpn/shared';
+import { DEFAULT_APPS, orderApps, reviseCatalog2026_11 } from '@novpn/shared';
 import { db, getSetting, setSetting } from './db.js';
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -58,7 +58,8 @@ export function seedIfEmpty(): void {
   const appCount = (db.prepare('SELECT COUNT(*) AS n FROM app_clients').get() as { n: number }).n;
   if (appCount === 0) {
     const stmt = db.prepare('INSERT INTO app_clients(id, sort, data) VALUES(?,?,?)');
-    DEFAULT_APPS.forEach((a, i) => stmt.run(a.id, i, JSON.stringify(a)));
+    orderApps(DEFAULT_APPS).forEach((a, i) => stmt.run(a.id, i, JSON.stringify(a)));
+    setSetting('catalog_rev', 1); // каталог уже в новой редакции
     return;
   }
 
@@ -94,4 +95,21 @@ export function seedIfEmpty(): void {
     changed++;
   }
   if (changed) console.log(`[migrate] обновлены иконки/схемы импорта у приложений: ${changed}`);
+
+  // Ревизия каталога 26.11.2026 — один раз (см. reviseCatalog2026_11): живые ссылки Happ и
+  // v2rayNG, пометка «нет в российском App Store», лишние клиенты выключены, NoVPN первым.
+  if (getSetting<number>('catalog_rev', 0) < 1) {
+    const all = (db.prepare('SELECT id, data FROM app_clients ORDER BY sort ASC').all() as Array<{ id: string; data: string }>).flatMap((r) => {
+      try {
+        return [JSON.parse(r.data) as AppClient];
+      } catch {
+        return [];
+      }
+    });
+    const next = reviseCatalog2026_11(all);
+    const save = db.prepare('UPDATE app_clients SET data = ?, sort = ? WHERE id = ?');
+    db.transaction(() => next.forEach((a, i) => save.run(JSON.stringify(a), i, a.id)))();
+    setSetting('catalog_rev', 1);
+    console.log('[migrate] каталог приложений обновлён: ссылки Happ/v2rayNG, пометка про App Store, NoVPN первым');
+  }
 }

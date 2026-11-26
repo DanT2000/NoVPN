@@ -9,17 +9,18 @@
 
 import { useState } from 'react';
 import type { AppClient, AppPlatform } from '@novpn/shared';
+import { appRank as rank } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Chip, EmptyState } from '../components/ui';
 import { copyText, openUrl } from '../lib/clipboard';
+import { AppNotes } from './appNotes';
 
 const mb = (bytes: number): string => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(0)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`);
 
 const PLATFORMS: AppPlatform[] = ['Android', 'iOS', 'Windows', 'macOS', 'Linux'];
 
-/** Порядок в списке: наш NoVPN Desktop первым (инструкция и «Добавить подписку» в один
- *  клик), затем Happ — проверен на всех системах, — потом остальные. */
-const rank = (a: AppClient): number => (a.id.startsWith('novpn-') ? 0 : a.id === 'happ' ? 1 : 2);
+// Порядок в списке (appRank): наше приложение NoVPN первым (инструкция и «Добавить
+// подписку» в один клик), затем Happ — проверен на всех системах, — потом остальные.
 
 /** Короткая инструкция к NoVPN Desktop прямо в карточке — человек видит, что делать, не
  *  уходя со страницы. Полная инструкция открывается кнопкой рядом. */
@@ -318,6 +319,7 @@ function AppList({
                 </button>
               ) : null}
             </div>
+            <AppNotes app={app} entry={entry} />
             {app.id.startsWith('novpn-') ? <NovpnHowto hasTap={!!oneTap} android={app.id === 'novpn-android'} /> : null}
           </div>
         );
