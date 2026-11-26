@@ -9,6 +9,7 @@
 // должна открываться, даже если SPA недоступна.
 
 import type { AppClient, AppPlatform, User } from '@novpn/shared';
+import { isOwnFileUrl } from '@novpn/shared';
 import { hasGuide } from './guides.js';
 
 const esc = (s: string): string =>
@@ -93,11 +94,13 @@ export function renderSubPage(opts: {
         const icon = a.icon
           ? `<img class="ico" src="${esc(a.icon)}" alt="">`
           : `<div class="ico ph">${esc(a.client.slice(0, 1))}</div>`;
-        // Скачать прямо с сервера (файл на диске) — приоритетно; иначе ссылка в магазин.
-        const dl = e!.downloadName
-          ? `<a class="btn btn-primary" href="/apps/file/${encodeURIComponent(a.id)}/${encodeURIComponent(e!.platform)}">⬇ Скачать</a>`
-          : '';
-        const install = e!.url
+        // Скачать прямо с сервера — приоритетно: файл из админки, иначе файл канала панели
+        // (/android/novpn.apk — у панели без своего канала это перенаправление на центральную).
+        // Иначе — ссылка в магазин.
+        const own = isOwnFileUrl(e!.url);
+        const dlHref = e!.downloadName ? `/apps/file/${encodeURIComponent(a.id)}/${encodeURIComponent(e!.platform)}` : own ? e!.url!.trim() : '';
+        const dl = dlHref ? `<a class="btn btn-primary" href="${esc(dlHref)}">⬇ Скачать</a>` : '';
+        const install = e!.url && !own
           ? `<a class="btn ${dl ? 'btn-sec' : 'btn-primary'}" href="${esc(normUrl(e!.url))}" target="_blank" rel="noopener">${esc(storeLabel(e!.url))}</a>`
           : '';
         const add = tap ? `<a class="btn btn-sec" href="${esc(tap)}">Добавить подписку</a>` : '';

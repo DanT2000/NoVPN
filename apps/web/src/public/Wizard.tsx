@@ -12,7 +12,7 @@
 
 import { useMemo, useState } from 'react';
 import type { AppClient, IssueDeviceResult, PublicServerView } from '@novpn/shared';
-import { orderApps } from '@novpn/shared';
+import { isOwnFileUrl, orderApps } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Dot, EmptyState } from '../components/ui';
 import { Qr } from '../components/Qr';
@@ -372,6 +372,14 @@ export function Wizard() {
                 apps.map((a) => {
                   const entry = a.platforms.find((p) => p.platform === platform)!;
                   const tap = cfgProto === 'xray' ? oneTap(a, subUrl) : null;
+                  // Свой файл панели (/android/novpn.apk, /desktop/novpn.exe) — «Скачать», не магазин.
+                  const own = isOwnFileUrl(entry.url);
+                  const storeUrl = own ? null : entry.url || null;
+                  const dlHref = entry.downloadName
+                    ? `/apps/file/${encodeURIComponent(a.id)}/${encodeURIComponent(entry.platform)}`
+                    : own
+                      ? entry.url!.trim()
+                      : null;
                   return (
                     <div key={a.id} className="card" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                       {a.icon ? (
@@ -380,16 +388,16 @@ export function Wizard() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 600 }}>{a.client}</div>
                         <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-                          {entry.downloadName ? (
-                            <a className="btn btn-primary btn-sm" href={`/apps/file/${encodeURIComponent(a.id)}/${encodeURIComponent(entry.platform)}`}>⬇ Скачать</a>
-                          ) : entry.url ? (
-                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
-                              {/play\.google\.com/i.test(entry.url) ? 'Google Play' : /apps\.apple\.com|itunes\.apple/i.test(entry.url) ? 'App Store' : 'Установить'}
+                          {dlHref ? (
+                            <a className="btn btn-primary btn-sm" href={dlHref}>⬇ Скачать</a>
+                          ) : storeUrl ? (
+                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(storeUrl))}>
+                              {/play\.google\.com/i.test(storeUrl) ? 'Google Play' : /apps\.apple\.com|itunes\.apple/i.test(storeUrl) ? 'App Store' : 'Установить'}
                             </button>
                           ) : null}
-                          {entry.downloadName && entry.url ? (
-                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
-                              {/play\.google\.com/i.test(entry.url) ? 'Google Play' : /apps\.apple\.com|itunes\.apple/i.test(entry.url) ? 'App Store' : 'Сайт'}
+                          {dlHref && storeUrl ? (
+                            <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(storeUrl))}>
+                              {/play\.google\.com/i.test(storeUrl) ? 'Google Play' : /apps\.apple\.com|itunes\.apple/i.test(storeUrl) ? 'App Store' : 'Сайт'}
                             </button>
                           ) : null}
                           {tap ? (

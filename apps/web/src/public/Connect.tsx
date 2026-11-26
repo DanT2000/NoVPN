@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import type { AppClient, AppPlatform } from '@novpn/shared';
-import { appRank as rank } from '@novpn/shared';
+import { appRank as rank, isOwnFileUrl } from '@novpn/shared';
 import { useApp } from '../store/AppStore';
 import { BackButton, Chip, EmptyState } from '../components/ui';
 import { copyText, openUrl } from '../lib/clipboard';
@@ -250,7 +250,15 @@ function AppList({
   return (
     <div className="stack" style={{ gap: 10 }}>
       {items.map(({ app, entry }) => {
-        const store = entry.url ? storeOf(entry.url) : null;
+        // Свой файл панели (/android/novpn.apk, /desktop/novpn.exe) — это «Скачать», не магазин.
+        const own = isOwnFileUrl(entry.url);
+        const storeUrl = own ? null : entry.url || null;
+        const store = storeUrl ? storeOf(storeUrl) : null;
+        const dlHref = entry.downloadName
+          ? `/apps/file/${encodeURIComponent(app.id)}/${encodeURIComponent(entry.platform)}`
+          : own
+            ? entry.url!.trim()
+            : null;
         const oneTap = subUrl ? oneTapImport(app, subUrl) : null;
         return (
           <div key={app.id} className="card stack" style={{ gap: 10 }}>
@@ -284,20 +292,20 @@ function AppList({
             </div>
 
             <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-              {/* Скачать прямо с нашего сервера (файл залит в админке) — работает
+              {/* Скачать прямо с нашего сервера (файл из админки или канала панели) — работает
                   даже когда офиц. сайт заблокирован в РФ. Иначе — ссылка в магазин. */}
-              {entry.downloadName ? (
-                <a className="btn btn-primary btn-sm" href={`/apps/file/${encodeURIComponent(app.id)}/${encodeURIComponent(entry.platform)}`}>
-                  ⬇ Скачать{entry.downloadSize ? ` · ${mb(entry.downloadSize)}` : ''}
+              {dlHref ? (
+                <a className="btn btn-primary btn-sm" href={dlHref}>
+                  ⬇ Скачать{entry.downloadName && entry.downloadSize ? ` · ${mb(entry.downloadSize)}` : ''}
                 </a>
-              ) : entry.url ? (
-                <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
+              ) : storeUrl ? (
+                <button className="btn btn-primary btn-sm" onClick={() => openUrl(normalizeUrl(storeUrl))}>
                   {store ?? 'Установить'}
                 </button>
               ) : null}
               {/* Магазин доступен и при наличии файла — для iOS и тех, кто хочет из стора. */}
-              {entry.downloadName && store ? (
-                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(entry.url!))}>
+              {dlHref && store && storeUrl ? (
+                <button className="btn btn-outline btn-sm" onClick={() => openUrl(normalizeUrl(storeUrl))}>
                   {store}
                 </button>
               ) : null}

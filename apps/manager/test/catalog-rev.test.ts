@@ -67,7 +67,7 @@ test('ревизия: ссылки, пометка, выключенные кл�
 
 test('новая панель: каталог сразу в новой редакции, NoVPN первым, ревизия не повторяется', () => {
   seedIfEmpty();
-  assert.equal(getSetting<number>('catalog_rev', 0), 1);
+  assert.equal(getSetting<number>('catalog_rev', 0), 2);
   const ids = (db.prepare('SELECT id FROM app_clients ORDER BY sort ASC').all() as Array<{ id: string }>).map((r) => r.id);
   assert.ok(ids[0]!.startsWith('novpn-') && ids[1]!.startsWith('novpn-'), ids.join(','));
   assert.equal(ids[2], 'happ');

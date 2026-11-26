@@ -2,7 +2,7 @@
 // НЕ создаёт демо-пользователей/серверы — они появляются через создание/enrollment.
 
 import type { AppClient, AppSettings, TelegramSettings } from '@novpn/shared';
-import { DEFAULT_APPS, orderApps, reviseCatalog2026_11 } from '@novpn/shared';
+import { DEFAULT_APPS, orderApps, reviseCatalog2026_11, reviseCatalogAndroidLink } from '@novpn/shared';
 import { db, getSetting, setSetting } from './db.js';
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -59,7 +59,7 @@ export function seedIfEmpty(): void {
   if (appCount === 0) {
     const stmt = db.prepare('INSERT INTO app_clients(id, sort, data) VALUES(?,?,?)');
     orderApps(DEFAULT_APPS).forEach((a, i) => stmt.run(a.id, i, JSON.stringify(a)));
-    setSetting('catalog_rev', 1); // каталог уже в новой редакции
+    setSetting('catalog_rev', 2); // каталог уже в новой редакции
     return;
   }
 
@@ -111,5 +111,21 @@ export function seedIfEmpty(): void {
     db.transaction(() => next.forEach((a, i) => save.run(JSON.stringify(a), i, a.id)))();
     setSetting('catalog_rev', 1);
     console.log('[migrate] каталог приложений обновлён: ссылки Happ/v2rayNG, пометка про App Store, NoVPN первым');
+  }
+
+  // Ревизия 2 — один раз (см. reviseCatalogAndroidLink): «Скачать» у NoVPN для Android на
+  // любой панели — ссылка на канал, если админ не задал свою и не загрузил файл.
+  if (getSetting<number>('catalog_rev', 0) < 2) {
+    const row = db.prepare("SELECT data FROM app_clients WHERE id = 'novpn-android'").get() as { data: string } | undefined;
+    if (row) {
+      try {
+        const [next] = reviseCatalogAndroidLink([JSON.parse(row.data) as AppClient]);
+        db.prepare("UPDATE app_clients SET data = ? WHERE id = 'novpn-android'").run(JSON.stringify(next));
+      } catch {
+        /* запись испорчена — не трогаем */
+      }
+    }
+    setSetting('catalog_rev', 2);
+    console.log('[migrate] NoVPN для Android: «Скачать» ведёт на канал обновлений');
   }
 }
