@@ -278,6 +278,44 @@ novpn_pull() {
   return 1
 }`;
 
+/** Свой Go для сборки amneziawg-go, когда Go из репозитория старше нужного (go.mod: 1.25.0).
+ *  26.11.2026 тот же сервер: «invalid go version '1.25.0': must match format 1.23» — Go ≤ 1.20
+ *  не понимает go.mod и не умеет сам докачать свежий toolchain, сборка падала дважды.
+ *  Официальный архив с нескольких зеркал; контрольная сумма зашита здесь (с go.dev/dl), так что
+ *  с любого зеркала встаёт только этот файл. Go ≥ 1.21 при нужде сам докачает новее (GOPROXY). */
+export const GO_BOOT = {
+  version: '1.27.4',
+  sha256: {
+    amd64: '7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840',
+    arm64: '3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92',
+  },
+};
+export const GO_SH = String.raw`NOVPN_GO_VER=${GO_BOOT.version}
+NOVPN_GO_SHA_amd64=${GO_BOOT.sha256.amd64}
+NOVPN_GO_SHA_arm64=${GO_BOOT.sha256.arm64}
+NOVPN_GO_DIR=/usr/local/novpn-go
+novpn_fetch_go() {
+  local ga sum f base rc
+  case "$(uname -m)" in
+    x86_64|amd64) ga=amd64; sum=$NOVPN_GO_SHA_amd64;;
+    aarch64|arm64) ga=arm64; sum=$NOVPN_GO_SHA_arm64;;
+    *) echo "  свой Go: архитектура $(uname -m) не поддержана" >>/tmp/awggo.log; return 1;;
+  esac
+  f="go$NOVPN_GO_VER.linux-$ga.tar.gz"
+  rm -f /tmp/novpn-go.tgz
+  for base in https://dl.google.com/go https://golang.google.cn/dl https://mirrors.aliyun.com/golang https://mirrors.ustc.edu.cn/golang https://mirrors.nju.edu.cn/golang; do
+    curl -fsSL --max-time 600 "$base/$f" -o /tmp/novpn-go.tgz >>/tmp/awggo.log 2>&1 || { rm -f /tmp/novpn-go.tgz; continue; }
+    [ "$(sha256sum /tmp/novpn-go.tgz | cut -d' ' -f1)" = "$sum" ] && break
+    echo "  свой Go: $base — контрольная сумма не совпала, пропускаю" >>/tmp/awggo.log
+    rm -f /tmp/novpn-go.tgz
+  done
+  [ -f /tmp/novpn-go.tgz ] || return 1
+  rm -rf "$NOVPN_GO_DIR" && mkdir -p "$NOVPN_GO_DIR" && tar -C "$NOVPN_GO_DIR" --strip-components=1 -xzf /tmp/novpn-go.tgz
+  rc=$?
+  rm -f /tmp/novpn-go.tgz
+  [ "$rc" -eq 0 ] && [ -x "$NOVPN_GO_DIR/bin/go" ]
+}`;
+
 // ── Провижининг сервера с нуля (xray Reality + AmneziaWG) ──
 // Скрипт без bash-${…} (кроме инжектов сверху) — безопасно в JS-шаблоне.
 // Параметры обфускации AWG фиксированы → восстановление по домену требует только приватный ключ.
@@ -304,6 +342,7 @@ IFACE="$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1)"
 JC=${a.Jc}; JMIN=${a.Jmin}; JMAX=${a.Jmax}; S1=${a.S1}; S2=${a.S2}
 H1=${a.H1}; H2=${a.H2}; H3=${a.H3}; H4=${a.H4}
 ${DOCKER_SH}
+${GO_SH}
 
 if [ "$WANT_XRAY" = "1" ]; then
   echo "== xray =="
@@ -380,6 +419,15 @@ if [ "$WANT_AWG" = "1" ]; then
       command -v amneziawg-go >/dev/null 2>&1 || ( cd /tmp/awg-go && \
         GOPROXY='https://goproxy.cn|https://goproxy.io|https://proxy.golang.org|direct' make >>/tmp/awggo.log 2>&1 && \
         install -m755 amneziawg-go /usr/bin/amneziawg-go ) || true
+      # 26.11.2026: Go из репозитория старше 1.21 не понимает go.mod и не докачивает новый —
+      # ставим свой (официальный архив, сумма проверяется), собираем им и сразу убираем.
+      if ! command -v amneziawg-go >/dev/null 2>&1 && [ -d /tmp/awg-go ]; then
+        echo "  Go из репозитория не подошёл — скачиваю Go $NOVPN_GO_VER…"
+        novpn_fetch_go && ( cd /tmp/awg-go && PATH="$NOVPN_GO_DIR/bin:$PATH" \
+          GOPROXY='https://proxy.golang.org|https://goproxy.cn|https://goproxy.io|direct' make >>/tmp/awggo.log 2>&1 && \
+          install -m755 amneziawg-go /usr/bin/amneziawg-go ) || true
+        rm -rf "$NOVPN_GO_DIR"
+      fi
     fi
     command -v amneziawg-go >/dev/null 2>&1 || { echo "AWG_FAIL: ни модуль ядра, ни userspace" >&2; tail -12 /tmp/awggo.log >&2 2>/dev/null; exit 1; }
     AWG_USERSPACE=1

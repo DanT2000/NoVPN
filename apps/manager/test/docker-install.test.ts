@@ -12,7 +12,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'novpn-dock-'));
 process.env.DATABASE_PATH = path.join(tmp, 'database.sqlite');
 process.env.ENCRYPTION_KEY = '0'.repeat(64);
 process.env.SESSION_SECRET = 'test-secret';
-const { buildInstallScript, DOCKER_SH, XRAY_IMAGE } = await import('../src/services/sshServer.js');
+const { buildInstallScript, DOCKER_SH, XRAY_IMAGE, GO_SH, GO_BOOT } = await import('../src/services/sshServer.js');
 
 const P = { Jc: 4, Jmin: 9, Jmax: 48, S1: 23, S2: 94, H1: 2012218649, H2: 1501317059, H3: 1076010440, H4: 1064530999 };
 const script = buildInstallScript({ sni: 'www.lenovo.com', realityPriv: 'x', shortId: 'ab', awgPriv: 'y', xray: true, awg: false, awgParams: P, xrayPort: 443, awgPort: 443 });
@@ -40,6 +40,7 @@ function sandbox(stubs: Record<string, string>, body: string) {
   const sh = `set -e
 export STUB="$(cd "$(dirname "$0")" && pwd)"; export PATH="$STUB/bin:/usr/bin:/bin"
 ${DOCKER_SH}
+${GO_SH}
 ${body}`;
   fs.writeFileSync(path.join(dir, 'run.sh'), sh);
   const r = spawnSync(BASH!, [path.join(dir, 'run.sh').replace(/\\/g, '/')], { encoding: 'utf8' });
@@ -110,4 +111,62 @@ test('образ нигде не скачался → ошибка', { skip }, (
 test('собранный скрипт установки синтаксически цел', { skip }, () => {
   const r = spawnSync(BASH!, ['-n'], { input: script, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
+  const awg = buildInstallScript({ sni: 'www.lenovo.com', realityPriv: 'x', shortId: 'ab', awgPriv: 'y', xray: true, awg: true, awgParams: P, xrayPort: 443, awgPort: 443 });
+  const r2 = spawnSync(BASH!, ['-n'], { input: awg, encoding: 'utf8' });
+  assert.equal(r2.status, 0, r2.stderr);
+});
+
+// ── Свой Go для сборки amneziawg-go ──
+// 26.11.2026 тот же сервер: модуль ядра не встал, а Go из репозитория старше 1.21 —
+// «go.mod:3: invalid go version '1.25.0': must match format 1.23», сборка падала дважды.
+
+const awgScript = buildInstallScript({ sni: 'www.lenovo.com', realityPriv: 'x', shortId: 'ab', awgPriv: 'y', xray: false, awg: true, awgParams: P, xrayPort: 443, awgPort: 443 });
+
+test('скрипт AWG: после неудачной сборки — свой Go, сборка им, затем он убирается', () => {
+  assert.ok(awgScript.includes(GO_SH));
+  const i = awgScript.indexOf('novpn_fetch_go &&');
+  assert.ok(i > awgScript.indexOf("GOPROXY='https://goproxy.cn"), 'свой Go — после прежних двух попыток');
+  assert.ok(awgScript.indexOf('rm -rf "$NOVPN_GO_DIR"', i) > i);
+  assert.match(GO_BOOT.version, /^1\.(2[5-9]|[3-9]\d)\.\d+$/);
+  for (const s of Object.values(GO_BOOT.sha256)) assert.match(s, /^[0-9a-f]{64}$/);
+  assert.ok(GO_SH.includes(`NOVPN_GO_VER=${GO_BOOT.version}`));
+});
+
+// Поддельный архив Go в песочнице, его сумма подставляется вместо настоящей.
+const FAKE_GO = `mkdir -p "$STUB/src/go/bin" && printf '#!/bin/sh\\necho go-fake\\n' > "$STUB/src/go/bin/go" && chmod +x "$STUB/src/go/bin/go"
+(cd "$STUB/src" && tar -czf "$STUB/fake.tgz" go)
+NOVPN_GO_DIR="$STUB/godir"
+NOVPN_GO_SHA_amd64=$(sha256sum "$STUB/fake.tgz" | cut -d' ' -f1)
+`;
+// curl: Google недоступен (подмена сертификата), остальные зеркала отдают поддельный архив.
+const CURL_MIRRORS = `echo "curl $*" >> "$STUB/calls"
+out=""; url=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; http*) url="$1";; esac; shift; done
+case "$url" in https://dl.google.com/*) exit 60;; esac
+cp "$STUB/fake.tgz" "$out"`;
+const UNAME = (m: string) => `[ "$1" = "-m" ] && echo ${m} || echo Linux`;
+
+test('свой Go: Google недоступен → архив с зеркала, сумма сошлась, Go распакован', { skip }, () => {
+  const r = sandbox({ curl: CURL_MIRRORS, uname: UNAME('x86_64') }, `${FAKE_GO}novpn_fetch_go && "$NOVPN_GO_DIR/bin/go" && echo GO_OK`);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /go-fake[\s\S]*GO_OK/);
+  assert.match(r.calls, /dl\.google\.com\/go\/go\d+\.\d+\.\d+\.linux-amd64\.tar\.gz/);
+  assert.match(r.calls, /golang\.google\.cn/);
+});
+
+test('свой Go: сумма не совпала ни у одного зеркала → не ставим, ошибка', { skip }, () => {
+  const r = sandbox({ curl: CURL_MIRRORS, uname: UNAME('x86_64') }, `${FAKE_GO}NOVPN_GO_SHA_amd64=${'0'.repeat(64)}
+novpn_fetch_go && echo BAD || echo NO_GO; [ -e "$NOVPN_GO_DIR/bin/go" ] && echo INSTALLED || true`);
+  assert.match(r.out, /NO_GO/);
+  assert.doesNotMatch(r.out, /BAD|INSTALLED/);
+  assert.equal((r.calls.match(/^curl /gm) || []).length, 5, 'перебраны все зеркала');
+});
+
+test('свой Go: arm64 берёт свою сумму, неизвестная архитектура — отказ', { skip }, () => {
+  const arm = sandbox({ curl: CURL_MIRRORS, uname: UNAME('aarch64') }, `${FAKE_GO}NOVPN_GO_SHA_arm64=$NOVPN_GO_SHA_amd64
+novpn_fetch_go && echo GO_OK`);
+  assert.match(arm.out, /GO_OK/);
+  assert.match(arm.calls, /linux-arm64\.tar\.gz/);
+  const odd = sandbox({ curl: CURL_MIRRORS, uname: UNAME('riscv64') }, `${FAKE_GO}novpn_fetch_go && echo BAD || echo NO_GO`);
+  assert.match(odd.out, /NO_GO/);
+  assert.equal(odd.calls, '');
 });
