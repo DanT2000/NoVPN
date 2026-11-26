@@ -250,6 +250,34 @@ export function pickAwgParams(o: {
   return { params, source, storedDiffers: !!o.stored && !sameAwgParams(o.stored, params) };
 }
 
+/** Установка Docker и скачивание образов с запасными путями (вставляется в скрипт установки).
+ *  26.11.2026: у нового сервера сеть хостера подменяла сертификат get.docker.com
+ *  («curl: (60) … no alternative certificate subject name»), и установка обрывалась.
+ *  Теперь: официальный скрипт → пакет docker.io из репозитория дистрибутива (обычно зеркало
+ *  самого хостера); образ — Docker Hub → его копия на mirror.gcr.io (как у openspeedtest).
+ *  Проверку сертификатов НЕ отключаем: подменённый скрипт выполнился бы от root. */
+export const DOCKER_SH = String.raw`novpn_install_docker() {
+  : > /tmp/docker-install.log
+  if curl -fsSL --max-time 90 https://get.docker.com -o /tmp/get-docker.sh >>/tmp/docker-install.log 2>&1; then
+    sh /tmp/get-docker.sh >>/tmp/docker-install.log 2>&1 || true
+  fi
+  rm -f /tmp/get-docker.sh
+  command -v docker >/dev/null 2>&1 && return 0
+  echo "  get.docker.com не сработал — ставлю пакет docker.io из репозитория дистрибутива…"
+  # Официальный скрипт мог успеть подключить download.docker.com, до которого нет связи, —
+  # такой источник ломает каждый следующий apt-get update.
+  rm -f /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/docker.sources
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update -qq >>/tmp/docker-install.log 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y -qq docker.io >>/tmp/docker-install.log 2>&1 || true
+  command -v docker >/dev/null 2>&1
+}
+novpn_pull() {
+  docker image inspect "$1" >/dev/null 2>&1 && return 0
+  docker pull -q "$1" >/dev/null 2>&1 && return 0
+  docker pull -q "mirror.gcr.io/$1" >/dev/null 2>&1 && docker tag "mirror.gcr.io/$1" "$1" && return 0
+  return 1
+}`;
+
 // ── Провижининг сервера с нуля (xray Reality + AmneziaWG) ──
 // Скрипт без bash-${…} (кроме инжектов сверху) — безопасно в JS-шаблоне.
 // Параметры обфускации AWG фиксированы → восстановление по домену требует только приватный ключ.
@@ -275,20 +303,22 @@ IFACE="$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \\K\\S+' | head -1)"
 # Параметры обфускации — УНИКАЛЬНЫ для сервера (приходят из панели/keyvault).
 JC=${a.Jc}; JMIN=${a.Jmin}; JMAX=${a.Jmax}; S1=${a.S1}; S2=${a.S2}
 H1=${a.H1}; H2=${a.H2}; H3=${a.H3}; H4=${a.H4}
+${DOCKER_SH}
 
 if [ "$WANT_XRAY" = "1" ]; then
   echo "== xray =="
   # Docker нужен для Xray (контейнер teddysun/xray). Ставим/поднимаем, если его нет
   # или демон не запущен (на домашних серверах Docker может быть не установлен).
+  # Сообщения о сбоях — в поток ошибок: панель показывает именно его.
   if ! command -v docker >/dev/null 2>&1; then
     echo "  ставлю docker…"
-    curl -fsSL https://get.docker.com | sh >/tmp/docker-install.log 2>&1 || true
+    novpn_install_docker || { echo "DOCKER_FAIL: Docker не установился ни скриптом get.docker.com, ни пакетом docker.io:" >&2; tail -6 /tmp/docker-install.log >&2 2>/dev/null; exit 1; }
   fi
   systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
   for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 1; done
-  docker info >/dev/null 2>&1 || { echo "DOCKER_FAIL: демон не запустился"; exit 1; }
+  docker info >/dev/null 2>&1 || { echo "DOCKER_FAIL: демон Docker не запустился" >&2; exit 1; }
   mkdir -p /opt/amnezia/xray
-  docker pull -q ${XRAY_IMAGE} >/dev/null 2>&1 || true
+  novpn_pull ${XRAY_IMAGE} || { echo "XRAY_FAIL: образ ${XRAY_IMAGE} не скачался ни с Docker Hub, ни с mirror.gcr.io" >&2; exit 1; }
   if [ -z "$REALITY_PRIV" ]; then
     KP=$(docker run --rm ${XRAY_IMAGE} xray x25519)
     REALITY_PRIV=$(echo "$KP" | grep -iE 'private' | grep -oE '[A-Za-z0-9_/+-]{40,}' | head -1)
@@ -301,7 +331,7 @@ PY
   docker rm -f amnezia-xray >/dev/null 2>&1 || true
   docker run -d --name amnezia-xray --restart always -p ${xrayPort}:443 -v /opt/amnezia/xray:/opt/amnezia/xray ${XRAY_IMAGE} xray run -c /opt/amnezia/xray/server.json >/dev/null
   sleep 3
-  docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null || { echo "XRAY_FAIL"; exit 1; }
+  docker exec amnezia-xray xray -test -config /opt/amnezia/xray/server.json >/dev/null || { echo "XRAY_FAIL: конфиг Xray не прошёл проверку" >&2; exit 1; }
   echo "REALITY_PRIV=$REALITY_PRIV"; echo "REALITY_PUB=$REALITY_PUB"; echo "SHORT_ID=$SHORT_ID"; echo "SNI=$SNI"
 fi
 
@@ -329,7 +359,7 @@ if [ "$WANT_AWG" = "1" ]; then
       apt-get update -qq >/dev/null 2>&1 || true
     fi
     apt-get install -y -qq amneziawg-tools >/tmp/awgtools.log 2>&1 || true
-    command -v awg >/dev/null 2>&1 || { echo "AWG_FAIL: не установились amneziawg-tools"; tail -12 /tmp/awgtools.log 2>/dev/null; exit 1; }
+    command -v awg >/dev/null 2>&1 || { echo "AWG_FAIL: не установились amneziawg-tools" >&2; tail -12 /tmp/awgtools.log >&2 2>/dev/null; exit 1; }
     # Быстрый путь — модуль ядра под ТЕКУЩЕЕ ядро через dkms (Ubuntu). Best-effort.
     apt-get install -y -qq dkms "linux-headers-$(uname -r)" amneziawg-dkms >/tmp/awgdkms.log 2>&1 || true
   fi
@@ -391,7 +421,7 @@ DROPIN
   awg-quick down awg0 2>/dev/null || true
   awg-quick up awg0
   systemctl enable awg-quick@awg0 >/dev/null 2>&1 || true
-  ip link show awg0 >/dev/null || { echo "AWG0_FAIL"; exit 1; }
+  ip link show awg0 >/dev/null || { echo "AWG0_FAIL: интерфейс awg0 не поднялся" >&2; exit 1; }
   echo "AWG_PRIV=$AWG_PRIV"; echo "AWG_PUB=$AWG_PUB"
 fi
 # Открыть выбранные публичные порты в файрволе (ufw персистентно + iptables немедленно).
